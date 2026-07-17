@@ -11,7 +11,8 @@
     "start": "node src/server.js",
     "index": "node src/cli.js index",
     "stats": "node src/cli.js stats",
-    "init-db": "node src/cli.js init-db"
+    "init-db": "node src/cli.js init-db",
+    "test": "node --test test/**/*.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
