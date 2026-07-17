@@ -1,4 +1,4 @@
-const DEFAULT_K = 60;
+export const DEFAULT_K = 60;
 
 /**
  * Fuse multiple ranked lists of ids via Reciprocal Rank Fusion:

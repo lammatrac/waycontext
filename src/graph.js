@@ -1,8 +1,7 @@
 import { pool, toVector, getProject } from "./db.js";
 import { embedQuery, embeddingsEnabled } from "./embeddings.js";
-import { fuseRankedLists } from "./rrf.js";
+import { fuseRankedLists, DEFAULT_K } from "./rrf.js";
 
-const RRF_K = 60;
 const SYMBOL_COLUMNS = "s.id, s.name, s.kind, s.signature, s.doc, s.start_line, s.end_line, f.path";
 
 async function requireProject(name) {
@@ -57,7 +56,7 @@ export async function searchCode(projectName, query, limit = 10) {
   const byId = new Map();
   for (const row of [...ftsRows, ...vectorRows]) byId.set(row.id, row);
 
-  const fused = fuseRankedLists(rankedLists, RRF_K);
+  const fused = fuseRankedLists(rankedLists, DEFAULT_K);
   return fused.slice(0, limit).map(({ id, score, sources }) => ({
     ...byId.get(id),
     score,

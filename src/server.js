@@ -55,7 +55,7 @@ server.tool(
 
 server.tool(
   "search_code",
-  "Hybrid search over indexed symbols: combines Postgres full-text ranking with pgvector semantic similarity (when embeddings are enabled) via Reciprocal Rank Fusion. Describe a feature or behavior in natural language (e.g. 'purge cache after match status update') and get the most relevant functions/classes.",
+  "Hybrid search over indexed symbols: combines Postgres full-text ranking with pgvector semantic similarity (when embeddings are enabled) via Reciprocal Rank Fusion. Describe a feature or behavior in natural language (e.g. 'purge cache after match status update') and get the most relevant functions/classes. Each result's `score` is a relative Reciprocal-Rank-Fusion score used for ranking, not a cosine similarity or probability.",
   {
     project: z.string(),
     query: z.string().describe("Natural-language description of what you're looking for"),
