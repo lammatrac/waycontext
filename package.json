@@ -1,0 +1,31 @@
+{
+  "name": "code-context-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that indexes a codebase (symbols + relationship graph + vector search) to give AI agents full project context",
+  "type": "module",
+  "main": "src/server.js",
+  "bin": {
+    "code-context-mcp": "src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "index": "node src/cli.js index",
+    "stats": "node src/cli.js stats",
+    "init-db": "node src/cli.js init-db"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "dotenv": "^16.4.5",
+    "fast-glob": "^3.3.2",
+    "ignore": "^5.3.1",
+    "pg": "^8.13.0",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-javascript": "^0.21.4",
+    "tree-sitter-php": "^0.22.8",
+    "tree-sitter-typescript": "^0.21.2",
+    "zod": "^3.23.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
