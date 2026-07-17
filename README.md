@@ -57,7 +57,7 @@ npm run init-db
 ### 3. First index (CLI)
 
 ```bash
-node src/cli.js index sports-wc-2026 /var/www/wp-content/plugins/sports-wc-2026
+node src/cli.js index <index-name> /path/to/project/
 node src/cli.js stats
 ```
 
@@ -113,7 +113,6 @@ Re-run index_project after committing changes.
 - **More languages:** add a tree-sitter grammar package, map extensions in `EXT_LANG`, add node types in `parser.js`.
 - **File watcher:** wrap `indexProject` with `chokidar` for auto reindex on save.
 - **Feature clustering:** k-means over the embedding column (`symbols.embedding`) to auto-name feature groups.
-- **Hybrid search:** combine pgvector ANN with Postgres full-text (`tsvector`) and rerank.
 
 ## Notes & limits
 
