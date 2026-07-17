@@ -70,6 +70,20 @@ export async function initDb() {
     `CREATE INDEX IF NOT EXISTS symbols_embedding_idx
      ON symbols USING hnsw (embedding vector_cosine_ops)`
   );
+
+  // Full-text search column for hybrid search (safe to re-run; a STORED
+  // generated column backfills automatically for existing rows).
+  await pool.query(
+    `ALTER TABLE symbols ADD COLUMN IF NOT EXISTS fts_vector tsvector
+     GENERATED ALWAYS AS (
+       setweight(to_tsvector('simple', coalesce(name, '')), 'A') ||
+       setweight(to_tsvector('simple', coalesce(doc,  '')), 'B') ||
+       setweight(to_tsvector('simple', coalesce(body, '')), 'C')
+     ) STORED`
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS symbols_fts_idx ON symbols USING gin (fts_vector)`
+  );
 }
 
 export async function getOrCreateProject(name, rootPath) {
