@@ -89,7 +89,7 @@ Or in `.mcp.json` (project scope):
 | `index_project` | Scan + (re)index a directory. Incremental. |
 | `list_projects` | Indexed projects with counts. |
 | `project_overview` | Languages, dir sizes, hub symbols, WP hooks — the "big picture" call. |
-| `search_code` | Semantic search: "purge cache after cron match update" → relevant functions. |
+| `search_code` | Hybrid search (full-text + semantic ANN, RRF-fused): "purge cache after cron match update" → relevant functions. |
 | `get_symbol` | Full detail of a function/class/method (accepts `Class::method`). |
 | `get_callers` | Inbound edges — blast radius before refactoring. |
 | `get_callees` | Outbound dependencies incl. hooks registered/fired. |

@@ -1,5 +1,9 @@
 import { pool, toVector, getProject } from "./db.js";
 import { embedQuery, embeddingsEnabled } from "./embeddings.js";
+import { fuseRankedLists } from "./rrf.js";
+
+const RRF_K = 60;
+const SYMBOL_COLUMNS = "s.id, s.name, s.kind, s.signature, s.doc, s.start_line, s.end_line, f.path";
 
 async function requireProject(name) {
   const p = await getProject(name);
@@ -7,31 +11,58 @@ async function requireProject(name) {
   return p;
 }
 
-/** Semantic search over symbols (falls back to ILIKE keyword search when embeddings disabled). */
-export async function searchCode(projectName, query, limit = 10) {
-  const project = await requireProject(projectName);
-  if (embeddingsEnabled()) {
-    const qv = await embedQuery(query);
-    const res = await pool.query(
-      `SELECT s.id, s.name, s.kind, s.signature, s.doc, s.start_line, s.end_line,
-              f.path, 1 - (s.embedding <=> $1) AS score
-       FROM symbols s JOIN files f ON f.id = s.file_id
-       WHERE s.project_id = $2 AND s.embedding IS NOT NULL
-       ORDER BY s.embedding <=> $1
-       LIMIT $3`,
-      [toVector(qv), project.id, limit]
-    );
-    return res.rows;
-  }
+async function ftsCandidates(projectId, query, poolSize) {
   const res = await pool.query(
-    `SELECT s.id, s.name, s.kind, s.signature, s.doc, s.start_line, s.end_line, f.path
+    `SELECT ${SYMBOL_COLUMNS}
      FROM symbols s JOIN files f ON f.id = s.file_id
-     WHERE s.project_id = $1
-       AND (s.name ILIKE '%'||$2||'%' OR s.doc ILIKE '%'||$2||'%' OR s.body ILIKE '%'||$2||'%')
+     WHERE s.project_id = $1 AND s.fts_vector @@ plainto_tsquery('simple', $2)
+     ORDER BY ts_rank(s.fts_vector, plainto_tsquery('simple', $2)) DESC
      LIMIT $3`,
-    [project.id, query, limit]
+    [projectId, query, poolSize]
   );
   return res.rows;
+}
+
+async function vectorCandidates(projectId, queryVector, poolSize) {
+  const res = await pool.query(
+    `SELECT ${SYMBOL_COLUMNS}
+     FROM symbols s JOIN files f ON f.id = s.file_id
+     WHERE s.project_id = $1 AND s.embedding IS NOT NULL
+     ORDER BY s.embedding <=> $2
+     LIMIT $3`,
+    [projectId, toVector(queryVector), poolSize]
+  );
+  return res.rows;
+}
+
+/**
+ * Hybrid search over symbols: fuses Postgres full-text ranking with pgvector
+ * ANN similarity (when embeddings are enabled) via Reciprocal Rank Fusion.
+ * Falls back to full-text only when embeddings are disabled.
+ */
+export async function searchCode(projectName, query, limit = 10) {
+  const project = await requireProject(projectName);
+  const poolSize = Math.max(limit * 5, 50);
+
+  const ftsRows = await ftsCandidates(project.id, query, poolSize);
+  const rankedLists = { fts: ftsRows.map((r) => r.id) };
+
+  let vectorRows = [];
+  if (embeddingsEnabled()) {
+    const qv = await embedQuery(query);
+    vectorRows = await vectorCandidates(project.id, qv, poolSize);
+    rankedLists.vector = vectorRows.map((r) => r.id);
+  }
+
+  const byId = new Map();
+  for (const row of [...ftsRows, ...vectorRows]) byId.set(row.id, row);
+
+  const fused = fuseRankedLists(rankedLists, RRF_K);
+  return fused.slice(0, limit).map(({ id, score, sources }) => ({
+    ...byId.get(id),
+    score,
+    matched_via: sources,
+  }));
 }
 
 export async function getSymbol(projectName, name) {
