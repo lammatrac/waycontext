@@ -62,6 +62,21 @@ export async function initDb() {
   CREATE INDEX IF NOT EXISTS edges_src_idx ON edges (src);
   CREATE INDEX IF NOT EXISTS edges_dst_idx ON edges (dst);
   CREATE INDEX IF NOT EXISTS edges_rel_idx ON edges (project_id, relation);
+
+  -- One row per embedding API call, for token usage / cost reporting.
+  -- project_id is SET NULL (not CASCADE) on project deletion so billing
+  -- history survives a project being dropped/reindexed under a new name.
+  CREATE TABLE IF NOT EXISTS embedding_usage (
+    id          SERIAL PRIMARY KEY,
+    project_id  INT REFERENCES projects(id) ON DELETE SET NULL,
+    provider    TEXT NOT NULL,           -- voyage | openai
+    model       TEXT NOT NULL,
+    input_type  TEXT NOT NULL,           -- document | query
+    tokens      INT NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS embedding_usage_project_idx ON embedding_usage (project_id);
+  CREATE INDEX IF NOT EXISTS embedding_usage_provider_idx ON embedding_usage (provider, model);
   `;
   await pool.query(sql);
 
@@ -108,6 +123,39 @@ export async function listProjects() {
        (SELECT count(*) FROM symbols s WHERE s.project_id = p.id) AS symbol_count,
        (SELECT count(*) FROM edges e WHERE e.project_id = p.id)   AS edge_count
      FROM projects p ORDER BY p.name`
+  );
+  return res.rows;
+}
+
+/** Log one embedding API call for token usage / cost reporting. */
+export async function recordEmbeddingUsage(projectId, provider, model, inputType, tokens) {
+  if (!tokens) return;
+  await pool.query(
+    `INSERT INTO embedding_usage (project_id, provider, model, input_type, tokens)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [projectId, provider, model, inputType, tokens]
+  );
+}
+
+/** Aggregate embedding token usage, optionally scoped to one project. */
+export async function getEmbeddingUsage(projectName) {
+  const params = [];
+  let where = "";
+  if (projectName) {
+    const project = await getProject(projectName);
+    if (!project) throw new Error(`Project "${projectName}" not found.`);
+    where = "WHERE eu.project_id = $1";
+    params.push(project.id);
+  }
+  const res = await pool.query(
+    `SELECT eu.provider, eu.model, eu.input_type,
+            COUNT(*)::int AS requests, COALESCE(SUM(eu.tokens), 0)::bigint AS tokens,
+            MIN(eu.created_at) AS first_seen, MAX(eu.created_at) AS last_seen
+     FROM embedding_usage eu
+     ${where}
+     GROUP BY eu.provider, eu.model, eu.input_type
+     ORDER BY eu.provider, eu.model, eu.input_type`,
+    params
   );
   return res.rows;
 }

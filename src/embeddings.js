@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { recordEmbeddingUsage } from "./db.js";
 
 const BATCH_SIZE = 64;
 
@@ -20,7 +21,7 @@ async function voyageEmbed(texts, inputType) {
     throw new Error(`Voyage API ${res.status}: ${await res.text()}`);
   }
   const data = await res.json();
-  return data.data.map((d) => d.embedding);
+  return { vectors: data.data.map((d) => d.embedding), tokens: data.usage?.total_tokens ?? 0 };
 }
 
 async function openaiEmbed(texts) {
@@ -40,7 +41,7 @@ async function openaiEmbed(texts) {
     throw new Error(`OpenAI API ${res.status}: ${await res.text()}`);
   }
   const data = await res.json();
-  return data.data.map((d) => d.embedding);
+  return { vectors: data.data.map((d) => d.embedding), tokens: data.usage?.total_tokens ?? 0 };
 }
 
 export function embeddingsEnabled() {
@@ -51,8 +52,9 @@ export function embeddingsEnabled() {
  * Embed an array of texts. Returns array of vectors (or nulls if disabled).
  * @param {string[]} texts
  * @param {"document"|"query"} inputType
+ * @param {number|null} projectId for token-usage attribution (see `usage`/`codecontext usage`)
  */
-export async function embed(texts, inputType = "document") {
+export async function embed(texts, inputType = "document", projectId = null) {
   if (!embeddingsEnabled()) return texts.map(() => null);
   const out = [];
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
@@ -60,18 +62,24 @@ export async function embed(texts, inputType = "document") {
       // hard cap input length to stay under provider token limits
       (t) => t.slice(0, 8000)
     );
+    let result;
+    let model;
     if (config.embeddingProvider === "voyage") {
-      out.push(...(await voyageEmbed(batch, inputType)));
+      result = await voyageEmbed(batch, inputType);
+      model = config.voyage.model;
     } else if (config.embeddingProvider === "openai") {
-      out.push(...(await openaiEmbed(batch)));
+      result = await openaiEmbed(batch);
+      model = config.openai.model;
     } else {
       throw new Error(`Unknown EMBEDDING_PROVIDER: ${config.embeddingProvider}`);
     }
+    out.push(...result.vectors);
+    await recordEmbeddingUsage(projectId, config.embeddingProvider, model, inputType, result.tokens);
   }
   return out;
 }
 
-export async function embedQuery(text) {
-  const [v] = await embed([text], "query");
+export async function embedQuery(text, projectId = null) {
+  const [v] = await embed([text], "query", projectId);
   return v;
 }

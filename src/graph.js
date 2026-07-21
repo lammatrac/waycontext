@@ -48,7 +48,7 @@ export async function searchCode(projectName, query, limit = 10) {
 
   let vectorRows = [];
   if (embeddingsEnabled()) {
-    const qv = await embedQuery(query);
+    const qv = await embedQuery(query, project.id);
     vectorRows = await vectorCandidates(project.id, qv, poolSize);
     rankedLists.vector = vectorRows.map((r) => r.id);
   }

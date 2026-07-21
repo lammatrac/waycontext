@@ -2,7 +2,7 @@
 // CLI: node src/cli.js <command> [args...]
 // Run `node src/cli.js help` for the full command list.
 import { spawn } from "node:child_process";
-import { initDb, listProjects, pool } from "./db.js";
+import { initDb, listProjects, getEmbeddingUsage, pool } from "./db.js";
 import { indexProject } from "./indexer.js";
 import {
   searchCode, getSymbol, getCallers, getCallees,
@@ -43,23 +43,26 @@ function startSpinner(label) {
     }, 150);
   }
 
-  return function stop() {
+  return function stop(ok = true) {
     if (delay) clearTimeout(delay);
     if (interval) {
       clearInterval(interval);
       process.stderr.write("\r\x1b[K");
     }
     const secs = ((Date.now() - start) / 1000).toFixed(1);
-    process.stderr.write(`✔ ${label} (${secs}s)\n`);
+    process.stderr.write(`${ok ? "✔" : "✖"} ${label} (${secs}s)\n`);
   };
 }
 
 async function withSpinner(label, fn) {
   const stop = startSpinner(label);
   try {
-    return await fn();
-  } finally {
-    stop();
+    const result = await fn();
+    stop(true);
+    return result;
+  } catch (e) {
+    stop(false);
+    throw e;
   }
 }
 
@@ -77,7 +80,14 @@ const HELP = `Commands:
   get_file_outline <project> <path>
   find_related <project> <name> [limit]
   db                                     interactive psql session
-  tables [table] [limit]                 list tables, or browse rows of one table (default limit 20)`;
+  tables [table] [limit]                 list tables, or browse rows of one table (default limit 20)
+  usage [project]                        embedding token usage per provider/model, with est. cost if configured`;
+
+function priceFor(provider) {
+  if (provider === "voyage") return config.voyage.pricePerMTokens;
+  if (provider === "openai") return config.openai.pricePerMTokens;
+  return null;
+}
 
 async function main() {
   switch (cmd) {
@@ -185,6 +195,34 @@ async function main() {
         [limit ? Number(limit) : 20]
       ).then((r) => r.rows));
       console.table(rows);
+      break;
+    }
+    case "usage": {
+      const [project] = args;
+      const rows = await withSpinner("Aggregating embedding usage", () => getEmbeddingUsage(project));
+      if (!rows.length) {
+        console.log(project ? `No embedding usage recorded for "${project}" yet.` : "No embedding usage recorded yet.");
+        break;
+      }
+      let missingPrice = false;
+      const report = rows.map((r) => {
+        const price = priceFor(r.provider);
+        if (price == null) missingPrice = true;
+        return {
+          provider: r.provider,
+          model: r.model,
+          input_type: r.input_type,
+          requests: Number(r.requests),
+          tokens: Number(r.tokens),
+          est_cost_usd: price != null ? +((Number(r.tokens) / 1_000_000) * price).toFixed(4) : null,
+        };
+      });
+      console.table(report);
+      if (missingPrice) {
+        console.log(
+          "Set VOYAGE_PRICE_PER_1M_TOKENS / OPENAI_PRICE_PER_1M_TOKENS in .env to see estimated cost (check the provider's current pricing page — rates change)."
+        );
+      }
       break;
     }
     case "help":

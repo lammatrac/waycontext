@@ -172,7 +172,7 @@ export async function indexProject(projectName, rootPath, log = () => {}) {
   // embeddings
   if (pendingEmbeds.length) {
     log(`Embedding ${pendingEmbeds.length} symbols…`);
-    const vectors = await embed(pendingEmbeds.map((p) => p.text), "document");
+    const vectors = await embed(pendingEmbeds.map((p) => p.text), "document", project.id);
     for (let i = 0; i < pendingEmbeds.length; i++) {
       if (!vectors[i]) continue;
       await pool.query(`UPDATE symbols SET embedding = $1 WHERE id = $2`, [
