@@ -64,12 +64,36 @@ cp .env.example .env    # fill in DATABASE_URL + embedding API key
 npm run init-db
 ```
 
-### 3. First index (CLI)
+### 3. CLI
+
+Every MCP tool is also available as a CLI subcommand via `src/cli.js` — useful for a first index, or for querying the graph/search tools from a terminal without going through an MCP client.
 
 ```bash
-node src/cli.js index <index-name> /path/to/project/
+node src/cli.js index_project <project-name> /path/to/project/
 node src/cli.js stats
 ```
+
+To call it as a plain `codecontext` command from anywhere, link the package once:
+
+```bash
+cd code-context-mcp
+npm link
+```
+
+```bash
+codecontext help
+codecontext index_project <project-name> /path/to/project/
+codecontext search_code <project-name> "purge cache after match update"
+codecontext get_symbol <project-name> <name>
+codecontext get_callers <project-name> <name>
+codecontext get_graph <project-name> <name> [depth]
+codecontext project_overview <project-name>
+codecontext tables                        # list tables + approx row counts
+codecontext tables symbols 50             # browse rows of one table (default limit 20)
+codecontext db                             # interactive psql session against DATABASE_URL
+```
+
+`index` is kept as an alias for `index_project`, and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing).
 
 ### 4. Register with Claude Code
 
@@ -107,6 +131,77 @@ Or in `.mcp.json` (project scope):
 | `get_file_outline` | All symbols in one file. |
 | `find_related` | Semantically similar symbols — discover a feature's full surface. |
 
+## Database schema
+
+Everything is stored in 4 Postgres tables, one project's worth of code broken down into files → symbols → edges. Browse them directly with `codecontext tables` / `codecontext db` (see [CLI](#3-cli)).
+
+```
+projects ──< files ──< symbols ──< edges >── symbols
+   (1)        (N)         (N)        (N)        (also N, self-referencing)
+```
+
+### `projects`
+
+One row per indexed codebase (what you pass as `<project>` to every tool/CLI command).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | `serial` (PK) | Internal numeric ID; other tables reference this, not the name. |
+| `name` | `text` (unique) | The short project name you chose, e.g. `dating-local`. |
+| `root_path` | `text` | Absolute path on disk that was indexed. Re-indexing the same `name` updates this if the path moved. |
+| `indexed_at` | `timestamptz` | Timestamp of the last completed `index_project` run. |
+
+### `files`
+
+One row per source file that was scanned (after `.gitignore`/`node_modules`/etc. filtering).
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | `serial` (PK) | Internal ID; `symbols.file_id` points here. |
+| `project_id` | `int` (FK → `projects.id`) | Which project this file belongs to. Deleting a project cascades and removes its files. |
+| `path` | `text` | File path relative to `root_path` (not absolute), e.g. `inc/tracking/clickid.php`. Unique per project. |
+| `language` | `text` | Detected language (`php`, `javascript`, `typescript`, `tsx`, …) from the file extension. |
+| `hash` | `text` | SHA-256 of the file's content. Compared on the next `index_project` run to skip unchanged files — this is what makes indexing incremental. |
+| `loc` | `int` | Line count. |
+| `updated_at` | `timestamptz` | When this file row was last (re)written by the indexer. |
+
+### `symbols`
+
+One row per function, method, class, interface, or trait found inside a file — the unit everything else (search, graph, callers) is built on.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | `serial` (PK) | Internal ID; referenced by `edges.src` / `edges.dst`. |
+| `project_id` | `int` (FK → `projects.id`) | Which project this symbol belongs to. |
+| `file_id` | `int` (FK → `files.id`) | Which file defines this symbol. |
+| `name` | `text` | Symbol name. Methods are stored as `ClassName::methodName` so they stay unique and greppable across a whole class hierarchy. |
+| `kind` | `text` | One of `function`, `method`, `class`, `interface`, `trait`. |
+| `signature` | `text` | The declaration line (parameters, return type where the language has one). |
+| `doc` | `text` | The docblock/leading comment directly above the symbol, if any. |
+| `start_line` / `end_line` | `int` | Where the symbol's body starts/ends in the file — what `get_symbol` uses to show source, and what an editor jump-to-definition would use. |
+| `body` | `text` | The symbol's source code, truncated to 6 KB (see [Notes & limits](#notes--limits)). |
+| `embedding` | `vector(EMBEDDING_DIM)` | The symbol's semantic embedding (from Voyage/OpenAI), used by the vector half of `search_code` and by `find_related`. `NULL` when `EMBEDDING_PROVIDER=none`. |
+| `fts_vector` | `tsvector` (generated) | Auto-computed full-text index over `name` (weight A) + `doc` (weight B) + `body` (weight C) — the full-text half of `search_code`. You never write this column directly; Postgres regenerates it whenever the row changes. |
+
+Indexed on `(project_id, name)` for exact/fuzzy symbol lookups, on `file_id` for `get_file_outline`, on `embedding` (HNSW) for ANN search, and on `fts_vector` (GIN) for full-text search.
+
+### `edges`
+
+One row per relationship between two symbols (or a symbol and something unresolved) — this is the "relationship graph" the project description refers to. `get_graph`/`get_callers`/`get_callees` are just BFS/lookup queries over this table.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | `serial` (PK) | Internal ID. |
+| `project_id` | `int` (FK → `projects.id`) | Which project this edge belongs to. |
+| `src` | `int` (FK → `symbols.id`) | The symbol where the reference originates (the caller, the subclass, the file registering a hook). |
+| `dst` | `int` (FK → `symbols.id`, nullable) | The symbol being referenced, if it was resolved to a known symbol in the same project. |
+| `dst_name` | `text` (nullable) | The raw callee/import/hook name as written in the source, used when `dst` couldn't be resolved (e.g. a dynamic call like `call_user_func($fn)`, or a symbol defined outside the indexed project). Still useful signal even unresolved. |
+| `relation` | `text` | The kind of relationship — one of `CALLS`, `INSTANTIATES`, `EXTENDS`, `IMPLEMENTS`, `IMPORTS`, `REGISTERS_HOOK` (WordPress `add_action`/`add_filter`), `FIRES_HOOK` (WordPress `do_action`/`apply_filters`). |
+| `file_id` | `int` (FK → `files.id`) | Which file the reference was found in (usually the same file as `src`, but not always, e.g. for cross-file hook registration). |
+| `line` | `int` | Line number of the reference. |
+
+Indexed on `src` and `dst` (traversal in either direction) and on `(project_id, relation)` (filtering by relationship type).
+
 ## How `search_code` works
 
 `search_code` is a hybrid search: it always runs a Postgres full-text query, and — when an embedding provider is configured — also runs a pgvector nearest-neighbor query, then merges the two ranked lists with Reciprocal Rank Fusion (RRF).
@@ -143,6 +238,11 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-07-21
+- Added a `codecontext` CLI: `src/cli.js` now exposes every MCP tool (`search_code`, `get_symbol`, `get_callers`, `get_callees`, `get_graph`, `get_file_outline`, `find_related`, `project_overview`, `list_projects`) as a subcommand, in addition to the existing `index`/`stats`/`init-db`. Registered as a `bin` entry in `package.json`; run `npm link` to get a global `codecontext` command.
+- Added `codecontext db` (interactive `psql` session against `DATABASE_URL`) and `codecontext tables [table] [limit]` (list tables with row counts, or browse a table's rows) for inspecting the Postgres schema directly from the terminal.
+- Added a "Database schema" section documenting all 4 tables (`projects`, `files`, `symbols`, `edges`), every column's meaning, and how they relate, so the Postgres structure is understandable without reading `src/db.js`.
 
 ### 2026-07-18
 - Fixed `Parse failed: ... (Invalid argument)` errors on larger source files: `parseFile` now passes an explicit `bufferSize` to tree-sitter's `parse()`, avoiding a chunked-read bug in the native binding that triggered once file content reached 32768 UTF-16 units.
