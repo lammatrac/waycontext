@@ -21,6 +21,48 @@ function usageAndExit(msg) {
   process.exit(1);
 }
 
+// Spinner + elapsed-time indicator for commands that hit the DB/network.
+// Animates on stderr only (so stdout JSON stays pipeable), and only starts
+// rendering after a short delay so near-instant queries don't flicker.
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function startSpinner(label) {
+  const start = Date.now();
+  const tty = Boolean(process.stderr.isTTY);
+  let frame = 0;
+  let interval = null;
+  let delay = null;
+
+  if (tty) {
+    delay = setTimeout(() => {
+      interval = setInterval(() => {
+        const secs = ((Date.now() - start) / 1000).toFixed(1);
+        frame = (frame + 1) % SPINNER_FRAMES.length;
+        process.stderr.write(`\r${SPINNER_FRAMES[frame]} ${label}… ${secs}s`);
+      }, 80);
+    }, 150);
+  }
+
+  return function stop() {
+    if (delay) clearTimeout(delay);
+    if (interval) {
+      clearInterval(interval);
+      process.stderr.write("\r\x1b[K");
+    }
+    const secs = ((Date.now() - start) / 1000).toFixed(1);
+    process.stderr.write(`✔ ${label} (${secs}s)\n`);
+  };
+}
+
+async function withSpinner(label, fn) {
+  const stop = startSpinner(label);
+  try {
+    return await fn();
+  } finally {
+    stop();
+  }
+}
+
 const HELP = `Commands:
   init-db
   index_project <project> <path>        (alias: index)
@@ -40,12 +82,14 @@ const HELP = `Commands:
 async function main() {
   switch (cmd) {
     case "init-db": {
-      await initDb();
+      await withSpinner("Ensuring schema", () => initDb());
       console.log("Schema created / verified.");
       break;
     }
     case "index":
     case "index_project": {
+      // Its own step-by-step log() output already doubles as progress
+      // reporting, so no spinner here — one would just fight the other.
       const [project, dir] = args;
       if (!project || !dir) usageAndExit("Usage: index_project <project> <path>");
       await initDb();
@@ -55,59 +99,59 @@ async function main() {
       break;
     }
     case "list_projects": {
-      printJson(await listProjects());
+      printJson(await withSpinner("Listing projects", () => listProjects()));
       break;
     }
     case "stats": {
-      console.table(await listProjects());
+      console.table(await withSpinner("Listing projects", () => listProjects()));
       break;
     }
     case "project_overview": {
       const [project] = args;
       if (!project) usageAndExit("Usage: project_overview <project>");
-      printJson(await getProjectOverview(project));
+      printJson(await withSpinner(`Building overview for "${project}"`, () => getProjectOverview(project)));
       break;
     }
     case "search_code": {
       const [project, query, limit] = args;
       if (!project || !query) usageAndExit("Usage: search_code <project> <query> [limit]");
-      printJson(await searchCode(project, query, limit ? Number(limit) : 10));
+      printJson(await withSpinner(`Searching "${query}"`, () => searchCode(project, query, limit ? Number(limit) : 10)));
       break;
     }
     case "get_symbol": {
       const [project, name] = args;
       if (!project || !name) usageAndExit("Usage: get_symbol <project> <name>");
-      printJson(await getSymbol(project, name));
+      printJson(await withSpinner(`Fetching "${name}"`, () => getSymbol(project, name)));
       break;
     }
     case "get_callers": {
       const [project, name] = args;
       if (!project || !name) usageAndExit("Usage: get_callers <project> <name>");
-      printJson(await getCallers(project, name));
+      printJson(await withSpinner(`Finding callers of "${name}"`, () => getCallers(project, name)));
       break;
     }
     case "get_callees": {
       const [project, name] = args;
       if (!project || !name) usageAndExit("Usage: get_callees <project> <name>");
-      printJson(await getCallees(project, name));
+      printJson(await withSpinner(`Finding callees of "${name}"`, () => getCallees(project, name)));
       break;
     }
     case "get_graph": {
       const [project, name, depth] = args;
       if (!project || !name) usageAndExit("Usage: get_graph <project> <name> [depth]");
-      printJson(await getSubgraph(project, name, depth ? Number(depth) : 2));
+      printJson(await withSpinner(`Building graph around "${name}"`, () => getSubgraph(project, name, depth ? Number(depth) : 2)));
       break;
     }
     case "get_file_outline": {
       const [project, path] = args;
       if (!project || !path) usageAndExit("Usage: get_file_outline <project> <path>");
-      printJson(await getFileOutline(project, path));
+      printJson(await withSpinner(`Outlining "${path}"`, () => getFileOutline(project, path)));
       break;
     }
     case "find_related": {
       const [project, name, limit] = args;
       if (!project || !name) usageAndExit("Usage: find_related <project> <name> [limit]");
-      printJson(await findRelated(project, name, limit ? Number(limit) : 10));
+      printJson(await withSpinner(`Finding symbols related to "${name}"`, () => findRelated(project, name, limit ? Number(limit) : 10)));
       break;
     }
     case "db": {
@@ -122,25 +166,25 @@ async function main() {
     }
     case "tables": {
       const [table, limit] = args;
+      if (!table) {
+        const rows = await withSpinner("Listing tables", () => pool.query(`
+          SELECT relname AS table, n_live_tup AS approx_rows
+          FROM pg_stat_user_tables ORDER BY relname
+        `).then((r) => r.rows));
+        console.table(rows);
+        break;
+      }
       const known = await pool.query(
         `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`
       );
-      if (!table) {
-        const res = await pool.query(`
-          SELECT relname AS table, n_live_tup AS approx_rows
-          FROM pg_stat_user_tables ORDER BY relname
-        `);
-        console.table(res.rows);
-        break;
-      }
       if (!known.rows.some((r) => r.tablename === table)) {
         usageAndExit(`Unknown table "${table}". Known tables: ${known.rows.map((r) => r.tablename).join(", ")}`);
       }
-      const res = await pool.query(
+      const rows = await withSpinner(`Browsing "${table}"`, () => pool.query(
         `SELECT * FROM "${table}" ORDER BY id DESC LIMIT $1`,
         [limit ? Number(limit) : 20]
-      );
-      console.table(res.rows);
+      ).then((r) => r.rows));
+      console.table(rows);
       break;
     }
     case "help":
