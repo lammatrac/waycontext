@@ -7,6 +7,7 @@ import { pool, toVector, getOrCreateProject } from "./db.js";
 import { parseFile, EXT_LANG } from "./parser.js";
 import { embed, embeddingsEnabled } from "./embeddings.js";
 import { config } from "./config.js";
+import { getChangedFiles, getHeadSha } from "./gitDiff.js";
 
 const DEFAULT_IGNORES = [
   "node_modules/**", "vendor/**", ".git/**", "dist/**", "build/**",
@@ -38,10 +39,21 @@ export async function indexProject(projectName, rootPath, log = () => {}) {
   const project = await getOrCreateProject(projectName, root);
   const ig = loadGitignore(root);
 
-  const patterns = Object.keys(EXT_LANG).map((ext) => `**/*${ext}`);
-  const found = await fg(patterns, { cwd: root, dot: false, ignore: DEFAULT_IGNORES });
-  const filePaths = found.filter((p) => !ig.ignores(p));
-  log(`Found ${filePaths.length} source files`);
+  const diffResult = await getChangedFiles(root, project.last_indexed_sha);
+  let filePaths;
+  let gitDeletedPaths = [];
+  if (diffResult) {
+    filePaths = diffResult.changed.filter(
+      (p) => EXT_LANG[path.extname(p)] && !ig.ignores(p)
+    );
+    gitDeletedPaths = diffResult.deleted;
+    log(`Git diff since last index: ${filePaths.length} changed, ${gitDeletedPaths.length} deleted`);
+  } else {
+    const patterns = Object.keys(EXT_LANG).map((ext) => `**/*${ext}`);
+    const found = await fg(patterns, { cwd: root, dot: false, ignore: DEFAULT_IGNORES });
+    filePaths = found.filter((p) => !ig.ignores(p));
+    log(`Found ${filePaths.length} source files`);
+  }
 
   // Existing hashes for incremental indexing
   const existing = new Map();
@@ -143,10 +155,20 @@ export async function indexProject(projectName, rootPath, log = () => {}) {
 
   // remove deleted files
   let removed = 0;
-  for (const [relPath, row] of existing) {
-    if (!seen.has(relPath)) {
-      await pool.query(`DELETE FROM files WHERE id = $1`, [row.id]);
-      removed++;
+  if (diffResult) {
+    for (const relPath of gitDeletedPaths) {
+      const row = existing.get(relPath);
+      if (row) {
+        await pool.query(`DELETE FROM files WHERE id = $1`, [row.id]);
+        removed++;
+      }
+    }
+  } else {
+    for (const [relPath, row] of existing) {
+      if (!seen.has(relPath)) {
+        await pool.query(`DELETE FROM files WHERE id = $1`, [row.id]);
+        removed++;
+      }
     }
   }
 
@@ -182,6 +204,14 @@ export async function indexProject(projectName, rootPath, log = () => {}) {
     }
   }
 
-  await pool.query(`UPDATE projects SET indexed_at = now() WHERE id = $1`, [project.id]);
-  return { changed, skipped, removed, failed, total: filePaths.length };
+  const newSha = diffResult ? diffResult.headSha : await getHeadSha(root);
+  await pool.query(
+    `UPDATE projects SET indexed_at = now(), last_indexed_sha = $2 WHERE id = $1`,
+    [project.id, newSha]
+  );
+  return {
+    mode: diffResult ? "diff" : "full",
+    changed, skipped, removed, failed,
+    total: filePaths.length, // candidates considered this run, not project size in diff mode
+  };
 }
