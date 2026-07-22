@@ -4,20 +4,7 @@ MCP server that scans and indexes an entire codebase — not just listing symbol
 
 ## Architecture
 
-```
-┌─────────────┐   tree-sitter    ┌──────────────────────────────┐
-│ Project dir │ ───────────────▶ │ symbols (fn/class/method)    │
-│ (.php .js   │   AST walk       │ edges   (CALLS/IMPORTS/      │
-│  .ts .tsx)  │                  │          EXTENDS/HOOKS…)     │
-└─────────────┘                  │ embeddings (pgvector, HNSW)  │
-                                 └───────────────┬──────────────┘
-                                                 │ SQL + ANN
-                                 ┌───────────────▼──────────────┐
-                                 │ MCP tools over stdio          │
-                                 │ search_code · get_graph ·     │
-                                 │ get_callers · overview …      │
-                                 └──────────────────────────────┘
-```
+![Architecture](src/images/architecture.png)
 
 - **Languages:** PHP, JavaScript, TypeScript, JSX/TSX (extendable in `src/parser.js`)
 - **Graph relations:** `CALLS`, `INSTANTIATES`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, `REGISTERS_HOOK`, `FIRES_HOOK` (WordPress `add_action`/`do_action`/`apply_filters` aware)
@@ -81,16 +68,7 @@ Each ring above is one BFS layer — `depth=1` returns just the inner ring, `dep
 
 An **embedding** is a list of ~1000 numbers (a vector) representing what a piece of code *means*, produced by an embedding model (Voyage/OpenAI). Two symbols that do similar things end up with vectors pointing in a similar direction — measured as **cosine distance**: how large the angle between two vectors is, ignoring their length.
 
-```
-      rotateSecretKey
-             ↗
-            ╱   θ  (small angle → similar meaning)
-           ╱________________→ revokeSigningKey
-                                    ⟍
-                                     ⟍  (large angle → unrelated)
-                                      ↘
-                              unrelated function
-```
+![Vector embeddings & cosine distance](src/images/vector-embeddings-cosine-distance.png)
 
 Small angle (θ ≈ 0°) → cosine distance ≈ 0 → very similar meaning, even with completely different names or wording. Large angle (θ ≈ 90°+) → cosine distance ≈ 1+ → unrelated. `search_code`'s vector half and all of `find_related` rank symbols by this distance (Postgres's `<=>` operator, using pgvector's `vector_cosine_ops`).
 
@@ -98,19 +76,7 @@ Small angle (θ ≈ 0°) → cosine distance ≈ 0 → very similar meaning, eve
 
 Comparing a query's embedding against every single stored embedding one by one would be too slow at scale. Postgres instead uses an **HNSW** (Hierarchical Navigable Small World) index: a multi-layer graph where the top layer has a few nodes with long "highway" connections, and each layer below is denser, until the bottom layer connects every vector to its close neighbors.
 
-```mermaid
-graph TD
-  subgraph L2["Layer 2 — sparse, long jumps"]
-    A2((•)) --- B2((•))
-  end
-  subgraph L1["Layer 1 — medium density"]
-    A1((•)) --- B1((•)) --- C1((•))
-  end
-  subgraph L0["Layer 0 — every vector"]
-    A0((•)) --- B0((•)) --- C0((•)) --- D0((•)) --- E0((•))
-  end
-  A2 -.entry point.-> A1 -.-> A0
-```
+![Hierarchical Navigable Small World](src/images/hierarchical-navigable-small-world.png)
 
 A search starts at the top layer's entry point, greedily hops to whichever neighbor is closest to the query, and drops down a layer whenever no closer neighbor exists at the current one — arriving at a very good (not always perfect, hence "approximate") set of nearest neighbors in roughly log-time instead of scanning every row.
 
