@@ -8,7 +8,7 @@ MCP server that scans and indexes an entire codebase — not just listing symbol
 
 - **Languages:** PHP, JavaScript, TypeScript, JSX/TSX (extendable in `src/parser.js`)
 - **Graph relations:** `CALLS`, `INSTANTIATES`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, `REGISTERS_HOOK`, `FIRES_HOOK` (WordPress `add_action`/`do_action`/`apply_filters` aware)
-- **Incremental indexing:** SHA-256 per file; unchanged files are skipped, deleted files are pruned
+- **Incremental indexing:** SHA-256 per file; unchanged files are skipped, deleted files are pruned. When a project's root is inside a git repo and it's been indexed before, re-runs scope file discovery to `git diff` since the last indexed commit instead of a full filesystem scan
 - **Embeddings:** Voyage (`voyage-code-3`, recommended for code) or OpenAI, or `none` (graph + keyword search still work)
 
 New to terms like AST, BFS, HNSW, cosine distance, or RRF? See [Algorithms & concepts explained](#algorithms--concepts-explained) below.
@@ -255,6 +255,7 @@ One row per indexed codebase (what you pass as `<project>` to every tool/CLI com
 | `name` | `text` (unique) | The short project name you chose, e.g. `dating-local`. |
 | `root_path` | `text` | Absolute path on disk that was indexed. Re-indexing the same `name` updates this if the path moved. |
 | `indexed_at` | `timestamptz` | Timestamp of the last completed `index_project` run. |
+| `last_indexed_sha` | `text` (nullable) | Git commit SHA this project was indexed against. `NULL` means never git-diff-indexed (first run, or a project indexed before this column existed) — the indexer falls back to a full filesystem scan in that case. Only advances when a run completes with zero failures, so a partially-failed run gets retried from the same base next time. |
 
 ### `files`
 
@@ -359,6 +360,10 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-07-22
+- Added `projects.last_indexed_sha`, and `indexProject()` now uses it to scope file discovery to `git diff` since the last indexed commit (falling back to a full scan on first index, a non-git root, or when the stored SHA is no longer an ancestor of `HEAD`, e.g. after a rebase) — re-indexing a large repo after a small change no longer requires re-hashing every file.
+- Fixed `last_indexed_sha` advancing even when a reindex run had per-file failures; it now only advances after a fully successful run, so failed files stay in the next run's diff instead of silently dropping out of the index.
 
 ### 2026-07-21
 - Added a reference pricing table (fetched from Voyage's and OpenAI's own docs) to "Tracking token usage & cost", and set `VOYAGE_PRICE_PER_1M_TOKENS`/`OPENAI_PRICE_PER_1M_TOKENS` in `.env` to match.
