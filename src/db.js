@@ -20,6 +20,12 @@ export async function initDb() {
     indexed_at  TIMESTAMPTZ
   );
 
+  -- Last commit SHA this project was indexed against, so a re-run can ask
+  -- git for just what changed since then instead of re-hashing every file.
+  -- NULL means "never git-diff-indexed yet" (first index, or upgraded from
+  -- a pre-existing project) -- indexer.js falls back to a full scan.
+  ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_indexed_sha TEXT;
+
   CREATE TABLE IF NOT EXISTS files (
     id          SERIAL PRIMARY KEY,
     project_id  INT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
