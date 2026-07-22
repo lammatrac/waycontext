@@ -204,11 +204,25 @@ export async function indexProject(projectName, rootPath, log = () => {}) {
     }
   }
 
-  const newSha = diffResult ? diffResult.headSha : await getHeadSha(root);
-  await pool.query(
-    `UPDATE projects SET indexed_at = now(), last_indexed_sha = $2 WHERE id = $1`,
-    [project.id, newSha]
-  );
+  // Only advance last_indexed_sha when the whole run succeeded. If any file
+  // failed (transient read/parse/DB error), leave the stored sha where it
+  // was: the next run will re-diff from the same base, already-succeeded
+  // files still skip cheaply via the hash check, and the failed file(s)
+  // remain "changed" so they get retried instead of silently falling out of
+  // the index forever. `indexed_at` still updates either way — a run did
+  // happen, even if only partially.
+  if (failed === 0) {
+    const newSha = diffResult ? diffResult.headSha : await getHeadSha(root);
+    await pool.query(
+      `UPDATE projects SET indexed_at = now(), last_indexed_sha = $2 WHERE id = $1`,
+      [project.id, newSha]
+    );
+  } else {
+    await pool.query(
+      `UPDATE projects SET indexed_at = now() WHERE id = $1`,
+      [project.id]
+    );
+  }
   return {
     mode: diffResult ? "diff" : "full",
     changed, skipped, removed, failed,
