@@ -137,6 +137,16 @@ Usage tracking only covers calls made after upgrading to this version — run `c
 
 ## Setup on Ubuntu
 
+### Quick install
+
+For a fresh clone, `install.sh` automates everything below: installs PostgreSQL + pgvector if not already present, runs `npm install`, copies `.env.example` to `.env` (if missing), initializes the database schema, links the `codecontext` CLI, and registers the MCP server with Claude Code at **user scope** (`claude mcp add --scope user waycontext`, available in every project, not just this one).
+
+```bash
+./install.sh
+```
+
+It's idempotent — safe to re-run after a `git pull`. Afterwards, edit `.env` to add your `VOYAGE_API_KEY`/`OPENAI_API_KEY`, then restart Claude Code. The steps below explain what it automates, for manual setup, non-Ubuntu systems, or troubleshooting.
+
 ### 1. PostgreSQL + pgvector
 
 ```bash
@@ -202,6 +212,14 @@ codecontext usage <project-name>           # embedding token usage, one project
 Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`codecontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` is the one exception — it already streams its own per-step progress via `console.log`, so a spinner would just fight it.
 
 ### 4. Register with Claude Code
+
+`install.sh` does this automatically at **user scope** (available in every project):
+
+```bash
+claude mcp add --scope user waycontext -- node /absolute/path/to/code-context-mcp/src/server.js
+```
+
+Or at project scope only:
 
 ```bash
 claude mcp add code-context -- node /absolute/path/to/code-context-mcp/src/server.js
@@ -363,6 +381,7 @@ Re-run index_project after committing changes.
 ## Changes
 
 ### 2026-07-23
+- Added `install.sh`: one-command first-time setup for a fresh clone (PostgreSQL + pgvector, `npm install`, `.env`, `init-db`, `npm link`, and registering the MCP server with Claude Code at user scope via `claude mcp add --scope user waycontext`). Idempotent — safe to re-run.
 - Added `codecontext init`: interactively prompts for a project name and writes/updates a `## Code Context MCP` section in `./CLAUDE.md`, asking for y/N confirmation before overwriting an existing section.
 
 ### 2026-07-22
