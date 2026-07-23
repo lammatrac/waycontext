@@ -9,6 +9,9 @@ import {
   getSubgraph, getFileOutline, getProjectOverview, findRelated,
 } from "./graph.js";
 import { config } from "./config.js";
+import { upsertSection, extractExistingName } from "./claudeMdInit.js";
+import { createInterface } from "node:readline/promises";
+import fs from "node:fs";
 
 const [, , cmd, ...args] = process.argv;
 
@@ -68,6 +71,7 @@ async function withSpinner(label, fn) {
 
 const HELP = `Commands:
   init-db
+  init                                    interactively write/update the CLAUDE.md Code Context MCP section
   index_project <project> <path>        (alias: index)
   list_projects
   stats                                  (alias for list_projects, table output)
@@ -94,6 +98,41 @@ async function main() {
     case "init-db": {
       await withSpinner("Ensuring schema", () => initDb());
       console.log("Schema created / verified.");
+      break;
+    }
+    case "init": {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      let name = "";
+      try {
+        while (!name) {
+          const answer = await rl.question("Project name for code-context indexing: ");
+          name = answer.trim();
+          if (!name) console.log("Project name cannot be empty.");
+        }
+
+        const claudeMdPath = "CLAUDE.md";
+        const existing = fs.existsSync(claudeMdPath) ? fs.readFileSync(claudeMdPath, "utf8") : "";
+        const currentName = extractExistingName(existing);
+
+        if (currentName) {
+          const answer = await rl.question(
+            `Already configured for project "${currentName}". Replace with "${name}"? (y/N) `
+          );
+          if (!/^y(es)?$/i.test(answer.trim())) {
+            console.log("Aborted — CLAUDE.md left unchanged.");
+            break;
+          }
+        }
+
+        const { content, mode } = upsertSection(existing, name);
+        fs.writeFileSync(claudeMdPath, content);
+
+        if (mode === "created") console.log(`Created CLAUDE.md — project "${name}" registered for code-context indexing.`);
+        else if (mode === "appended") console.log(`Updated CLAUDE.md — project "${name}" registered for code-context indexing.`);
+        else console.log(`Updated CLAUDE.md — project is now "${name}".`);
+      } finally {
+        rl.close();
+      }
       break;
     }
     case "index":
