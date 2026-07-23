@@ -1,3 +1,6 @@
+// Stops only at a `#`/`##` heading or EOF — a `###`+ subheading placed
+// directly under this section is treated as part of its body and is
+// replaced/lost on update.
 const SECTION_RE = /## Code Context MCP\n[\s\S]*?(?=\n#{1,2} |\n*$)/;
 const NAME_RE = /\*\*`([^`]+)`\*\*/;
 
