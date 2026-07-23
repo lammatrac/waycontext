@@ -133,6 +133,11 @@ export async function listProjects() {
   return res.rows;
 }
 
+export async function deleteProject(name) {
+  const res = await pool.query(`DELETE FROM projects WHERE name = $1 RETURNING *`, [name]);
+  return res.rows[0] || null;
+}
+
 /** Log one embedding API call for token usage / cost reporting. */
 export async function recordEmbeddingUsage(projectId, provider, model, inputType, tokens) {
   if (!tokens) return;
