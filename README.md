@@ -207,7 +207,7 @@ codecontext usage                          # embedding token usage, all projects
 codecontext usage <project-name>           # embedding token usage, one project
 ```
 
-`index` is kept as an alias for `index_project`, and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## Code Context MCP` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section.
+`index`/`reindex` are kept as aliases for `index_project`, and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## Code Context MCP` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section.
 
 Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`codecontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` is the one exception — it already streams its own per-step progress via `console.log`, so a spinner would just fight it.
 
@@ -383,6 +383,7 @@ Re-run index_project after committing changes.
 ### 2026-07-23
 - Added `install.sh`: one-command first-time setup for a fresh clone (PostgreSQL + pgvector, `npm install`, `.env`, `init-db`, `npm link`, and registering the MCP server with Claude Code at user scope via `claude mcp add --scope user waycontext`). Idempotent — safe to re-run.
 - Added `codecontext init`: interactively prompts for a project name and writes/updates a `## Code Context MCP` section in `./CLAUDE.md`, asking for y/N confirmation before overwriting an existing section.
+- Added `reindex` as another alias for `index_project` (alongside `index`), so the CLI's re-run-after-a-git-diff command reads more naturally.
 
 ### 2026-07-22
 - Added `projects.last_indexed_sha`, and `indexProject()` now uses it to scope file discovery to `git diff` since the last indexed commit (falling back to a full scan on first index, a non-git root, or when the stored SHA is no longer an ancestor of `HEAD`, e.g. after a rebase) — re-indexing a large repo after a small change no longer requires re-hashing every file.

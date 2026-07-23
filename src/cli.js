@@ -72,7 +72,7 @@ async function withSpinner(label, fn) {
 const HELP = `Commands:
   init-db
   init                                    interactively write/update the CLAUDE.md Code Context MCP section
-  index_project <project> <path>        (alias: index)
+  index_project <project> <path>        (alias: index, reindex)
   list_projects
   delete_project <project> [--yes]      delete a project and all its indexed data
   stats                                  (alias for list_projects, table output)
@@ -137,6 +137,7 @@ async function main() {
       break;
     }
     case "index":
+    case "reindex":
     case "index_project": {
       // Its own step-by-step log() output already doubles as progress
       // reporting, so no spinner here — one would just fight the other.
