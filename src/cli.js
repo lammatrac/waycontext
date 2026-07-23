@@ -2,7 +2,7 @@
 // CLI: node src/cli.js <command> [args...]
 // Run `node src/cli.js help` for the full command list.
 import { spawn } from "node:child_process";
-import { initDb, listProjects, getEmbeddingUsage, pool } from "./db.js";
+import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
 import { indexProject } from "./indexer.js";
 import {
   searchCode, getSymbol, getCallers, getCallees,
@@ -74,6 +74,7 @@ const HELP = `Commands:
   init                                    interactively write/update the CLAUDE.md Code Context MCP section
   index_project <project> <path>        (alias: index)
   list_projects
+  delete_project <project> [--yes]      delete a project and all its indexed data
   stats                                  (alias for list_projects, table output)
   project_overview <project>
   search_code <project> <query> [limit]
@@ -149,6 +150,45 @@ async function main() {
     }
     case "list_projects": {
       printJson(await withSpinner("Listing projects", () => listProjects()));
+      break;
+    }
+    case "delete_project": {
+      const [project, ...rest] = args;
+      if (!project) usageAndExit("Usage: delete_project <project> [--yes]");
+      const skipConfirm = rest.includes("--yes");
+
+      const existing = await getProject(project);
+      if (!existing) {
+        console.error(`Project "${project}" not found.`);
+        process.exit(1);
+      }
+
+      if (!skipConfirm) {
+        const counts = await pool.query(
+          `SELECT
+             (SELECT count(*) FROM files f WHERE f.project_id = $1)   AS file_count,
+             (SELECT count(*) FROM symbols s WHERE s.project_id = $1) AS symbol_count,
+             (SELECT count(*) FROM edges e WHERE e.project_id = $1)   AS edge_count`,
+          [existing.id]
+        );
+        const { file_count, symbol_count, edge_count } = counts.rows[0];
+        console.log(`Project "${project}": ${file_count} files, ${symbol_count} symbols, ${edge_count} edges.`);
+
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        let answer;
+        try {
+          answer = await rl.question("Delete this project and all its indexed data? (y/N) ");
+        } finally {
+          rl.close();
+        }
+        if (!/^y(es)?$/i.test(answer.trim())) {
+          console.log("Aborted — no changes made.");
+          break;
+        }
+      }
+
+      await deleteProject(project);
+      console.log(`Deleted project "${project}".`);
       break;
     }
     case "stats": {
