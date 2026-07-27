@@ -22,6 +22,27 @@ function loadGitignore(root) {
   return ig;
 }
 
+// DEFAULT_IGNORES only prunes a fixed set of dirs during the glob walk;
+// .gitignore entries were previously applied only as a post-filter, so a
+// large ignored directory (e.g. a WordPress uploads folder) still got
+// walked in full. Fold plain (non-negated) .gitignore entries into the
+// glob-time ignore list too, so traversal actually skips them.
+function loadGlobIgnores(root) {
+  const patterns = [...DEFAULT_IGNORES];
+  const gi = path.join(root, ".gitignore");
+  if (fs.existsSync(gi)) {
+    const lines = fs.readFileSync(gi, "utf8")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#") && !l.startsWith("!"));
+    for (const line of lines) {
+      const clean = line.replace(/^\/+/, "").replace(/\/+$/, "");
+      patterns.push(clean, `${clean}/**`);
+    }
+  }
+  return patterns;
+}
+
 function sha256(s) {
   return crypto.createHash("sha256").update(s).digest("hex");
 }
@@ -37,6 +58,26 @@ export async function indexProject(projectName, rootPath, log = () => {}) {
   if (!fs.existsSync(root)) throw new Error(`Path not found: ${root}`);
 
   const project = await getOrCreateProject(projectName, root);
+
+  // Two overlapping indexProject runs on the SAME project (e.g. a commit-hook
+  // reindex racing a pull-hook reindex from another session) mutate the same
+  // files/symbols/edges rows concurrently: each file's DELETE+INSERT of
+  // symbols reassigns fresh ids while the other run's edge-resolution still
+  // references the old ones, which Postgres reports as either a deadlock
+  // (40P01) or a dst/src foreign-key violation (23503) depending on timing.
+  // A session-level advisory lock keyed by project id serializes runs for
+  // that project while leaving other projects free to index in parallel.
+  const lockClient = await pool.connect();
+  await lockClient.query("SELECT pg_advisory_lock($1)", [project.id]);
+  try {
+    return await runIndex(project, root, log);
+  } finally {
+    await lockClient.query("SELECT pg_advisory_unlock($1)", [project.id]);
+    lockClient.release();
+  }
+}
+
+async function runIndex(project, root, log) {
   const ig = loadGitignore(root);
 
   const diffResult = await getChangedFiles(root, project.last_indexed_sha);
@@ -50,7 +91,7 @@ export async function indexProject(projectName, rootPath, log = () => {}) {
     log(`Git diff since last index: ${filePaths.length} changed, ${gitDeletedPaths.length} deleted`);
   } else {
     const patterns = Object.keys(EXT_LANG).map((ext) => `**/*${ext}`);
-    const found = await fg(patterns, { cwd: root, dot: false, ignore: DEFAULT_IGNORES });
+    const found = await fg(patterns, { cwd: root, dot: false, ignore: loadGlobIgnores(root) });
     filePaths = found.filter((p) => !ig.ignores(p));
     log(`Found ${filePaths.length} source files`);
   }

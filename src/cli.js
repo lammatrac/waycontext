@@ -36,7 +36,11 @@ function startSpinner(label) {
   let interval = null;
   let delay = null;
 
-  if (tty) {
+  // Split out so callers with their own interleaved log lines (e.g.
+  // index_project's per-file progress) can pause/resume the animation
+  // around each print instead of only getting a stop() at the very end.
+  function begin() {
+    if (!tty || interval || delay) return;
     delay = setTimeout(() => {
       interval = setInterval(() => {
         const secs = ((Date.now() - start) / 1000).toFixed(1);
@@ -46,15 +50,26 @@ function startSpinner(label) {
     }, 150);
   }
 
-  return function stop(ok = true) {
-    if (delay) clearTimeout(delay);
+  function pause() {
+    if (delay) { clearTimeout(delay); delay = null; }
     if (interval) {
       clearInterval(interval);
+      interval = null;
       process.stderr.write("\r\x1b[K");
     }
+  }
+
+  begin();
+
+  function stop(ok = true) {
+    pause();
     const secs = ((Date.now() - start) / 1000).toFixed(1);
     process.stderr.write(`${ok ? "✔" : "✖"} ${label} (${secs}s)\n`);
-  };
+  }
+  stop.pause = pause;
+  stop.resume = begin;
+
+  return stop;
 }
 
 async function withSpinner(label, fn) {
@@ -139,13 +154,29 @@ async function main() {
     case "index":
     case "reindex":
     case "index_project": {
-      // Its own step-by-step log() output already doubles as progress
-      // reporting, so no spinner here — one would just fight the other.
+      // Its own step-by-step log() output only fires at a handful of
+      // milestones (git diff, file count, edge resolution, embeddings) —
+      // the file-by-file processing in between is otherwise silent, which
+      // reads as "stuck" on a large project. Run the spinner throughout,
+      // pausing it around each log line so the two don't fight.
       const [project, dir] = args;
       if (!project || !dir) usageAndExit("Usage: index_project <project> <path>");
       await initDb();
       const t0 = Date.now();
-      const stats = await indexProject(project, dir, (m) => console.log("·", m));
+      const stop = startSpinner(`Indexing "${project}"`);
+      const log = (m) => {
+        stop.pause();
+        console.log("·", m);
+        stop.resume();
+      };
+      let stats;
+      try {
+        stats = await indexProject(project, dir, log);
+      } catch (e) {
+        stop(false);
+        throw e;
+      }
+      stop(true);
       console.log(`Done in ${((Date.now() - t0) / 1000).toFixed(1)}s:`, stats);
       break;
     }
