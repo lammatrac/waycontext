@@ -13,6 +13,7 @@
     "index": "node src/cli.js index",
     "stats": "node src/cli.js stats",
     "init-db": "node src/cli.js init-db",
+    "update": "bash update.sh",
     "test": "node --test test/**/*.test.js"
   },
   "dependencies": {

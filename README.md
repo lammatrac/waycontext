@@ -14,6 +14,24 @@ For a fresh clone, `install.sh` automates everything below: installs PostgreSQL 
 
 It's idempotent — safe to re-run after a `git pull`. Afterwards, edit `.env` to add your `VOYAGE_API_KEY`/`OPENAI_API_KEY`, then restart Claude Code. The steps below explain what it automates, for manual setup, non-Ubuntu systems, or troubleshooting.
 
+### Updating an existing install
+
+```bash
+./update.sh      # or: npm run update
+```
+
+Pulls the latest commits (fast-forward only — aborts instead of merging/rebasing if your local history has diverged, and aborts instead of stashing/discarding if you have uncommitted changes) and then re-runs `install.sh`, so every config — npm deps, DB schema, the `codecontext` CLI link, MCP registration, the global CLAUDE.md section, the PreToolUse hook — is refreshed to match. Additive only: it never overwrites what you've customized (`.env`, the rest of `~/.claude/CLAUDE.md`, unrelated hooks in `~/.claude/settings.json`, etc.).
+
+To get notified instead of checking by hand, `check-update.sh` adds a cron entry that fetches from origin (read-only — it never pulls or runs `install.sh` itself):
+
+```bash
+./check-update.sh --install     # runs every 5 min via cron, notifies at most once/day
+./check-update.sh --uninstall   # removes that cron entry
+./check-update.sh                # run the check once, by hand
+```
+
+It runs every 5 minutes rather than at a fixed time of day — a personal laptop isn't guaranteed to be on at any particular hour, so a fixed daily slot could easily be missed entirely. Each run is just a cheap fetch + compare; if you're behind, it's debounced to notify **at most once per calendar day** (tracked in `~/.cache/waycontext/last-notified-date`) so it doesn't spam a notification (or a growing log) every 5 minutes. Current status is overwritten each run at `~/.cache/waycontext/status`; `~/.cache/waycontext/update-check.log` only gets a new line on the (at most one per day) run that actually notifies. It also fires a desktop notification via `notify-send` when available. `--install`/`--uninstall` only touch a single marker-tagged line in your crontab (and upgrade it in place if the schedule changes), leaving any other cron entries untouched.
+
 ### 1. PostgreSQL + pgvector
 
 ```bash
@@ -402,6 +420,8 @@ Re-run index_project after committing changes.
 - Added `codecontext init-global`: writes (or updates) a `## Code Context MCP Workflow` section into the user's global `~/.claude/CLAUDE.md`, so every project's Claude Code session — not just ones with their own `CLAUDE.md`/`.mcp.json` — prefers `search_code`/`get_graph`/`get_callers`/`get_symbol` over `Grep`/`Glob`/`Explore` when a project is indexed. Unlike project-scoped `init`, it's non-interactive and idempotent (no project name involved), so `install.sh` now runs it automatically (best-effort) right after registering the MCP server.
 - Fixed a crash-recovery gap in `indexProject()`'s embedding phase: if the process died (or a Voyage batch failed) after files/symbols were already committed, their content hash matched on the next run, so they were hash-skipped forever and stayed without embeddings. `runIndex()` now re-checks for symbols with `embedding IS NULL` before embedding, so a plain re-run of `index`/`reindex` heals any left over from an earlier crash. Embedding calls are also now chunked (64 symbols) with per-chunk DB writes, so a failing chunk no longer discards vectors already fetched from earlier chunks in the same run.
 - Added `hooks/codectx-primary-search.sh` plus `codecontext init-global` support (`src/hookInit.js`): installs a `PreToolUse` hook into `~/.claude/settings.json` that denies `Grep`-tool calls and `grep`/`rg`/`ag` Bash commands whenever the working directory is a project this MCP has indexed, redirecting the caller to `search_code`/`get_symbol`/`get_callers`/`get_graph` instead of a soft reminder — the CLAUDE.md instruction alone wasn't reliably followed. A trailing `# codectx-skip` comment bypasses the check once for legitimate non-code searches (docs, config, logs, test output). Idempotent and self-locating (no hardcoded paths), so `install.sh` sets this up automatically on a fresh clone.
+- Added `update.sh` (and `npm run update`): pulls the latest commits (fast-forward only, aborting rather than merging on divergent history or uncommitted local changes) and re-runs `install.sh` so an existing install's npm deps, DB schema, CLI link, MCP registration, global CLAUDE.md section, and PreToolUse hook all get refreshed in one step — additive, never overwrites customized config.
+- Added `check-update.sh --install`: a read-only cron check (fetch + compare against origin, no pull, no `install.sh`) that runs every 5 minutes — a fixed daily time isn't reliable on a laptop that isn't always on — but debounces to at most one `notify-send`/log line per calendar day (`~/.cache/waycontext/last-notified-date`), with current status overwritten each run at `~/.cache/waycontext/status` instead of growing unbounded. `--install` upgrades the crontab line in place if the schedule changes instead of leaving a stale duplicate; `--uninstall` removes it; both only touch their own marker-tagged crontab line.
 
 ### 2026-07-27
 - Fixed a `deadlock detected` (`40P01`) / foreign-key-violation (`23503`) race when two `index_project` runs overlap on the same project (e.g. a commit-hook reindex racing a pull-hook reindex from another session): `indexProject()` now holds a Postgres session-level advisory lock keyed by the project's id for the run's duration, serializing overlapping runs on the same project while leaving other projects free to index in parallel.
