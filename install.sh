@@ -93,10 +93,14 @@ else
   exit 1
 fi
 
-# 8. Add the Code Context MCP Workflow section to the global CLAUDE.md, so
-# every project's Claude Code session (not just this one) treats this MCP as
-# the primary way to find code. Best-effort: a failure here shouldn't fail
-# the whole install since the MCP server itself is already registered.
+# 8. Wire up global "primary search tool" enforcement so every project's
+# Claude Code session (not just this one) treats this MCP as the primary way
+# to find code: adds the Code Context MCP Workflow section to the global
+# CLAUDE.md, and installs a PreToolUse hook (~/.claude/settings.json ->
+# hooks/codectx-primary-search.sh) that denies Grep/grep calls on projects
+# this MCP has indexed, redirecting to its search tools. Best-effort: a
+# failure here shouldn't fail the whole install since the MCP server itself
+# is already registered.
 if node "$SCRIPT_DIR/src/cli.js" init-global; then
   :
 else

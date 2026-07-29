@@ -10,11 +10,14 @@ import {
 } from "./graph.js";
 import { config } from "./config.js";
 import { upsertSection, extractExistingName, upsertGlobalSection } from "./claudeMdInit.js";
+import { upsertHook } from "./hookInit.js";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const [, , cmd, ...args] = process.argv;
 
 function printJson(data) {
@@ -167,13 +170,33 @@ async function main() {
 
       if (mode === "unchanged") {
         console.log(`${globalPath} already has the Code Context MCP Workflow section, skipping.`);
-        break;
+      } else {
+        fs.mkdirSync(globalDir, { recursive: true });
+        fs.writeFileSync(globalPath, content);
+        if (mode === "created") console.log(`Created ${globalPath} with the Code Context MCP Workflow section.`);
+        else if (mode === "appended") console.log(`Updated ${globalPath} — appended the Code Context MCP Workflow section.`);
+        else console.log(`Updated ${globalPath} — refreshed the Code Context MCP Workflow section.`);
       }
-      fs.mkdirSync(globalDir, { recursive: true });
-      fs.writeFileSync(globalPath, content);
-      if (mode === "created") console.log(`Created ${globalPath} with the Code Context MCP Workflow section.`);
-      else if (mode === "appended") console.log(`Updated ${globalPath} — appended the Code Context MCP Workflow section.`);
-      else console.log(`Updated ${globalPath} — refreshed the Code Context MCP Workflow section.`);
+
+      // Also install the PreToolUse hook that enforces code-context as the
+      // primary search tool (denies Grep/grep on indexed projects) — see
+      // hooks/codectx-primary-search.sh. Best-effort like the section above.
+      const settingsPath = path.join(globalDir, "settings.json");
+      const hookScriptPath = path.join(__dirname, "..", "hooks", "codectx-primary-search.sh");
+      const existingSettings = fs.existsSync(settingsPath)
+        ? JSON.parse(fs.readFileSync(settingsPath, "utf8"))
+        : {};
+      const { settings, mode: hookMode } = upsertHook(existingSettings, hookScriptPath);
+
+      if (hookMode === "unchanged") {
+        console.log(`${settingsPath} already has the code-context primary-search hook, skipping.`);
+      } else {
+        fs.mkdirSync(globalDir, { recursive: true });
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+        if (hookMode === "created") console.log(`Updated ${settingsPath} — added the code-context primary-search hook.`);
+        else if (hookMode === "appended") console.log(`Updated ${settingsPath} — added the code-context primary-search hook alongside existing hooks.`);
+        else console.log(`Updated ${settingsPath} — refreshed the code-context primary-search hook.`);
+      }
       break;
     }
     case "index":
