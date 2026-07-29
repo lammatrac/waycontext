@@ -9,9 +9,11 @@ import {
   getSubgraph, getFileOutline, getProjectOverview, findRelated,
 } from "./graph.js";
 import { config } from "./config.js";
-import { upsertSection, extractExistingName } from "./claudeMdInit.js";
+import { upsertSection, extractExistingName, upsertGlobalSection } from "./claudeMdInit.js";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const [, , cmd, ...args] = process.argv;
 
@@ -87,6 +89,7 @@ async function withSpinner(label, fn) {
 const HELP = `Commands:
   init-db
   init                                    interactively write/update the CLAUDE.md Code Context MCP section
+  init-global                            write/update the Code Context MCP Workflow section in ~/.claude/CLAUDE.md
   index_project <project> <path>        (alias: index, reindex)
   list_projects
   delete_project <project> [--yes]      delete a project and all its indexed data
@@ -149,6 +152,28 @@ async function main() {
       } finally {
         rl.close();
       }
+      break;
+    }
+    case "init-global": {
+      // Unlike "init" (per-project, needs a project name, interactive), this
+      // section is fixed and non-parametrized — code-context's tools are
+      // always exposed under the same names regardless of the alias `claude
+      // mcp add --scope user <alias>` registered it under — so it's safe to
+      // run unattended from install.sh as well as by hand.
+      const globalDir = path.join(os.homedir(), ".claude");
+      const globalPath = path.join(globalDir, "CLAUDE.md");
+      const existing = fs.existsSync(globalPath) ? fs.readFileSync(globalPath, "utf8") : "";
+      const { content, mode } = upsertGlobalSection(existing);
+
+      if (mode === "unchanged") {
+        console.log(`${globalPath} already has the Code Context MCP Workflow section, skipping.`);
+        break;
+      }
+      fs.mkdirSync(globalDir, { recursive: true });
+      fs.writeFileSync(globalPath, content);
+      if (mode === "created") console.log(`Created ${globalPath} with the Code Context MCP Workflow section.`);
+      else if (mode === "appended") console.log(`Updated ${globalPath} — appended the Code Context MCP Workflow section.`);
+      else console.log(`Updated ${globalPath} — refreshed the Code Context MCP Workflow section.`);
       break;
     }
     case "index":

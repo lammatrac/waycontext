@@ -2,6 +2,128 @@
 
 MCP server that scans and indexes an entire codebase — not just listing symbols, but building a **relationship graph** (calls, imports, inheritance, WordPress hooks) plus **vector embeddings** in PostgreSQL/pgvector — so AI agents get comprehensive project context.
 
+## Setup on Ubuntu
+
+### Quick install
+
+For a fresh clone, `install.sh` automates everything below: installs PostgreSQL + pgvector if not already present, runs `npm install`, copies `.env.example` to `.env` (if missing), initializes the database schema, links the `codecontext` CLI, registers the MCP server with Claude Code at **user scope** (`claude mcp add --scope user waycontext`, available in every project, not just this one), and writes a "Code Context MCP Workflow" section into your global `~/.claude/CLAUDE.md` so every project's Claude Code session knows to use it.
+
+```bash
+./install.sh
+```
+
+It's idempotent — safe to re-run after a `git pull`. Afterwards, edit `.env` to add your `VOYAGE_API_KEY`/`OPENAI_API_KEY`, then restart Claude Code. The steps below explain what it automates, for manual setup, non-Ubuntu systems, or troubleshooting.
+
+### 1. PostgreSQL + pgvector
+
+```bash
+sudo apt update
+sudo apt install -y postgresql postgresql-contrib postgresql-16-pgvector
+# On older Ubuntu, build pgvector from source:
+#   sudo apt install -y postgresql-server-dev-16 build-essential git
+#   git clone https://github.com/pgvector/pgvector && cd pgvector && make && sudo make install
+
+sudo -u postgres psql -c "CREATE USER codectx WITH PASSWORD 'codectx';"
+sudo -u postgres psql -c "CREATE DATABASE codectx OWNER codectx;"
+sudo -u postgres psql -d codectx -c "CREATE EXTENSION vector;"
+```
+
+If you run Postgres in Docker instead, use the `pgvector/pgvector:pg16` image.
+
+### 2. Install & init
+
+```bash
+# tree-sitter grammars compile native bindings:
+sudo apt install -y build-essential python3
+
+cd code-context-mcp
+npm install
+cp .env.example .env    # fill in DATABASE_URL + embedding API key
+npm run init-db
+```
+
+### 3. CLI
+
+Every MCP tool is also available as a CLI subcommand via `src/cli.js` — useful for a first index, or for querying the graph/search tools from a terminal without going through an MCP client.
+
+```bash
+node src/cli.js index_project <project-name> /path/to/project/
+node src/cli.js stats
+```
+
+To call it as a plain `codecontext` command from anywhere, link the package once:
+
+```bash
+cd code-context-mcp
+npm link
+```
+
+```bash
+codecontext help
+codecontext init                           interactively write/update the CLAUDE.md Code Context MCP section
+codecontext init-global                    write/update the Code Context MCP Workflow section in ~/.claude/CLAUDE.md
+codecontext index_project <project-name> /path/to/project/
+codecontext search_code <project-name> "purge cache after match update"
+codecontext get_symbol <project-name> <name>
+codecontext get_callers <project-name> <name>
+codecontext get_graph <project-name> <name> [depth]
+codecontext project_overview <project-name>
+codecontext tables                        # list tables + approx row counts
+codecontext tables symbols 50             # browse rows of one table (default limit 20)
+codecontext db                             # interactive psql session against DATABASE_URL
+codecontext usage                          # embedding token usage, all projects
+codecontext usage <project-name>           # embedding token usage, one project
+```
+
+`index`/`reindex` are kept as aliases for `index_project`, and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## Code Context MCP` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section. `init-global` is the user-level counterpart — see [5. Add to your global CLAUDE.md](#5-add-to-your-global-claudemd) below.
+
+Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`codecontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` runs the same spinner for its whole duration, pausing it around its own per-step `console.log` progress lines (`Found N source files`, `Resolving graph edges…`, …) so the two don't collide — this keeps the animation visible during the otherwise-silent file-by-file processing in between.
+
+### 4. Register with Claude Code
+
+`install.sh` does this automatically at **user scope** (available in every project):
+
+```bash
+claude mcp add --scope user waycontext -- node /absolute/path/to/code-context-mcp/src/server.js
+```
+
+Or at project scope only:
+
+```bash
+claude mcp add code-context -- node /absolute/path/to/code-context-mcp/src/server.js
+```
+
+Or in `.mcp.json` (project scope):
+
+```json
+{
+  "mcpServers": {
+    "code-context": {
+      "command": "node",
+      "args": ["/absolute/path/to/code-context-mcp/src/server.js"]
+    }
+  }
+}
+```
+
+(Registration options: https://docs.claude.com/en/docs/claude-code/mcp)
+
+### 5. Add to your global CLAUDE.md
+
+Registering the MCP server (step 4) makes its tools *available* in every project. This step makes every project's Claude Code session actually *prefer* them over `Grep`/`Glob`/an `Explore` agent when the current repo is indexed. `install.sh` does this automatically by running:
+
+```bash
+codecontext init-global
+```
+
+Unlike `codecontext init` (project-scoped — needs a project name, prompts interactively, asks before overwriting), `init-global` writes a fixed `## Code Context MCP Workflow` section — no project name involved, since `code-context`'s tools are exposed under the same names in every project regardless of what alias `claude mcp add --scope user <alias>` registered the server under. That makes it safe to run non-interactively and idempotent to re-run (it only touches its own section, leaving the rest of `~/.claude/CLAUDE.md` untouched):
+
+```bash
+codecontext init-global      # or: node src/cli.js init-global
+```
+
+The section it writes tells the agent: prefer `project_overview` → `search_code` → `get_graph`/`get_callers` → `get_symbol` over grepping the repo by hand, and how to find the right project name for the current repo (the project's own `CLAUDE.md`, written by `codecontext init`, or `list_projects`).
+
 ## Architecture
 
 ![Architecture](src/images/architecture.png)
@@ -134,111 +256,6 @@ Reference pricing, fetched directly from each provider's own docs on 2026-07-21 
 `VOYAGE_PRICE_PER_1M_TOKENS=0.18` and `OPENAI_PRICE_PER_1M_TOKENS=0.02` (the standard, non-batch rate) are already set in `.env` to match this project's configured models (`VOYAGE_MODEL`/`OPENAI_EMBEDDING_MODEL`) — update them if you switch models or a provider changes pricing.
 
 Usage tracking only covers calls made after upgrading to this version — run `codecontext init-db` once to create the `embedding_usage` table if it doesn't exist yet.
-
-## Setup on Ubuntu
-
-### Quick install
-
-For a fresh clone, `install.sh` automates everything below: installs PostgreSQL + pgvector if not already present, runs `npm install`, copies `.env.example` to `.env` (if missing), initializes the database schema, links the `codecontext` CLI, and registers the MCP server with Claude Code at **user scope** (`claude mcp add --scope user waycontext`, available in every project, not just this one).
-
-```bash
-./install.sh
-```
-
-It's idempotent — safe to re-run after a `git pull`. Afterwards, edit `.env` to add your `VOYAGE_API_KEY`/`OPENAI_API_KEY`, then restart Claude Code. The steps below explain what it automates, for manual setup, non-Ubuntu systems, or troubleshooting.
-
-### 1. PostgreSQL + pgvector
-
-```bash
-sudo apt update
-sudo apt install -y postgresql postgresql-contrib postgresql-16-pgvector
-# On older Ubuntu, build pgvector from source:
-#   sudo apt install -y postgresql-server-dev-16 build-essential git
-#   git clone https://github.com/pgvector/pgvector && cd pgvector && make && sudo make install
-
-sudo -u postgres psql -c "CREATE USER codectx WITH PASSWORD 'codectx';"
-sudo -u postgres psql -c "CREATE DATABASE codectx OWNER codectx;"
-sudo -u postgres psql -d codectx -c "CREATE EXTENSION vector;"
-```
-
-If you run Postgres in Docker instead, use the `pgvector/pgvector:pg16` image.
-
-### 2. Install & init
-
-```bash
-# tree-sitter grammars compile native bindings:
-sudo apt install -y build-essential python3
-
-cd code-context-mcp
-npm install
-cp .env.example .env    # fill in DATABASE_URL + embedding API key
-npm run init-db
-```
-
-### 3. CLI
-
-Every MCP tool is also available as a CLI subcommand via `src/cli.js` — useful for a first index, or for querying the graph/search tools from a terminal without going through an MCP client.
-
-```bash
-node src/cli.js index_project <project-name> /path/to/project/
-node src/cli.js stats
-```
-
-To call it as a plain `codecontext` command from anywhere, link the package once:
-
-```bash
-cd code-context-mcp
-npm link
-```
-
-```bash
-codecontext help
-codecontext init                           interactively write/update the CLAUDE.md Code Context MCP section
-codecontext index_project <project-name> /path/to/project/
-codecontext search_code <project-name> "purge cache after match update"
-codecontext get_symbol <project-name> <name>
-codecontext get_callers <project-name> <name>
-codecontext get_graph <project-name> <name> [depth]
-codecontext project_overview <project-name>
-codecontext tables                        # list tables + approx row counts
-codecontext tables symbols 50             # browse rows of one table (default limit 20)
-codecontext db                             # interactive psql session against DATABASE_URL
-codecontext usage                          # embedding token usage, all projects
-codecontext usage <project-name>           # embedding token usage, one project
-```
-
-`index`/`reindex` are kept as aliases for `index_project`, and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## Code Context MCP` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section.
-
-Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`codecontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` runs the same spinner for its whole duration, pausing it around its own per-step `console.log` progress lines (`Found N source files`, `Resolving graph edges…`, …) so the two don't collide — this keeps the animation visible during the otherwise-silent file-by-file processing in between.
-
-### 4. Register with Claude Code
-
-`install.sh` does this automatically at **user scope** (available in every project):
-
-```bash
-claude mcp add --scope user waycontext -- node /absolute/path/to/code-context-mcp/src/server.js
-```
-
-Or at project scope only:
-
-```bash
-claude mcp add code-context -- node /absolute/path/to/code-context-mcp/src/server.js
-```
-
-Or in `.mcp.json` (project scope):
-
-```json
-{
-  "mcpServers": {
-    "code-context": {
-      "command": "node",
-      "args": ["/absolute/path/to/code-context-mcp/src/server.js"]
-    }
-  }
-}
-```
-
-(Registration options: https://docs.claude.com/en/docs/claude-code/mcp)
 
 ## MCP tools
 
@@ -379,6 +396,11 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-07-29
+- Moved the "Setup on Ubuntu" installation guide to the top of the README, right after the intro, instead of after the architecture/algorithms/pricing sections.
+- Added `codecontext init-global`: writes (or updates) a `## Code Context MCP Workflow` section into the user's global `~/.claude/CLAUDE.md`, so every project's Claude Code session — not just ones with their own `CLAUDE.md`/`.mcp.json` — prefers `search_code`/`get_graph`/`get_callers`/`get_symbol` over `Grep`/`Glob`/`Explore` when a project is indexed. Unlike project-scoped `init`, it's non-interactive and idempotent (no project name involved), so `install.sh` now runs it automatically (best-effort) right after registering the MCP server.
+- Fixed a crash-recovery gap in `indexProject()`'s embedding phase: if the process died (or a Voyage batch failed) after files/symbols were already committed, their content hash matched on the next run, so they were hash-skipped forever and stayed without embeddings. `runIndex()` now re-checks for symbols with `embedding IS NULL` before embedding, so a plain re-run of `index`/`reindex` heals any left over from an earlier crash. Embedding calls are also now chunked (64 symbols) with per-chunk DB writes, so a failing chunk no longer discards vectors already fetched from earlier chunks in the same run.
 
 ### 2026-07-27
 - Fixed a `deadlock detected` (`40P01`) / foreign-key-violation (`23503`) race when two `index_project` runs overlap on the same project (e.g. a commit-hook reindex racing a pull-hook reindex from another session): `indexProject()` now holds a Postgres session-level advisory lock keyed by the project's id for the run's duration, serializing overlapping runs on the same project while leaving other projects free to index in parallel.

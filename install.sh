@@ -93,4 +93,14 @@ else
   exit 1
 fi
 
+# 8. Add the Code Context MCP Workflow section to the global CLAUDE.md, so
+# every project's Claude Code session (not just this one) treats this MCP as
+# the primary way to find code. Best-effort: a failure here shouldn't fail
+# the whole install since the MCP server itself is already registered.
+if node "$SCRIPT_DIR/src/cli.js" init-global; then
+  :
+else
+  warn "Failed to update ~/.claude/CLAUDE.md — run manually: node $SCRIPT_DIR/src/cli.js init-global"
+fi
+
 log "Setup complete. Edit .env with your embedding API key if you haven't already, then restart Claude Code."

@@ -233,15 +233,56 @@ async function runIndex(project, root, log) {
   );
 
   // embeddings
+  if (embeddingsEnabled()) {
+    // Heal symbols left without an embedding by an earlier crash or a failed
+    // Voyage batch: their file's hash already matched on this run (they were
+    // fully committed before whatever interrupted embedding), so the
+    // hash-skip above never re-queues them. Re-checking embedding IS NULL
+    // directly means a plain re-run of index/reindex retries them, without
+    // needing a full reindex or a separate resume command.
+    const pendingIds = new Set(pendingEmbeds.map((p) => p.symbolId));
+    const missing = await pool.query(
+      `SELECT s.id, f.path, s.kind, s.name, s.doc, s.body
+       FROM symbols s JOIN files f ON f.id = s.file_id
+       WHERE s.project_id = $1 AND s.embedding IS NULL`,
+      [project.id]
+    );
+    for (const r of missing.rows) {
+      if (pendingIds.has(r.id)) continue;
+      pendingEmbeds.push({
+        symbolId: r.id,
+        text: [`// ${r.path} (${r.kind} ${r.name})`, r.doc || "", r.body].join("\n"),
+      });
+    }
+  }
+
   if (pendingEmbeds.length) {
     log(`Embedding ${pendingEmbeds.length} symbols…`);
-    const vectors = await embed(pendingEmbeds.map((p) => p.text), "document", project.id);
-    for (let i = 0; i < pendingEmbeds.length; i++) {
-      if (!vectors[i]) continue;
-      await pool.query(`UPDATE symbols SET embedding = $1 WHERE id = $2`, [
-        toVector(vectors[i]),
-        pendingEmbeds[i].symbolId,
-      ]);
+    const EMBED_CHUNK = 64;
+    let embedFailed = 0;
+    for (let i = 0; i < pendingEmbeds.length; i += EMBED_CHUNK) {
+      const chunk = pendingEmbeds.slice(i, i + EMBED_CHUNK);
+      let vectors;
+      try {
+        vectors = await embed(chunk.map((p) => p.text), "document", project.id);
+      } catch (e) {
+        // Leave this chunk's embeddings NULL rather than losing already-
+        // fetched vectors from earlier chunks; the recovery query above
+        // will pick these symbols back up on the next index run.
+        log(`Embedding batch failed (${chunk.length} symbols): ${e.message}`);
+        embedFailed += chunk.length;
+        continue;
+      }
+      for (let j = 0; j < vectors.length; j++) {
+        if (!vectors[j]) continue;
+        await pool.query(`UPDATE symbols SET embedding = $1 WHERE id = $2`, [
+          toVector(vectors[j]),
+          chunk[j].symbolId,
+        ]);
+      }
+    }
+    if (embedFailed) {
+      log(`${embedFailed} symbols left without embeddings; will retry on next index run`);
     }
   }
 
