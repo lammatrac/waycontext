@@ -142,6 +142,8 @@ codecontext init-global      # or: node src/cli.js init-global
 
 The section it writes tells the agent: prefer `project_overview` → `search_code` → `get_graph`/`get_callers` → `get_symbol` over grepping the repo by hand, and how to find the right project name for the current repo (the project's own `CLAUDE.md`, written by `codecontext init`, or `list_projects`).
 
+`init-global` also installs a `PreToolUse` hook (`hooks/codectx-primary-search.sh`, into `~/.claude/settings.json`) that *enforces* the instruction above instead of just stating it — a written instruction alone isn't always followed reliably. Whenever the Claude Code CLI is about to run a `Grep`-tool call, or a `grep`/`egrep`/`fgrep`/`rg`/`ag` Bash command, in a directory that's an indexed `code-context` project, the hook denies the call and points the agent at `search_code`/`get_symbol`/`get_callers`/`get_graph` instead. It fails open — projects that aren't indexed, or an unreachable DB, are left alone — and a trailing `# codectx-skip` comment on the command bypasses it once, for legitimate non-code searches (docs, config, logs, test output). The hook is self-locating (no hardcoded paths) and idempotent to install: re-running `init-global` (directly, or via `install.sh`/`update.sh`) upserts its single entry in `~/.claude/settings.json` without touching any other hooks you've configured there.
+
 ## Architecture
 
 ![Architecture](src/images/architecture.png)
