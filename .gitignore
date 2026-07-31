@@ -5,4 +5,9 @@ pgvector/
 .superpowers/
 docs/superpowers
 .claude/
-tasks/
+/tasks/
+.sql
+.bk
+.DS_Store
+/.idea/
+/.vscode/
