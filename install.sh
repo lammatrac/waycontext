@@ -10,11 +10,21 @@ cd "$SCRIPT_DIR"
 MCP_NAME="waycontext"
 DB_NAME="codectx"
 DB_USER="codectx"
-DB_PASS="codectx"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$1"; }
 err()  { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; }
+
+# Database password: reuse whatever .env already holds, so re-running this
+# script never invalidates a working install. Only a genuinely fresh setup
+# generates one -- the password used to be the literal string "codectx",
+# committed in this file, which is a poor default even for a local database.
+DB_PASS="$(sed -n 's|^DATABASE_URL=postgres://[^:]*:\([^@]*\)@.*|\1|p' .env 2>/dev/null | head -1)"
+GENERATED_PASS=false
+if [ -z "$DB_PASS" ]; then
+  DB_PASS="$(node -e 'process.stdout.write(require("crypto").randomBytes(18).toString("base64url"))')"
+  GENERATED_PASS=true
+fi
 
 # 1. Node.js
 if ! command -v node >/dev/null 2>&1; then
@@ -35,8 +45,15 @@ elif command -v apt >/dev/null 2>&1; then
   log "Setting up PostgreSQL + pgvector (requires sudo)..."
   sudo apt update
   sudo apt install -y postgresql postgresql-contrib postgresql-16-pgvector
-  sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 \
-    || sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+  if sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
+    # The role predates this run. If we just generated a password (no .env to
+    # read it from) the stored one is unknown, so reset it to match.
+    if [ "$GENERATED_PASS" = true ]; then
+      sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    fi
+  else
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+  fi
   sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 \
     || sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
   sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;"
@@ -44,10 +61,32 @@ else
   warn "No 'apt' found and '$DB_NAME' isn't reachable on localhost. Set up PostgreSQL + pgvector manually (see README), then re-run this script."
 fi
 
-# 3. Build tools for tree-sitter native bindings, then npm install
-if command -v apt >/dev/null 2>&1 && ! dpkg -s build-essential >/dev/null 2>&1; then
-  log "Installing build tools for tree-sitter native bindings (requires sudo)..."
-  sudo apt install -y build-essential python3
+# 3. npm install
+#
+# The tree-sitter packages ship prebuilt N-API binaries (via prebuildify +
+# node-gyp-build) for linux-x64, darwin-x64, darwin-arm64 and win32-x64, so
+# npm install uses those and never invokes node-gyp there. This script used to
+# apt-install build-essential and python3 unconditionally, which asked for
+# sudo and several minutes for a toolchain that was then never used.
+#
+# Platforms without a prebuild -- notably linux-arm64, musl/Alpine and BSD --
+# do fall back to compiling from source. Only offer the toolchain there, and
+# only if it's actually missing.
+needs_toolchain=false
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64|Darwin/*|MINGW*|MSYS*) ;;
+  *) needs_toolchain=true ;;
+esac
+if [ -f /etc/alpine-release ]; then needs_toolchain=true; fi
+
+if [ "$needs_toolchain" = true ] && ! command -v cc >/dev/null 2>&1; then
+  warn "No prebuilt tree-sitter binary for $(uname -s)/$(uname -m) — it will be compiled from source."
+  if command -v apt >/dev/null 2>&1; then
+    log "Installing build tools (requires sudo)..."
+    sudo apt install -y build-essential python3
+  else
+    warn "Install a C/C++ toolchain and python3 first if 'npm install' fails."
+  fi
 fi
 
 log "Installing npm dependencies..."
@@ -58,6 +97,13 @@ if [ -f .env ]; then
   log ".env already exists, skipping"
 else
   cp .env.example .env
+  DB_URL="postgres://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME"
+  if grep -q '^DATABASE_URL=' .env; then
+    sed -i "s|^DATABASE_URL=.*|DATABASE_URL=$DB_URL|" .env
+  else
+    printf '\nDATABASE_URL=%s\n' "$DB_URL" >> .env
+  fi
+  chmod 600 .env   # it now holds a generated credential
   warn "Created .env from .env.example — edit it to add your VOYAGE_API_KEY or OPENAI_API_KEY"
 fi
 

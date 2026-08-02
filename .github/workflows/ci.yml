@@ -45,13 +45,24 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      # tree-sitter grammars compile native bindings. Once these move to WASM
-      # this step can go away -- it is also what makes `npm i` hard for new
-      # users today, so its removal is tracked separately.
-      - name: Install build tools for native modules
-        run: sudo apt-get update && sudo apt-get install -y build-essential python3
-
       - run: npm ci
+
+      # Guards the reason install.sh no longer provisions a toolchain: the
+      # tree-sitter packages must resolve to a prebuilt binary on linux-x64
+      # rather than compiling. If a future bump drops prebuilds, this fails
+      # here instead of silently making every user's install slow.
+      - name: tree-sitter resolved to a prebuilt binary, not a compile
+        run: |
+          for pkg in tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-php; do
+            test -f "node_modules/$pkg/prebuilds/linux-x64/$pkg.node" || {
+              echo "::error::$pkg has no linux-x64 prebuild; npm install now needs a C toolchain"
+              exit 1
+            }
+          done
+          test ! -d node_modules/tree-sitter/build || {
+            echo "::error::tree-sitter was compiled from source despite a prebuild being available"
+            exit 1
+          }
 
       - name: Apply migrations
         run: node src/cli.js migrate

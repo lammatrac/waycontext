@@ -1,32 +1,96 @@
 import dotenv from "dotenv";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, "..", ".env") });
+
+/**
+ * Configuration, resolved from several sources so the same code works whether
+ * WayContext was cloned, linked globally, or run via npx.
+ *
+ * Precedence, highest first:
+ *   1. process.env                          (explicit, and what CI uses)
+ *   2. ./.env                               (the project you're working in)
+ *   3. <install dir>/.env                   (a git clone -- the original layout)
+ *   4. ~/.config/waycontext/config.json     (or $WAYCONTEXT_CONFIG)
+ *   5. built-in defaults
+ *
+ * dotenv never overwrites an already-set process.env entry, so loading the
+ * files in order gives the earlier one priority.
+ *
+ * Resolving only via `__dirname` (the previous behaviour) breaks under a
+ * global or npx install, where that path points inside node_modules and the
+ * user's .env is nowhere near it.
+ */
+// Set WAYCONTEXT_IGNORE_DOTENV=1 to skip the .env files entirely and take
+// configuration only from the environment (and the JSON file). Useful in
+// containers and CI, where a stray .env inherited from a bind-mounted source
+// tree would otherwise silently override the intended settings.
+if (process.env.WAYCONTEXT_IGNORE_DOTENV !== "1") {
+  dotenv.config({ path: path.join(process.cwd(), ".env") });
+  dotenv.config({ path: path.join(__dirname, "..", ".env") });
+}
+
+function loadConfigFile() {
+  const file =
+    process.env.WAYCONTEXT_CONFIG ||
+    path.join(os.homedir(), ".config", "waycontext", "config.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch (e) {
+    // A missing file is the normal case. A malformed one is worth saying out
+    // loud, since silently ignoring it looks like the setting had no effect.
+    if (e.code !== "ENOENT" && process.env.WAYCONTEXT_CONFIG) {
+      console.error(`Warning: could not read ${file}: ${e.message}`);
+    }
+    return {};
+  }
+}
+
+const fileConfig = loadConfigFile();
+
+/** process.env wins, then the JSON config file, then the built-in default. */
+function setting(envKey, fallback) {
+  const fromEnv = process.env[envKey];
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+  const fromFile = fileConfig[envKey];
+  if (fromFile !== undefined && fromFile !== null) return String(fromFile);
+  return fallback;
+}
+
+function numeric(envKey, fallback) {
+  const raw = setting(envKey, null);
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function optionalNumber(envKey) {
+  const raw = setting(envKey, null);
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
 
 export const config = {
-  databaseUrl:
-    process.env.DATABASE_URL ||
-    "postgres://codectx:codectx@localhost:5432/codectx",
-  embeddingProvider: process.env.EMBEDDING_PROVIDER || "none",
+  databaseUrl: setting("DATABASE_URL", "postgres://codectx:codectx@localhost:5432/codectx"),
+  embeddingProvider: setting("EMBEDDING_PROVIDER", "none"),
   voyage: {
-    apiKey: process.env.VOYAGE_API_KEY || "",
-    model: process.env.VOYAGE_MODEL || "voyage-code-3",
-    pricePerMTokens: process.env.VOYAGE_PRICE_PER_1M_TOKENS
-      ? Number(process.env.VOYAGE_PRICE_PER_1M_TOKENS)
-      : null,
+    apiKey: setting("VOYAGE_API_KEY", ""),
+    model: setting("VOYAGE_MODEL", "voyage-code-3"),
+    pricePerMTokens: optionalNumber("VOYAGE_PRICE_PER_1M_TOKENS"),
   },
   openai: {
-    apiKey: process.env.OPENAI_API_KEY || "",
-    model: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
-    pricePerMTokens: process.env.OPENAI_PRICE_PER_1M_TOKENS
-      ? Number(process.env.OPENAI_PRICE_PER_1M_TOKENS)
-      : null,
+    apiKey: setting("OPENAI_API_KEY", ""),
+    model: setting("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+    pricePerMTokens: optionalNumber("OPENAI_PRICE_PER_1M_TOKENS"),
   },
   // Every project belongs to an org. A local install has exactly one; the
   // column exists now so adding tenants later isn't a data migration.
-  orgSlug: process.env.ORG_SLUG || "default",
-  embeddingDim: parseInt(process.env.EMBEDDING_DIM || "1024", 10),
-  maxFileSize: parseInt(process.env.MAX_FILE_SIZE || "1048576", 10),
+  orgSlug: setting("ORG_SLUG", "default"),
+  embeddingDim: numeric("EMBEDDING_DIM", 1024),
+  maxFileSize: numeric("MAX_FILE_SIZE", 1048576),
 };

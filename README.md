@@ -36,6 +36,10 @@ It runs every 5 minutes rather than at a fixed time of day — a personal laptop
 
 ### 1. PostgreSQL + pgvector
 
+> **Configuration sources.** Settings are read, highest precedence first, from: the environment, `./.env` in the directory you run from, `.env` next to the install, `~/.config/waycontext/config.json` (override the path with `$WAYCONTEXT_CONFIG`), then built-in defaults. Set `WAYCONTEXT_IGNORE_DOTENV=1` to skip the `.env` files and configure purely from the environment.
+>
+> **No compiler needed.** The tree-sitter packages ship prebuilt binaries for linux-x64, darwin-x64, darwin-arm64 and win32-x64. Only platforms without a prebuild — linux-arm64, musl/Alpine, BSD — compile from source and need `build-essential` + `python3`; `install.sh` offers those there and nowhere else.
+
 ```bash
 sudo apt update
 sudo apt install -y postgresql postgresql-contrib postgresql-16-pgvector
@@ -433,6 +437,9 @@ Re-run index_project after committing changes.
 ## Changes
 
 ### 2026-08-02
+- Stopped installing a C toolchain that was never used. The tree-sitter packages ship prebuilt N-API binaries (prebuildify + node-gyp-build) for linux-x64, darwin-x64, darwin-arm64 and win32-x64, so `npm install` uses those and never invokes node-gyp there — verified by installing the whole stack with no `cc`, `make` or `python3` on `PATH`, which completed in two seconds and parsed correctly. `install.sh` previously ran `sudo apt install build-essential python3` unconditionally; it now only offers a toolchain on platforms with no prebuild (linux-arm64, musl/Alpine, BSD) and only when one is actually missing. CI drops the same step and gained a guard that fails if a future dependency bump removes the prebuilds. A migration to WASM grammars was evaluated for this and rejected: the only maintained bundle (`tree-sitter-wasms`) is built against the tree-sitter 0.20 ABI, so it is incompatible with current `web-tree-sitter` and would also have *downgraded* the grammars this project uses.
+- `install.sh` no longer hardcodes the database password. A fresh setup generates a random one and writes the resulting `DATABASE_URL` into `.env` (mode 600); an existing `.env` is reused as-is, so re-running the script never invalidates a working install.
+- Configuration is now layered, highest precedence first: `process.env`, then `./.env`, then `<install dir>/.env`, then `~/.config/waycontext/config.json` (or `$WAYCONTEXT_CONFIG`), then built-in defaults. Previously the only source was an `.env` resolved relative to the module's own directory, which breaks under a global or `npx` install where that path points inside `node_modules`. `WAYCONTEXT_IGNORE_DOTENV=1` skips the `.env` files entirely, for containers where a bind-mounted source tree's `.env` would otherwise take over.
 - Added the first tests for `src/parser.js`, which had none despite being the most logic-dense file in the repo, and fixed two bugs they exposed. **A re-index is needed to pick up the corrected data** — unchanged files are hash-skipped, so existing symbols keep their old names until their file changes or the project is deleted and re-indexed.
   - PHP's statement-form `namespace App\Domain;` prefixed nothing, because the declarations that follow it are siblings of the namespace node rather than children. Only the braced form worked. Since PSR-4/PSR-12 mandate the statement form, this meant essentially every modern PHP project stored unqualified names — `App\Billing\Invoice` and `App\Domain\Invoice` both collapsed to `Invoice` and resolved to each other. On this machine only 66 of 306,509 indexed PHP symbols carried a namespace.
   - A TypeScript `class C implements I` was recorded as `EXTENDS` pointing at the literal text `"implements I"`, because `class_heritage` wraps the `implements_clause` in TS so the `implements_clause` branch never matched. The edge could never resolve. (No such rows existed in the local index yet.)
