@@ -38,9 +38,64 @@ if [ "$NODE_MAJOR" -lt 18 ]; then
 fi
 log "Node.js $(node -v) OK"
 
-# 2. PostgreSQL + pgvector (Ubuntu/Debian, best-effort; skipped if DB already reachable)
-if command -v psql >/dev/null 2>&1 && PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c '\q' >/dev/null 2>&1; then
-  log "PostgreSQL database '$DB_NAME' already reachable, skipping DB setup"
+# 2. PostgreSQL + pgvector.
+#
+# Preference order: an already-reachable database, then Docker (works the same
+# on every OS and needs no sudo), then apt (Ubuntu/Debian only). The apt path
+# used to be the only option, which made setup impossible on macOS and on any
+# non-Debian distro without following the manual instructions.
+DB_PORT="5432"
+if [ -f .env ]; then
+  env_port="$(sed -n 's|^DATABASE_URL=postgres://[^@]*@[^:]*:\([0-9]*\)/.*|\1|p' .env | head -1)"
+  [ -n "$env_port" ] && DB_PORT="$env_port"
+fi
+
+db_reachable() {
+  command -v psql >/dev/null 2>&1 || return 1
+  PGPASSWORD="$DB_PASS" psql -h localhost -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c '\q' >/dev/null 2>&1
+}
+port_in_use() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3<&- 3>&- && return 0
+  return 1
+}
+COMPOSE_FILE="$SCRIPT_DIR/docker/docker-compose.yml"
+
+if db_reachable; then
+  log "PostgreSQL database '$DB_NAME' already reachable on port $DB_PORT, skipping DB setup"
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 \
+     && docker compose version >/dev/null 2>&1; then
+  # Something else already owns the default port -- pick the next free one and
+  # let the generated DATABASE_URL point at it, rather than failing to bind.
+  if port_in_use "$DB_PORT"; then
+    for candidate in 5433 5434 5435 5436; do
+      if ! port_in_use "$candidate"; then
+        warn "Port $DB_PORT is already in use; using $candidate for WayContext's database"
+        DB_PORT="$candidate"
+        break
+      fi
+    done
+  fi
+
+  log "Starting PostgreSQL + pgvector via Docker on port $DB_PORT..."
+  DB_USER="$DB_USER" DB_PASS="$DB_PASS" DB_NAME="$DB_NAME" DB_PORT="$DB_PORT" \
+    docker compose -f "$COMPOSE_FILE" up -d
+
+  log "Waiting for the database to accept connections..."
+  ready=false
+  for _ in $(seq 1 60); do
+    if docker compose -f "$COMPOSE_FILE" exec -T postgres \
+         pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+  if [ "$ready" = true ]; then
+    log "Database ready"
+  else
+    err "Database did not become ready in 60s. Check: docker compose -f $COMPOSE_FILE logs"
+    exit 1
+  fi
 elif command -v apt >/dev/null 2>&1; then
   log "Setting up PostgreSQL + pgvector (requires sudo)..."
   sudo apt update
@@ -58,7 +113,8 @@ elif command -v apt >/dev/null 2>&1; then
     || sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
   sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;"
 else
-  warn "No 'apt' found and '$DB_NAME' isn't reachable on localhost. Set up PostgreSQL + pgvector manually (see README), then re-run this script."
+  warn "'$DB_NAME' isn't reachable and neither Docker nor apt is available."
+  warn "Install Docker, or set up PostgreSQL + pgvector manually (see README), then re-run this script."
 fi
 
 # 3. npm install
@@ -97,7 +153,7 @@ if [ -f .env ]; then
   log ".env already exists, skipping"
 else
   cp .env.example .env
-  DB_URL="postgres://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME"
+  DB_URL="postgres://$DB_USER:$DB_PASS@localhost:$DB_PORT/$DB_NAME"
   if grep -q '^DATABASE_URL=' .env; then
     sed -i "s|^DATABASE_URL=.*|DATABASE_URL=$DB_URL|" .env
   else

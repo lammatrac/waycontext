@@ -40,6 +40,18 @@ It runs every 5 minutes rather than at a fixed time of day — a personal laptop
 >
 > **No compiler needed.** The tree-sitter packages ship prebuilt binaries for linux-x64, darwin-x64, darwin-arm64 and win32-x64. Only platforms without a prebuild — linux-arm64, musl/Alpine, BSD — compile from source and need `build-essential` + `python3`; `install.sh` offers those there and nowhere else.
 
+`install.sh` handles this for you, preferring — in order — a database that's already reachable, Docker, then apt. The two paths are below if you'd rather do it by hand.
+
+**Docker (any OS, no sudo).** This is what `install.sh` uses when Docker is available:
+
+```bash
+DB_PASS=your-password docker compose -f docker/docker-compose.yml up -d
+```
+
+The `pgvector/pgvector:pg16` image already contains the extension, so nothing is compiled. Data lives in the named volume `waycontext-pgdata`: `down` keeps your index, `down -v` discards it. `DB_PASS` is required — the compose file refuses to start with a default password. Override `DB_PORT` if 5432 is taken; `install.sh` detects that case and picks the next free port automatically, writing the right port into `.env`.
+
+**apt (Ubuntu/Debian).**
+
 ```bash
 sudo apt update
 sudo apt install -y postgresql postgresql-contrib postgresql-16-pgvector
@@ -47,12 +59,12 @@ sudo apt install -y postgresql postgresql-contrib postgresql-16-pgvector
 #   sudo apt install -y postgresql-server-dev-16 build-essential git
 #   git clone https://github.com/pgvector/pgvector && cd pgvector && make && sudo make install
 
-sudo -u postgres psql -c "CREATE USER codectx WITH PASSWORD 'codectx';"
+sudo -u postgres psql -c "CREATE USER codectx WITH PASSWORD 'choose-a-password';"
 sudo -u postgres psql -c "CREATE DATABASE codectx OWNER codectx;"
 sudo -u postgres psql -d codectx -c "CREATE EXTENSION vector;"
 ```
 
-If you run Postgres in Docker instead, use the `pgvector/pgvector:pg16` image.
+Then put the matching `DATABASE_URL` in `.env`.
 
 ### 2. Install & init
 
@@ -437,6 +449,7 @@ Re-run index_project after committing changes.
 ## Changes
 
 ### 2026-08-02
+- Added `docker/docker-compose.yml` (pgvector/pgvector:pg16, named volume, healthcheck) and made `install.sh` prefer it. Setup now tries an already-reachable database first, then Docker, then apt — previously apt was the only automated path, which made setup impossible on macOS or any non-Debian distro without following the manual instructions, and always required sudo. If the default port is occupied the installer picks the next free one and writes that into `DATABASE_URL` rather than failing to bind. The compose file requires an explicit `DB_PASS` and refuses to start with a default. Verified end to end against a throwaway container: all five migrations applied to a virgin database, the vector extension was present, and indexing plus search worked — the first time the baseline migration has been exercised building a schema from nothing rather than no-opping against an existing one.
 - Stopped installing a C toolchain that was never used. The tree-sitter packages ship prebuilt N-API binaries (prebuildify + node-gyp-build) for linux-x64, darwin-x64, darwin-arm64 and win32-x64, so `npm install` uses those and never invokes node-gyp there — verified by installing the whole stack with no `cc`, `make` or `python3` on `PATH`, which completed in two seconds and parsed correctly. `install.sh` previously ran `sudo apt install build-essential python3` unconditionally; it now only offers a toolchain on platforms with no prebuild (linux-arm64, musl/Alpine, BSD) and only when one is actually missing. CI drops the same step and gained a guard that fails if a future dependency bump removes the prebuilds. A migration to WASM grammars was evaluated for this and rejected: the only maintained bundle (`tree-sitter-wasms`) is built against the tree-sitter 0.20 ABI, so it is incompatible with current `web-tree-sitter` and would also have *downgraded* the grammars this project uses.
 - `install.sh` no longer hardcodes the database password. A fresh setup generates a random one and writes the resulting `DATABASE_URL` into `.env` (mode 600); an existing `.env` is reused as-is, so re-running the script never invalidates a working install.
 - Configuration is now layered, highest precedence first: `process.env`, then `./.env`, then `<install dir>/.env`, then `~/.config/waycontext/config.json` (or `$WAYCONTEXT_CONFIG`), then built-in defaults. Previously the only source was an `.env` resolved relative to the module's own directory, which breaks under a global or `npx` install where that path points inside `node_modules`. `WAYCONTEXT_IGNORE_DOTENV=1` skips the `.env` files entirely, for containers where a bind-mounted source tree's `.env` would otherwise take over.

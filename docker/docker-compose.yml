@@ -1,0 +1,41 @@
+# Postgres + pgvector for WayContext.
+#
+# install.sh starts this automatically when Docker is available and no
+# database is already reachable, passing DB_USER/DB_PASS/DB_NAME/DB_PORT from
+# the credentials it resolved. It also works standalone:
+#
+#   DB_PASS=secret docker compose -f docker/docker-compose.yml up -d
+#
+# The data lives in a named volume, so `down` keeps the index and
+# `down -v` discards it.
+name: waycontext
+
+services:
+  postgres:
+    # pgvector's own image: the extension is present, nothing is compiled.
+    image: pgvector/pgvector:pg16
+    container_name: waycontext-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-codectx}
+      POSTGRES_PASSWORD: ${DB_PASS:?DB_PASS must be set}
+      POSTGRES_DB: ${DB_NAME:-codectx}
+      # Deterministic collation, so index ordering doesn't depend on the host.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      # Host port is configurable because a developer machine often already
+      # has something on 5432; the container side is always 5432.
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-codectx} -d ${DB_NAME:-codectx}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    shm_size: 256mb
+
+volumes:
+  pgdata:
+    name: waycontext-pgdata
