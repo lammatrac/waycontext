@@ -22,6 +22,8 @@ It's idempotent — safe to re-run after a `git pull`. Afterwards, edit `.env` t
 
 Pulls the latest commits (fast-forward only — aborts instead of merging/rebasing if your local history has diverged, and aborts instead of stashing/discarding if you have uncommitted changes) and then re-runs `install.sh`, so every config — npm deps, DB schema, the `codecontext` CLI link, MCP registration — is refreshed to match. Additive only: it never overwrites what you've customized (`.env`, `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, etc.). Since the search hook became opt-in, `install.sh` no longer writes anything into `~/.claude` at all — only the `claude mcp add --scope user` registration.
 
+**Restart your MCP client after updating.** `update.sh` applies pending migrations to the database, but an MCP server process that was already running keeps the old code loaded. Most migrations are additive and a stale process is harmless, but a schema change that removes something it depends on isn't: the `0002_orgs` migration replaces the global unique constraint on `projects.name` with a per-org one, so a server started before it will fail `index_project` with `there is no unique or exclusion constraint matching the ON CONFLICT specification` until it's restarted. The CLI is unaffected — it's a fresh process each time.
+
 To get notified instead of checking by hand, `check-update.sh` adds a cron entry that fetches from origin (read-only — it never pulls or runs `install.sh` itself):
 
 ```bash
