@@ -16,6 +16,7 @@ test("EXT_LANG maps the supported extensions", () => {
   assert.deepEqual(EXT_LANG, {
     ".js": "js", ".mjs": "js", ".cjs": "js",
     ".jsx": "jsx", ".ts": "ts", ".tsx": "tsx", ".php": "php",
+    ".py": "python", ".pyi": "python", ".go": "go",
   });
 });
 
@@ -246,6 +247,116 @@ add_action('plugins_loaded', 'bootstrap_plugin');
 `);
   assert.ok(rels(r).includes("@file -REGISTERS_HOOK-> hook:plugins_loaded"));
   assert.ok(rels(r).includes("@file -CALLS-> bootstrap_plugin"));
+});
+
+// --- Python ------------------------------------------------------------
+
+test("python: functions, classes, methods and inheritance", () => {
+  const r = parseFile("python", `
+class Base:
+    pass
+
+class Service(Base):
+    def run(self):
+        helper()
+
+def top_level():
+    pass
+`);
+  assert.ok(names(r).includes("Base"));
+  assert.equal(kinds(r).Service, "class");
+  assert.equal(kinds(r)["Service::run"], "method");
+  assert.equal(kinds(r).top_level, "function");
+  assert.ok(rels(r).includes("Service -EXTENDS-> Base"));
+  assert.ok(rels(r).includes("Service::run -CALLS-> helper"));
+});
+
+test("python: multiple base classes each get an edge", () => {
+  const r = parseFile("python", `class C(A, B):\n    pass\n`);
+  assert.ok(rels(r).includes("C -EXTENDS-> A"));
+  assert.ok(rels(r).includes("C -EXTENDS-> B"));
+});
+
+test("python: decorated functions and methods are not lost", () => {
+  const r = parseFile("python", `
+@app.route("/x")
+def handler():
+    work()
+
+class C:
+    @property
+    def value(self):
+        return 1
+`);
+  assert.ok(names(r).includes("handler"), names(r).join(", "));
+  assert.ok(rels(r).includes("handler -CALLS-> work"));
+  assert.ok(names(r).includes("C::value"));
+});
+
+test("python: both import forms are recorded against @file", () => {
+  const r = parseFile("python", `import os\nfrom a.b import c\n`);
+  assert.ok(rels(r).includes("@file -IMPORTS-> os"));
+  assert.ok(rels(r).includes("@file -IMPORTS-> a.b"));
+});
+
+test("python: construction is a call, since there is no `new`", () => {
+  const r = parseFile("python", `def f():\n    return Widget()\n`);
+  assert.ok(rels(r).includes("f -CALLS-> Widget"));
+});
+
+// --- Go ----------------------------------------------------------------
+
+test("go: functions, methods and receiver-qualified names", () => {
+  const r = parseFile("go", `
+package main
+
+func New() *Server { return nil }
+
+func (s *Server) Handle() { helper() }
+`);
+  assert.equal(kinds(r).New, "function");
+  assert.equal(kinds(r)["Server::Handle"], "method",
+    "a method must be named after its receiver type, like Class::method elsewhere");
+  assert.ok(rels(r).includes("Server::Handle -CALLS-> helper"));
+});
+
+test("go: a value receiver works the same as a pointer receiver", () => {
+  const r = parseFile("go", `package main\nfunc (s Server) Name() string { return "" }\n`);
+  assert.ok(names(r).includes("Server::Name"));
+});
+
+test("go: structs and interfaces become symbols with distinct kinds", () => {
+  const r = parseFile("go", `
+package main
+
+type Server struct { Name string }
+type Handler interface { Handle() }
+`);
+  assert.equal(kinds(r).Server, "class");
+  assert.equal(kinds(r).Handler, "interface");
+});
+
+test("go: composite literals record instantiation", () => {
+  const r = parseFile("go", `package main\nfunc f() { x := &Server{}; _ = x }\n`);
+  assert.ok(rels(r).includes("f -INSTANTIATES-> Server"));
+});
+
+test("go: imports are recorded against @file", () => {
+  const r = parseFile("go", `
+package main
+
+import (
+    "fmt"
+    "net/http"
+)
+`);
+  assert.ok(rels(r).includes("@file -IMPORTS-> fmt"));
+  assert.ok(rels(r).includes("@file -IMPORTS-> net/http"));
+});
+
+test("go: qualified calls keep their package prefix", () => {
+  const r = parseFile("go", `package main\nfunc f() { fmt.Println("x") }\n`);
+  assert.ok(rels(r).includes("f -CALLS-> fmt.Println"));
 });
 
 // --- regressions -------------------------------------------------------

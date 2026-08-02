@@ -30,8 +30,6 @@ claude mcp add --scope user waycontext -- waycontext-mcp
 
 ### From a clone
 
-`install.sh` wires up everything — database, dependencies, schema, CLI link and MCP registration — in one step.
-
 For a fresh clone, `install.sh` automates everything below: installs PostgreSQL + pgvector if not already present, runs `npm install`, copies `.env.example` to `.env` (if missing), initializes the database schema, links the `waycontext` CLI, and registers the MCP server with Claude Code at **user scope** (`claude mcp add --scope user waycontext`, available in every project, not just this one). It writes nothing else into `~/.claude` — the search hook and the per-project `CLAUDE.md` section are opt-in (`waycontext hook install`, `waycontext init`).
 
 ```bash
@@ -64,7 +62,7 @@ It runs every 5 minutes rather than at a fixed time of day — a personal laptop
 
 > **Configuration sources.** Settings are read, highest precedence first, from: the environment, `./.env` in the directory you run from, `.env` next to the install, `~/.config/waycontext/config.json` (override the path with `$WAYCONTEXT_CONFIG`), then built-in defaults. Set `WAYCONTEXT_IGNORE_DOTENV=1` to skip the `.env` files and configure purely from the environment.
 >
-> **No compiler needed.** The tree-sitter packages ship prebuilt binaries for linux-x64, darwin-x64, darwin-arm64 and win32-x64. Only platforms without a prebuild — linux-arm64, musl/Alpine, BSD — compile from source and need `build-essential` + `python3`; `install.sh` offers those there and nowhere else.
+> **No compiler needed.** The tree-sitter packages ship prebuilt binaries — every grammar covers linux-x64, darwin-x64, darwin-arm64 and win32-x64, and the Python/Go grammars add linux-arm64 and win32-arm64. Only platforms with no prebuild (musl/Alpine, BSD, and linux-arm64 for the older grammars) compile from source and need `build-essential` + `python3`; `install.sh` offers those there and nowhere else.
 
 `install.sh` handles this for you, preferring — in order — a database that's already reachable, Docker, then apt. The two paths are below if you'd rather do it by hand.
 
@@ -201,7 +199,7 @@ It removes the hook (project and global), the global CLAUDE.md section, and the 
 ![Architecture](src/images/architecture.png)
 
 - **One operation registry:** every capability is declared once in `src/operations.js` — name, description, zod input schema, handler, and how it maps onto a CLI invocation. `src/server.js` loops over that list to register MCP tools and `src/cli.js` loops over it to dispatch subcommands, so the two surfaces cannot drift apart on argument names, defaults, or valid ranges, and `waycontext help` is generated rather than hand-maintained. Adding a capability means adding one entry.
-- **Languages:** PHP, JavaScript, TypeScript, JSX/TSX (extendable in `src/parser.js`)
+- **Languages:** JavaScript, TypeScript, JSX/TSX, PHP, Python, Go (extendable in `src/parser.js`)
 - **Graph relations:** `CALLS`, `INSTANTIATES`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, `REGISTERS_HOOK`, `FIRES_HOOK` (WordPress `add_action`/`do_action`/`apply_filters` aware)
 - **Incremental indexing:** SHA-256 per file; unchanged files are skipped, deleted files are pruned. When a project's root is inside a git repo and it's been indexed before, re-runs scope file discovery to `git diff` since the last indexed commit instead of a full filesystem scan
 - **Embeddings:** Voyage (`voyage-code-3`, recommended for code) or OpenAI, or `none` (graph + keyword search still work)
@@ -479,6 +477,8 @@ Re-run index_project after committing changes.
 - Published to npm as `waycontext`, so `npx waycontext <command>` and `npm install -g waycontext` work. Verified by packing the tarball, installing it into a throwaway prefix and running it from outside the repo: the CLI, the aliases, the MCP server binary, migration discovery and `~/.config/waycontext/config.json` resolution all work with no `.env` anywhere near the install — the case the old `__dirname`-based config lookup could never have handled.
 - Cut the tarball from 2.8 MB to 63 kB by excluding the three README diagrams, which were 97% of it and were being downloaded on every `npx` run. Setting `repository` in `package.json` means npm still renders them, resolving the relative paths against GitHub.
 - Added `waycontext version`.
+- Added **Python** (`.py`, `.pyi`) and **Go** (`.go`) parsing. Python contributes classes, methods (including decorated ones, which wrap the definition they annotate), functions, base classes, and both import forms; Go contributes functions, structs, interfaces, imports in either syntax, composite literals as instantiation, and methods named after their receiver type (`Server::Handle`) to match how methods are named in every other language here. Pinned to `tree-sitter-python@0.23.4` / `tree-sitter-go@0.23.4`, the newest releases whose peer dependency still matches the tree-sitter core in use — the current 0.25 releases require a core bump, and forcing them with `--legacy-peer-deps` risks an N-API ABI mismatch that fails as a segfault rather than an error. Both ship prebuilt binaries for six platforms, so they add no build requirement; the CI guard now covers them too.
+- **Known gap, unchanged by the above:** a call written `this.method()` / `self.method()` / `obj.method()` records its callee verbatim, so it doesn't resolve to the method it targets. 606,671 of 1,542,104 unresolved edges in a local index are of this shape, 87,560 of them specifically `this.*`/`self.*`. This has always applied to JavaScript and TypeScript — PHP avoids it because member calls are parsed to the bare method name — and Python inherits it, where it matters more because methods are almost always reached through `self`. Worth fixing next in the parser.
 
 ### 2026-08-02
 - Added `docker/docker-compose.yml` (pgvector/pgvector:pg16, named volume, healthcheck) and made `install.sh` prefer it. Setup now tries an already-reachable database first, then Docker, then apt — previously apt was the only automated path, which made setup impossible on macOS or any non-Debian distro without following the manual instructions, and always required sudo. If the default port is occupied the installer picks the next free one and writes that into `DATABASE_URL` rather than failing to bind. The compose file requires an explicit `DB_PASS` and refuses to start with a default. Verified end to end against a throwaway container: all five migrations applied to a virgin database, the vector extension was present, and indexing plus search worked — the first time the baseline migration has been exercised building a schema from nothing rather than no-opping against an existing one.

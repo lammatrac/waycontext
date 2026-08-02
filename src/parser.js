@@ -2,6 +2,8 @@ import Parser from "tree-sitter";
 import JavaScript from "tree-sitter-javascript";
 import TypeScript from "tree-sitter-typescript";
 import PHP from "tree-sitter-php";
+import Python from "tree-sitter-python";
+import Go from "tree-sitter-go";
 
 const LANGS = {
   js: JavaScript,
@@ -9,6 +11,8 @@ const LANGS = {
   ts: TypeScript.typescript,
   tsx: TypeScript.tsx,
   php: PHP.php,
+  python: Python,
+  go: Go,
 };
 
 export const EXT_LANG = {
@@ -19,6 +23,9 @@ export const EXT_LANG = {
   ".ts": "ts",
   ".tsx": "tsx",
   ".php": "php",
+  ".py": "python",
+  ".pyi": "python",
+  ".go": "go",
 };
 
 const parsers = {};
@@ -149,6 +156,25 @@ export function parseFile(lang, source) {
           }
           break;
         }
+        // ---- Python ----
+        // Python's call node is `call`, not `call_expression`. It covers both
+        // plain calls and constructor invocation, since Python has no `new`.
+        case "call": {
+          const fn = n.childForFieldName("function");
+          if (fn) {
+            relations.push({ srcName: owner, relation: "CALLS", dstName: text(fn).slice(0, 200), line: line(n) });
+          }
+          break;
+        }
+        // ---- Go ----
+        // `Server{...}` / `&Server{...}` -- the closest thing Go has to `new`.
+        case "composite_literal": {
+          const typeNode = n.childForFieldName("type");
+          if (typeNode) {
+            relations.push({ srcName: owner, relation: "INSTANTIATES", dstName: text(typeNode).slice(0, 200), line: line(n) });
+          }
+          break;
+        }
       }
       // depth-first
       if (cursor.gotoFirstChild()) {
@@ -160,11 +186,21 @@ export function parseFile(lang, source) {
     visit(cursor.currentNode);
   }
 
+  // Member node types that count as methods, by language family:
+  //   JS/TS  method_definition
+  //   PHP    method_declaration
+  //   Python function_definition (inside a `block`, possibly decorated)
+  const METHOD_TYPES = new Set(["method_definition", "method_declaration", "function_definition"]);
+
   function classMembers(classNode, className, bodyField) {
     const body = classNode.childForFieldName(bodyField) || classNode.namedChildren.find((c) => c.type.endsWith("body"));
     if (!body) return;
-    for (const m of body.namedChildren) {
-      if (m.type === "method_definition" || m.type === "method_declaration") {
+    for (const raw of body.namedChildren) {
+      // Python decorators wrap the definition they annotate.
+      const m = raw.type === "decorated_definition"
+        ? raw.namedChildren.find((c) => METHOD_TYPES.has(c.type)) || raw
+        : raw;
+      if (METHOD_TYPES.has(m.type)) {
         const nameNode = m.childForFieldName("name");
         if (!nameNode) continue;
         const full = `${className}::${text(nameNode)}`;
@@ -172,6 +208,15 @@ export function parseFile(lang, source) {
         collectRefs(m, full);
       }
     }
+  }
+
+  /** `func (s *Server) Handle()` -> "Server", so the method is named Server::Handle. */
+  function goReceiverType(node) {
+    const receiver = node.childForFieldName("receiver");
+    if (!receiver) return null;
+    const decl = receiver.namedChildren.find((c) => c.type === "parameter_declaration");
+    const typeNode = decl?.childForFieldName("type") || decl?.namedChildren.at(-1);
+    return typeNode ? text(typeNode).replace(/^\*/, "") : null;
   }
 
   function heritage(classNode, className) {
@@ -256,9 +301,81 @@ export function parseFile(lang, source) {
           break;
         }
         case "import_statement": {
+          // JS: `import x from "mod"` has a `source` field. Python's
+          // import_statement shares the node name but has no source field --
+          // the module path is the node's own text after the keyword.
           const srcNode = n.childForFieldName("source");
           if (srcNode) {
             relations.push({ srcName: "@file", relation: "IMPORTS", dstName: stripQuotes(text(srcNode)), line: line(n) });
+          } else {
+            for (const mod of n.namedChildren) {
+              relations.push({ srcName: "@file", relation: "IMPORTS", dstName: text(mod).slice(0, 200), line: line(n) });
+            }
+          }
+          break;
+        }
+        // ---- Python ----
+        case "import_from_statement": {
+          const moduleNode = n.childForFieldName("module_name");
+          if (moduleNode) {
+            relations.push({ srcName: "@file", relation: "IMPORTS", dstName: text(moduleNode).slice(0, 200), line: line(n) });
+          }
+          break;
+        }
+        case "decorated_definition": {
+          walkTopLevel(n, ns); // unwrap "@app.route(...) def handler(): ..."
+          break;
+        }
+        case "class_definition": {
+          const nameNode = n.childForFieldName("name");
+          if (!nameNode) break;
+          const name = ns + text(nameNode);
+          addSymbol(name, "class", n);
+          // Base classes live in an argument_list, not a heritage clause.
+          const bases = n.childForFieldName("superclasses");
+          if (bases) {
+            for (const base of bases.namedChildren) {
+              relations.push({ srcName: name, relation: "EXTENDS", dstName: text(base).slice(0, 200), line: line(bases) });
+            }
+          }
+          classMembers(n, name, "body");
+          break;
+        }
+        // ---- Go ----
+        case "method_declaration": {
+          // Go attaches methods to a receiver type rather than nesting them in
+          // the type declaration, so they arrive at the top level.
+          const nameNode = n.childForFieldName("name");
+          if (!nameNode) break;
+          const receiver = goReceiverType(n);
+          const name = ns + (receiver ? `${receiver}::${text(nameNode)}` : text(nameNode));
+          addSymbol(name, receiver ? "method" : "function", n);
+          collectRefs(n, name);
+          break;
+        }
+        case "type_declaration": {
+          for (const spec of n.namedChildren) {
+            if (spec.type !== "type_spec") continue;
+            const nameNode = spec.childForFieldName("name");
+            if (!nameNode) continue;
+            const kindNode = spec.childForFieldName("type");
+            const kind = kindNode?.type === "interface_type" ? "interface" : "class";
+            addSymbol(ns + text(nameNode), kind, spec);
+          }
+          break;
+        }
+        case "import_declaration": {
+          // `import "fmt"` puts the spec directly under the declaration;
+          // a grouped `import ( ... )` nests them in an import_spec_list.
+          const specs = n.namedChildren.flatMap((c) =>
+            c.type === "import_spec_list" ? c.namedChildren : [c]
+          );
+          for (const spec of specs) {
+            if (spec.type !== "import_spec") continue;
+            const pathNode = spec.childForFieldName("path") || spec.namedChildren.at(-1);
+            if (pathNode) {
+              relations.push({ srcName: "@file", relation: "IMPORTS", dstName: stripQuotes(text(pathNode)), line: line(spec) });
+            }
           }
           break;
         }

@@ -53,7 +53,7 @@ jobs:
       # here instead of silently making every user's install slow.
       - name: tree-sitter resolved to a prebuilt binary, not a compile
         run: |
-          for pkg in tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-php; do
+          for pkg in tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-php tree-sitter-python tree-sitter-go; do
             test -f "node_modules/$pkg/prebuilds/linux-x64/$pkg.node" || {
               echo "::error::$pkg has no linux-x64 prebuild; npm install now needs a C toolchain"
               exit 1
