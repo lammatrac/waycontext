@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Update an existing install: pull the latest commits for this repo, then
-# re-run install.sh so every config (npm deps, DB schema, codecontext CLI
+# re-run install.sh so every config (npm deps, DB schema, waycontext CLI
 # link, MCP registration, global CLAUDE.md section, PreToolUse hook) is
 # refreshed to match. install.sh is idempotent and additive — it only fills
 # in what's missing/stale, it never overwrites what you've customized

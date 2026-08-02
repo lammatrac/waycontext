@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
 import { migrationStatus } from "./migrate.js";
+import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
 import { config } from "./config.js";
 import { upsertSection, extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
@@ -112,6 +113,7 @@ function buildHelp() {
     "  db                                    interactive psql session",
     "  tables [table] [limit]                list tables, or browse rows of one table (default limit 20)",
     "  usage [project]                       embedding token usage per provider/model, with est. cost if configured",
+    "  version                               print the installed version",
   ].join("\n");
 }
 
@@ -221,7 +223,7 @@ async function main() {
       let name = "";
       try {
         while (!name) {
-          const answer = await rl.question("Project name for code-context indexing: ");
+          const answer = await rl.question("Project name for WayContext indexing: ");
           name = answer.trim();
           if (!name) console.log("Project name cannot be empty.");
         }
@@ -243,8 +245,8 @@ async function main() {
         const { content, mode } = upsertSection(existing, name);
         fs.writeFileSync(claudeMdPath, content);
 
-        if (mode === "created") console.log(`Created CLAUDE.md — project "${name}" registered for code-context indexing.`);
-        else if (mode === "appended") console.log(`Updated CLAUDE.md — project "${name}" registered for code-context indexing.`);
+        if (mode === "created") console.log(`Created CLAUDE.md — project "${name}" registered for WayContext indexing.`);
+        else if (mode === "appended") console.log(`Updated CLAUDE.md — project "${name}" registered for WayContext indexing.`);
         else console.log(`Updated CLAUDE.md — project is now "${name}".`);
       } finally {
         rl.close();
@@ -361,8 +363,8 @@ async function main() {
 
       console.log("\nStill installed (remove by hand if you want them gone):");
       console.log("  claude mcp remove --scope user waycontext");
-      console.log("  npm unlink -g code-context-mcp");
-      console.log("  the codectx Postgres database (codecontext db, then DROP DATABASE)");
+      console.log("  npm unlink -g waycontext   # or: code-context-mcp, if installed before v0.2.0");
+      console.log("  the codectx Postgres database (waycontext db, then DROP DATABASE)");
       break;
     }
     case "delete_project": {
@@ -467,6 +469,12 @@ async function main() {
           "Set VOYAGE_PRICE_PER_1M_TOKENS / OPENAI_PRICE_PER_1M_TOKENS in .env to see estimated cost (check the provider's current pricing page — rates change)."
         );
       }
+      break;
+    }
+    case "version":
+    case "--version":
+    case "-v": {
+      console.log(`${NAME} ${VERSION}`);
       break;
     }
     case "help":

@@ -3,8 +3,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { initDb } from "./db.js";
 import { operations } from "./operations.js";
+import { NAME, VERSION } from "./version.js";
 
-const server = new McpServer({ name: "code-context", version: "0.1.0" });
+// The server used to identify as "code-context" while install.sh registered it
+// as "waycontext", so clients saw two different names for one server and the
+// hook's hardcoded tool names never matched. One name, read from package.json
+// so it can't drift again.
+const server = new McpServer({ name: NAME, version: VERSION });
 
 const json = (data) => ({
   content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
@@ -35,7 +40,7 @@ async function main() {
   await initDb();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("code-context MCP server running on stdio");
+  console.error(`${NAME} MCP server ${VERSION} running on stdio`);
 }
 
 main().catch((e) => {

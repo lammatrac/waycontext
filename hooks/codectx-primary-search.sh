@@ -3,7 +3,7 @@
 # the WayContext MCP server, remind the agent that the MCP's search tools
 # usually answer code questions better than grep.
 #
-# This hook is OPT-IN (`codecontext hook install`) and advisory by default:
+# This hook is OPT-IN (`waycontext hook install`) and advisory by default:
 # the grep still runs, and the model just sees a note next to the result.
 # Stronger modes are available for people who want them:
 #
@@ -12,7 +12,7 @@
 #   deny              the grep is blocked and the agent is redirected
 #
 # Mode and the registered MCP name are read from the project cache written by
-# `codecontext hook install` / `codecontext index_project`:
+# `waycontext hook install` / `waycontext index_project`:
 #   ${XDG_CACHE_HOME:-$HOME/.cache}/waycontext/projects.json
 #
 # The cache is deliberately the only input: an earlier version shelled out to

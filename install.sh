@@ -167,11 +167,21 @@ fi
 log "Initializing database schema..."
 npm run init-db
 
-# 6. codecontext CLI (optional, non-fatal if it fails)
-if command -v codecontext >/dev/null 2>&1; then
-  log "'codecontext' CLI already linked, skipping"
+# 6. waycontext CLI (optional, non-fatal if it fails)
+#
+# The package was called code-context-mcp before v0.2.0. Its global link still
+# owns the `codecontext` binary name, so leaving it in place would shadow the
+# new one with whatever revision was linked then.
+if npm ls -g --depth=0 code-context-mcp >/dev/null 2>&1; then
+  log "Removing the pre-v0.2.0 'code-context-mcp' global link..."
+  npm uninstall -g code-context-mcp >/dev/null 2>&1 || \
+    warn "Could not remove the old link; run: npm uninstall -g code-context-mcp"
+fi
+
+if command -v waycontext >/dev/null 2>&1; then
+  log "'waycontext' CLI already linked, skipping"
 else
-  log "Linking 'codecontext' CLI globally..."
+  log "Linking 'waycontext' CLI globally..."
   if ! npm link 2>/tmp/waycontext-npm-link-err.log; then
     warn "npm link failed (may need sudo). Run manually: cd $SCRIPT_DIR && npm link"
     cat /tmp/waycontext-npm-link-err.log >&2 || true
@@ -201,10 +211,10 @@ fi
 # hook that DENIED grep in every indexed project, machine-wide and unattended.
 # That degraded unrelated projects on the same machine and blocked legitimate
 # greps of docs and config. Both are now opt-in, per project, and advisory by
-# default. If you had the old setup, `codecontext uninstall` removes it.
+# default. If you had the old setup, `waycontext uninstall` removes it.
 
 log "Setup complete. Edit .env with your embedding API key if you haven't already, then restart Claude Code."
 log ""
 log "Optional, per project:"
-log "  codecontext init          document the project name in ./CLAUDE.md"
-log "  codecontext hook install  nudge agents toward WayContext instead of grep"
+log "  waycontext init          document the project name in ./CLAUDE.md"
+log "  waycontext hook install  nudge agents toward WayContext instead of grep"

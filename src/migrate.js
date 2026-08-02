@@ -6,7 +6,7 @@
  *
  * Design notes:
  * - A session-level advisory lock serializes concurrent runners, so an MCP
- *   server booting and a `codecontext index` starting at the same moment
+ *   server booting and a `waycontext index` starting at the same moment
  *   can't race. Same discipline as the per-project lock in indexer.js.
  * - Each file runs inside its own transaction, unless its first line is
  *   `-- codectx:no-transaction` (needed for CREATE INDEX CONCURRENTLY, which

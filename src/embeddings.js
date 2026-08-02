@@ -52,7 +52,7 @@ export function embeddingsEnabled() {
  * Embed an array of texts. Returns array of vectors (or nulls if disabled).
  * @param {string[]} texts
  * @param {"document"|"query"} inputType
- * @param {number|null} projectId for token-usage attribution (see `usage`/`codecontext usage`)
+ * @param {number|null} projectId for token-usage attribution (see `usage`/`waycontext usage`)
  */
 export async function embed(texts, inputType = "document", projectId = null) {
   if (!embeddingsEnabled()) return texts.map(() => null);
