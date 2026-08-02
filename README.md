@@ -158,11 +158,12 @@ codecontext hook install --mode ask      # prompt before each grep
 codecontext hook install --mode deny     # block grep outright
 codecontext hook install --global        # every project on this machine
 codecontext hook uninstall
+codecontext hook refresh                 # rebuild the project cache
 ```
 
 When Claude Code is about to run a `Grep`-tool call or a `grep`/`egrep`/`fgrep`/`rg`/`ag` Bash command inside an indexed project, the hook fires. In the default **`advise`** mode the command still runs — the agent just gets a note alongside the result saying WayContext's search tools are available and usually better for code questions. `ask` turns it into a permission prompt; `deny` blocks the call and redirects. A trailing `# codectx-skip` comment bypasses any mode once.
 
-Project roots come from a small JSON cache (`~/.cache/waycontext/projects.json`), refreshed by `hook install` and after every `index_project` — so the hook never touches the database and adds no latency to the agent's hot path. Anything unexpected (no cache, cwd not indexed, `jq` missing) exits silently and leaves the tool call alone. When roots are nested, the deepest match wins. Installing is idempotent and leaves other hooks in the settings file untouched.
+Project roots come from a small JSON cache (`~/.cache/waycontext/projects.json`), refreshed by `hook install` and after every `index_project` — so the hook never touches the database and adds no latency to the agent's hot path. Because it's rewritten from whichever database that index run used, pointing the CLI at a different `DATABASE_URL` leaves the cache describing that one; `codecontext hook refresh` rebuilds it from your configured database without reindexing anything. Anything unexpected (no cache, cwd not indexed, `jq` missing) exits silently and leaves the tool call alone. When roots are nested, the deepest match wins. Installing is idempotent and leaves other hooks in the settings file untouched.
 
 **Changed in a recent version:** this hook used to be installed globally and unattended by `install.sh`, in `deny` mode, alongside a `## Code Context MCP Workflow` section written into `~/.claude/CLAUDE.md`. That degraded every project on the machine — including ones with nothing to do with WayContext — and blocked legitimate greps of docs, config, and logs. Both are now opt-in. To clean up a machine set up the old way:
 

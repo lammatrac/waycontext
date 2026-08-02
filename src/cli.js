@@ -104,6 +104,7 @@ function buildHelp() {
     "  init                                  interactively write/update the CLAUDE.md Code Context MCP section",
     "  hook install [--global] [--mode M]    install the opt-in search hook (M: advise|ask|deny, default advise)",
     "  hook uninstall [--global]             remove the search hook",
+    "  hook refresh                          rebuild the hook's project cache from the database",
     "  uninstall                             remove the hook, the global CLAUDE.md section and the project cache",
     ...opLines,
     "  delete_project <project> [--yes]      delete a project and all its indexed data",
@@ -278,8 +279,23 @@ async function main() {
         break;
       }
 
+      if (sub === "refresh") {
+        // The cache is rewritten after every index, from whichever database
+        // that run used. Pointing the CLI at a different DATABASE_URL (a
+        // scratch container, say) therefore leaves it describing that
+        // database until the next normal index. This puts it right without
+        // needing to reindex anything.
+        const cache = writeProjectCache({ projects: await listProjects() });
+        console.log(`Refreshed ${cachePath()} — ${cache.projects.length} project(s), mode: ${cache.mode}.`);
+        break;
+      }
+
       if (sub !== "install") {
-        usageAndExit("Usage: hook install [--project|--global] [--mode advise|ask|deny]\n       hook uninstall [--project|--global]");
+        usageAndExit(
+          "Usage: hook install [--project|--global] [--mode advise|ask|deny]\n" +
+          "       hook uninstall [--project|--global]\n" +
+          "       hook refresh"
+        );
       }
 
       const modeFlag = args.indexOf("--mode");
