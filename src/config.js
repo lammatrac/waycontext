@@ -24,6 +24,9 @@ export const config = {
       ? Number(process.env.OPENAI_PRICE_PER_1M_TOKENS)
       : null,
   },
+  // Every project belongs to an org. A local install has exactly one; the
+  // column exists now so adding tenants later isn't a data migration.
+  orgSlug: process.env.ORG_SLUG || "default",
   embeddingDim: parseInt(process.env.EMBEDDING_DIM || "1024", 10),
   maxFileSize: parseInt(process.env.MAX_FILE_SIZE || "1048576", 10),
 };
