@@ -80,3 +80,15 @@ export function upsertGlobalSection(content) {
   const sep = content.endsWith("\n") ? "\n" : "\n\n";
   return { content: `${content}${sep}${section}\n`, mode: "appended" };
 }
+
+/**
+ * Strip the global section, leaving the rest of the file untouched.
+ *
+ * Earlier versions wrote this section into ~/.claude/CLAUDE.md unattended from
+ * install.sh, so `codecontext uninstall` needs to be able to take it back out
+ * of machines that were set up that way.
+ */
+export function removeGlobalSection(content) {
+  if (!GLOBAL_SECTION_RE.test(content)) return content;
+  return content.replace(GLOBAL_SECTION_RE, "").replace(/\n{3,}/g, "\n\n").trimStart();
+}

@@ -1,8 +1,11 @@
-// Installs a PreToolUse hook into ~/.claude/settings.json that makes the
-// code-context MCP the primary search tool: Grep-tool calls and grep/rg/ag
-// Bash commands are denied (with a redirect to code-context's search tools)
-// whenever the cwd is a project this MCP has indexed, and left alone
-// otherwise. See hooks/codectx-primary-search.sh for the enforcement logic.
+// Pure helpers for adding/removing the PreToolUse hook entry in a Claude Code
+// settings object. The hook nudges the agent toward the WayContext MCP's
+// search tools when the cwd is an indexed project; see
+// hooks/codectx-primary-search.sh for the behavior and its modes.
+//
+// These functions only transform a settings object -- the caller decides which
+// settings.json to read and write (project-scoped by default, global on
+// request) and never mutates the input.
 const MATCHER = "Bash|Grep";
 const SCRIPT_BASENAME = "codectx-primary-search.sh";
 
@@ -50,4 +53,25 @@ export function upsertHook(settings, scriptPath) {
 
   preToolUse[existingIndex] = buildHookEntry(scriptPath);
   return { settings: result, mode: "updated" };
+}
+
+/**
+ * Remove our hook entry, leaving every other hook and setting untouched.
+ * Empty containers we created are cleaned up so uninstalling leaves no trace.
+ */
+export function removeHook(settings) {
+  const result = structuredClone(settings ?? {});
+  const preToolUse = result.hooks?.PreToolUse;
+  if (!Array.isArray(preToolUse)) return { settings: result, mode: "absent" };
+
+  const remaining = preToolUse.filter((entry) => !isOurEntry(entry));
+  if (remaining.length === preToolUse.length) return { settings: result, mode: "absent" };
+
+  if (remaining.length) {
+    result.hooks.PreToolUse = remaining;
+  } else {
+    delete result.hooks.PreToolUse;
+    if (Object.keys(result.hooks).length === 0) delete result.hooks;
+  }
+  return { settings: result, mode: "removed" };
 }

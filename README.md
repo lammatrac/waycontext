@@ -20,7 +20,7 @@ It's idempotent — safe to re-run after a `git pull`. Afterwards, edit `.env` t
 ./update.sh      # or: npm run update
 ```
 
-Pulls the latest commits (fast-forward only — aborts instead of merging/rebasing if your local history has diverged, and aborts instead of stashing/discarding if you have uncommitted changes) and then re-runs `install.sh`, so every config — npm deps, DB schema, the `codecontext` CLI link, MCP registration, the global CLAUDE.md section, the PreToolUse hook — is refreshed to match. Additive only: it never overwrites what you've customized (`.env`, the rest of `~/.claude/CLAUDE.md`, unrelated hooks in `~/.claude/settings.json`, etc.).
+Pulls the latest commits (fast-forward only — aborts instead of merging/rebasing if your local history has diverged, and aborts instead of stashing/discarding if you have uncommitted changes) and then re-runs `install.sh`, so every config — npm deps, DB schema, the `codecontext` CLI link, MCP registration — is refreshed to match. Additive only: it never overwrites what you've customized (`.env`, `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, etc.). Since the search hook became opt-in, `install.sh` no longer writes anything into `~/.claude` at all — only the `claude mcp add --scope user` registration.
 
 To get notified instead of checking by hand, `check-update.sh` adds a cron entry that fetches from origin (read-only — it never pulls or runs `install.sh` itself):
 
@@ -79,7 +79,11 @@ npm link
 ```bash
 codecontext help
 codecontext init                           interactively write/update the CLAUDE.md Code Context MCP section
-codecontext init-global                    write/update the Code Context MCP Workflow section in ~/.claude/CLAUDE.md
+codecontext hook install                   opt-in PreToolUse nudge (--global, --mode advise|ask|deny)
+codecontext hook uninstall                 remove that hook
+codecontext uninstall                      undo everything written outside this repo
+codecontext migrate                        apply pending SQL migrations
+codecontext migrate --status               show each migration's state without applying anything
 codecontext index_project <project-name> /path/to/project/
 codecontext search_code <project-name> "purge cache after match update"
 codecontext get_symbol <project-name> <name>
@@ -93,7 +97,7 @@ codecontext usage                          # embedding token usage, all projects
 codecontext usage <project-name>           # embedding token usage, one project
 ```
 
-`index`/`reindex` are kept as aliases for `index_project`, and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## Code Context MCP` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section. `init-global` is the user-level counterpart — see [5. Add to your global CLAUDE.md](#5-add-to-your-global-claudemd) below.
+`index`/`reindex` are kept as aliases for `index_project`, and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## Code Context MCP` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section. `hook install` is the optional, stronger nudge — see [5. Optional: nudge agents toward the MCP](#5-optional-nudge-agents-toward-the-mcp) below.
 
 Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`codecontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` runs the same spinner for its whole duration, pausing it around its own per-step `console.log` progress lines (`Found N source files`, `Resolving graph edges…`, …) so the two don't collide — this keeps the animation visible during the otherwise-silent file-by-file processing in between.
 
@@ -126,28 +130,35 @@ Or in `.mcp.json` (project scope):
 
 (Registration options: https://docs.claude.com/en/docs/claude-code/mcp)
 
-### 5. Add to your global CLAUDE.md
+### 5. Optional: nudge agents toward the MCP
 
-Registering the MCP server (step 4) makes its tools *available* in every project. This step makes every project's Claude Code session actually *prefer* them over `Grep`/`Glob`/an `Explore` agent when the current repo is indexed. `install.sh` does this automatically by running:
-
-```bash
-codecontext init-global
-```
-
-Unlike `codecontext init` (project-scoped — needs a project name, prompts interactively, asks before overwriting), `init-global` writes a fixed `## Code Context MCP Workflow` section — no project name involved, since `code-context`'s tools are exposed under the same names in every project regardless of what alias `claude mcp add --scope user <alias>` registered the server under. That makes it safe to run non-interactively and idempotent to re-run (it only touches its own section, leaving the rest of `~/.claude/CLAUDE.md` untouched):
+Registering the MCP server (step 4) makes its tools *available* in every project. `codecontext init` (step 3) tells the agent in *this* project which project name to pass. If you want a stronger push, there's an opt-in `PreToolUse` hook:
 
 ```bash
-codecontext init-global      # or: node src/cli.js init-global
+codecontext hook install                 # this project, advisory
+codecontext hook install --mode ask      # prompt before each grep
+codecontext hook install --mode deny     # block grep outright
+codecontext hook install --global        # every project on this machine
+codecontext hook uninstall
 ```
 
-The section it writes tells the agent: prefer `project_overview` → `search_code` → `get_graph`/`get_callers` → `get_symbol` over grepping the repo by hand, and how to find the right project name for the current repo (the project's own `CLAUDE.md`, written by `codecontext init`, or `list_projects`).
+When Claude Code is about to run a `Grep`-tool call or a `grep`/`egrep`/`fgrep`/`rg`/`ag` Bash command inside an indexed project, the hook fires. In the default **`advise`** mode the command still runs — the agent just gets a note alongside the result saying WayContext's search tools are available and usually better for code questions. `ask` turns it into a permission prompt; `deny` blocks the call and redirects. A trailing `# codectx-skip` comment bypasses any mode once.
 
-`init-global` also installs a `PreToolUse` hook (`hooks/codectx-primary-search.sh`, into `~/.claude/settings.json`) that *enforces* the instruction above instead of just stating it — a written instruction alone isn't always followed reliably. Whenever the Claude Code CLI is about to run a `Grep`-tool call, or a `grep`/`egrep`/`fgrep`/`rg`/`ag` Bash command, in a directory that's an indexed `code-context` project, the hook denies the call and points the agent at `search_code`/`get_symbol`/`get_callers`/`get_graph` instead. It fails open — projects that aren't indexed, or an unreachable DB, are left alone — and a trailing `# codectx-skip` comment on the command bypasses it once, for legitimate non-code searches (docs, config, logs, test output). The hook is self-locating (no hardcoded paths) and idempotent to install: re-running `init-global` (directly, or via `install.sh`/`update.sh`) upserts its single entry in `~/.claude/settings.json` without touching any other hooks you've configured there.
+Project roots come from a small JSON cache (`~/.cache/waycontext/projects.json`), refreshed by `hook install` and after every `index_project` — so the hook never touches the database and adds no latency to the agent's hot path. Anything unexpected (no cache, cwd not indexed, `jq` missing) exits silently and leaves the tool call alone. When roots are nested, the deepest match wins. Installing is idempotent and leaves other hooks in the settings file untouched.
+
+**Changed in a recent version:** this hook used to be installed globally and unattended by `install.sh`, in `deny` mode, alongside a `## Code Context MCP Workflow` section written into `~/.claude/CLAUDE.md`. That degraded every project on the machine — including ones with nothing to do with WayContext — and blocked legitimate greps of docs, config, and logs. Both are now opt-in. To clean up a machine set up the old way:
+
+```bash
+codecontext uninstall
+```
+
+It removes the hook (project and global), the global CLAUDE.md section, and the cache, leaving your own content and any unrelated hooks intact. It prints — but does not run — the commands to unregister the MCP server, unlink the CLI, and drop the database.
 
 ## Architecture
 
 ![Architecture](src/images/architecture.png)
 
+- **One operation registry:** every capability is declared once in `src/operations.js` — name, description, zod input schema, handler, and how it maps onto a CLI invocation. `src/server.js` loops over that list to register MCP tools and `src/cli.js` loops over it to dispatch subcommands, so the two surfaces cannot drift apart on argument names, defaults, or valid ranges, and `codecontext help` is generated rather than hand-maintained. Adding a capability means adding one entry.
 - **Languages:** PHP, JavaScript, TypeScript, JSX/TSX (extendable in `src/parser.js`)
 - **Graph relations:** `CALLS`, `INSTANTIATES`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, `REGISTERS_HOOK`, `FIRES_HOOK` (WordPress `add_action`/`do_action`/`apply_filters` aware)
 - **Incremental indexing:** SHA-256 per file; unchanged files are skipped, deleted files are pruned. When a project's root is inside a git repo and it's been indexed before, re-runs scope file discovery to `git diff` since the last indexed commit instead of a full filesystem scan
@@ -296,6 +307,8 @@ Usage tracking only covers calls made after upgrading to this version — run `c
 
 Everything is stored in 4 Postgres tables, one project's worth of code broken down into files → symbols → edges. Browse them directly with `codecontext tables` / `codecontext db` (see [CLI](#3-cli)).
 
+The schema is defined by numbered SQL files in `src/migrations/`, applied in order and recorded once each in a `schema_migrations` ledger. `init-db` and `migrate` are the same operation; the MCP server also runs it at startup, so an install is never left on an older schema. A session-level advisory lock serializes concurrent runners, each file runs in its own transaction, and `${EMBEDDING_DIM}` is substituted from your `.env` before execution. Migrations are forward-only — there are no down migrations. `0001_baseline.sql` is the schema as it existed before the runner and is written entirely with `IF NOT EXISTS`, so it applies as a no-op to databases created by earlier versions; nothing needs to be dumped or recreated when upgrading.
+
 ```
 projects ──< files ──< symbols ──< edges >── symbols
    (1)        (N)         (N)        (N)        (also N, self-referencing)
@@ -416,6 +429,12 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-08-02
+- Replaced the inline `initDb()` DDL with a forward-only migration runner (`src/migrate.js`, `src/migrations/*.sql`). Migrations are applied in numeric order, once each, recorded in a `schema_migrations` ledger with checksums, serialized by a session-level advisory lock, and run one-per-transaction unless the file opens with `-- codectx:no-transaction` (for `CREATE INDEX CONCURRENTLY`). `${EMBEDDING_DIM}` is substituted from config before execution, and checksums are taken over the raw file text so changing that env var doesn't invalidate the ledger. A drifted checksum warns instead of failing — an operator who hand-edited a migration shouldn't be locked out of their own database. `0001_baseline.sql` is the previous schema verbatim and is written entirely with `IF NOT EXISTS`, so it applies as a no-op to existing databases with no stamping logic or dump/restore. `initDb()` kept its name and signature, so `install.sh`, `update.sh`, the MCP server's startup and every test were unchanged. New: `codecontext migrate [--status]`.
+- Made the primary-search `PreToolUse` hook opt-in and advisory. It used to be installed globally and unattended by `install.sh` in deny mode, which degraded every project on the machine — including ones unrelated to this MCP — and blocked legitimate greps of docs, config and logs. Now: `codecontext hook install` (project-scoped by default, `--global` available) with three modes — `advise` (default; the grep runs and the agent just gets a note via the hook's `additionalContext`), `ask`, and `deny`. Project roots come from a JSON cache (`~/.cache/waycontext/projects.json`, refreshed by `hook install` and after every index) instead of a `psql` round-trip on every matching Bash command, so the hook adds no database dependency or latency to the agent's hot path; nested roots resolve to the deepest match. `install.sh` no longer writes anything into `~/.claude` beyond the MCP registration, and `codecontext uninstall` reverses the old setup — hook, global CLAUDE.md section and cache — leaving unrelated hooks and your own content intact.
+- Consolidated every capability into a single registry (`src/operations.js`): one declaration per operation carrying its name, description, zod input schema, handler and CLI mapping. `src/server.js` (137 → 44 lines) loops over it to register MCP tools and `src/cli.js` loops over it to dispatch subcommands, so the two surfaces can no longer disagree about argument names, defaults or valid ranges, and `codecontext help` and every usage line are generated. This fixed a real asymmetry: the zod ranges only ran on the MCP side, so the CLI had been silently accepting `search_code … 9999` and `get_graph … 99`. Numeric fields use `z.coerce.number()` so one schema serves both a real number from MCP and an argv string from the CLI — the generated JSON schema is byte-identical to before.
+- Added `CONTRIBUTING.md`, `NOTICE` and `TRADEMARK.md`. The code stays Apache-2.0; the name and logo are reserved.
 
 ### 2026-07-29
 - Moved the "Setup on Ubuntu" installation guide to the top of the README, right after the intro, instead of after the architecture/algorithms/pricing sections.

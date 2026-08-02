@@ -1,0 +1,165 @@
+/**
+ * The single source of truth for every capability WayContext exposes.
+ *
+ * Each operation is declared once -- name, description, input schema, handler,
+ * and how it maps onto a CLI invocation -- and every surface consumes this
+ * list rather than restating it:
+ *
+ *   src/server.js  registers each entry as an MCP tool
+ *   src/cli.js     dispatches each entry as a subcommand
+ *   (later)        HTTP routes, the VSCode extension and the SDK do the same
+ *
+ * Before this existed, the MCP server and the CLI each hand-wrote their own
+ * argument handling for the same functions, and they had already drifted: the
+ * CLI silently accepted `limit 9999` and `depth 99` because the zod ranges
+ * only ran on the MCP side, and the two carried independent copies of the
+ * defaults. Adding a surface meant writing that layer a third time.
+ *
+ * Numeric fields use z.coerce.number() so one schema serves both callers:
+ * MCP passes a real number, the CLI passes argv strings.
+ *
+ * Handlers take (args, ctx). ctx carries the request-scoped bits -- today just
+ * a log sink; later the db handle, org id and principal that multi-tenancy and
+ * the hosted API need.
+ */
+import { z } from "zod";
+import { listProjects } from "./db.js";
+import { indexProject } from "./indexer.js";
+import {
+  searchCode, getSymbol, getCallers, getCallees,
+  getSubgraph, getFileOutline, getProjectOverview, findRelated,
+} from "./graph.js";
+
+const project = z.string().describe("Indexed project name (see list_projects)");
+const limit = z.coerce.number().int().min(1).max(30).default(10);
+
+export const operations = [
+  {
+    name: "index_project",
+    description:
+      "Scan and index a project directory: extracts all functions/classes/methods, builds a relationship graph (calls, imports, inheritance, WordPress hooks) and vector embeddings. Incremental: unchanged files are skipped. Run this first, and re-run after code changes.",
+    input: {
+      project: z.string().describe("Short project name, e.g. 'sports-wc-2026'"),
+      path: z.string().describe("Absolute path to the project root on this machine"),
+    },
+    cli: {
+      args: ["project", "path"],
+      aliases: ["index", "reindex"],
+      label: (a) => `Indexing "${a.project}"`,
+      // Its own log() output only fires at a handful of milestones (git diff,
+      // file count, edge resolution, embeddings); the file-by-file work in
+      // between is silent, which reads as "stuck" on a large project.
+      streams: true,
+      ensureSchema: true,
+    },
+    handler: (a, ctx) => indexProject(a.project, a.path, ctx.log),
+  },
+  {
+    name: "list_projects",
+    description: "List all indexed projects with file/symbol/edge counts.",
+    input: {},
+    cli: { args: [], label: () => "Listing projects" },
+    handler: () => listProjects(),
+  },
+  {
+    name: "project_overview",
+    description:
+      "High-level map of a project: languages, directory sizes, most-referenced symbols (architecture hubs), and WordPress hooks in use. Best first call for understanding an unfamiliar codebase.",
+    input: { project },
+    cli: { args: ["project"], label: (a) => `Building overview for "${a.project}"` },
+    handler: (a) => getProjectOverview(a.project),
+  },
+  {
+    name: "search_code",
+    description:
+      "Hybrid search over indexed symbols: combines Postgres full-text ranking with pgvector semantic similarity (when embeddings are enabled) via Reciprocal Rank Fusion. Describe a feature or behavior in natural language (e.g. 'purge cache after match status update') and get the most relevant functions/classes. Each result's `score` is a relative Reciprocal-Rank-Fusion score used for ranking, not a cosine similarity or probability.",
+    input: {
+      project,
+      query: z.string().describe("Natural-language description of what you're looking for"),
+      limit,
+    },
+    cli: { args: ["project", "query", "limit"], aliases: ["search"], label: (a) => `Searching "${a.query}"` },
+    handler: (a) => searchCode(a.project, a.query, a.limit),
+  },
+  {
+    name: "get_symbol",
+    description:
+      "Get full details of a symbol by name (function, class, or method). Accepts 'Class::method' or bare method name. Returns signature, docblock, file location and source body.",
+    input: { project, name: z.string() },
+    cli: { args: ["project", "name"], label: (a) => `Fetching "${a.name}"` },
+    handler: (a) => getSymbol(a.project, a.name),
+  },
+  {
+    name: "get_callers",
+    description:
+      "Who calls / references this symbol? Returns all inbound edges (CALLS, INSTANTIATES, EXTENDS, hook registrations). Use to assess blast radius before changing a function.",
+    input: { project, name: z.string() },
+    cli: { args: ["project", "name"], label: (a) => `Finding callers of "${a.name}"` },
+    handler: (a) => getCallers(a.project, a.name),
+  },
+  {
+    name: "get_callees",
+    description:
+      "What does this symbol call / depend on? Returns all outbound edges including WordPress hooks it registers or fires.",
+    input: { project, name: z.string() },
+    cli: { args: ["project", "name"], label: (a) => `Finding callees of "${a.name}"` },
+    handler: (a) => getCallees(a.project, a.name),
+  },
+  {
+    name: "get_graph",
+    description:
+      "Get a dependency subgraph around a symbol (BFS in both directions up to `depth` hops). Returns nodes + labeled edges — ideal for understanding how a feature is wired together.",
+    input: { project, name: z.string(), depth: z.coerce.number().int().min(1).max(4).default(2) },
+    cli: { args: ["project", "name", "depth"], label: (a) => `Building graph around "${a.name}"` },
+    handler: (a) => getSubgraph(a.project, a.name, a.depth),
+  },
+  {
+    name: "get_file_outline",
+    description: "List all symbols defined in one file (ordered by line), with signatures and docblocks.",
+    input: { project, path: z.string().describe("File path relative to project root") },
+    cli: { args: ["project", "path"], label: (a) => `Outlining "${a.path}"` },
+    handler: (a) => getFileOutline(a.project, a.path),
+  },
+  {
+    name: "find_related",
+    description:
+      "Find symbols semantically similar to a given symbol (same feature area). Useful for discovering all code belonging to one feature even when names differ.",
+    input: { project, name: z.string(), limit },
+    cli: { args: ["project", "name", "limit"], label: (a) => `Finding symbols related to "${a.name}"` },
+    handler: (a) => findRelated(a.project, a.name, a.limit),
+  },
+];
+
+/** Look up an operation by name or CLI alias. */
+export function findOperation(nameOrAlias) {
+  return (
+    operations.find((op) => op.name === nameOrAlias) ||
+    operations.find((op) => op.cli?.aliases?.includes(nameOrAlias)) ||
+    null
+  );
+}
+
+/** Which positional arguments are required (i.e. have no schema default). */
+export function requiredArgs(op) {
+  return (op.cli?.args ?? []).filter((key) => !op.input[key]?.isOptional?.());
+}
+
+/** `search_code <project> <query> [limit]` — generated, never hand-maintained. */
+export function usageLine(op) {
+  const required = new Set(requiredArgs(op));
+  const parts = (op.cli?.args ?? []).map((key) => (required.has(key) ? `<${key}>` : `[${key}]`));
+  return [op.name, ...parts].join(" ");
+}
+
+/**
+ * Turn positional CLI argv into validated, typed arguments.
+ * Throws a ZodError on bad input -- the same validation the MCP surface gets.
+ */
+export function parseCliArgs(op, argv) {
+  const keys = op.cli?.args ?? [];
+  const raw = {};
+  keys.forEach((key, i) => {
+    if (argv[i] !== undefined) raw[key] = argv[i];
+  });
+  return z.object(op.input).parse(raw);
+}

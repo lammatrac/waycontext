@@ -1,6 +1,48 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildHookEntry, upsertHook } from "../src/hookInit.js";
+import { buildHookEntry, upsertHook, removeHook } from "../src/hookInit.js";
+
+const SCRIPT = "/repo/hooks/codectx-primary-search.sh";
+
+test("removeHook reports absent when there is nothing to remove", () => {
+  assert.equal(removeHook({}).mode, "absent");
+  assert.equal(removeHook({ hooks: {} }).mode, "absent");
+  assert.equal(removeHook({ hooks: { PreToolUse: [] } }).mode, "absent");
+});
+
+test("removeHook deletes containers it emptied, leaving no trace", () => {
+  const { settings: installed } = upsertHook({}, SCRIPT);
+  const { settings, mode } = removeHook(installed);
+  assert.equal(mode, "removed");
+  assert.deepEqual(settings, {});
+});
+
+test("removeHook keeps unrelated hooks and settings intact", () => {
+  const original = {
+    permissions: { allow: ["Bash(npm test)"] },
+    hooks: {
+      PreToolUse: [{ matcher: "Write", hooks: [{ type: "command", command: "/other.sh" }] }],
+      PostToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "/fmt.sh" }] }],
+    },
+  };
+  const { settings: installed } = upsertHook(original, SCRIPT);
+  const { settings, mode } = removeHook(installed);
+  assert.equal(mode, "removed");
+  assert.deepEqual(settings, original);
+});
+
+test("removeHook does not mutate its input", () => {
+  const { settings: installed } = upsertHook({}, SCRIPT);
+  const snapshot = JSON.parse(JSON.stringify(installed));
+  removeHook(installed);
+  assert.deepEqual(installed, snapshot);
+});
+
+test("install then remove is a round trip for an arbitrary settings file", () => {
+  const original = { model: "opus", hooks: { SessionStart: [{ hooks: [] }] } };
+  const { settings: installed } = upsertHook(original, SCRIPT);
+  assert.deepEqual(removeHook(installed).settings, original);
+});
 
 test("buildHookEntry targets Bash and Grep with the given script path", () => {
   const entry = buildHookEntry("/path/to/codectx-primary-search.sh");

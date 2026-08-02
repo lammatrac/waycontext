@@ -93,18 +93,16 @@ else
   exit 1
 fi
 
-# 8. Wire up global "primary search tool" enforcement so every project's
-# Claude Code session (not just this one) treats this MCP as the primary way
-# to find code: adds the Code Context MCP Workflow section to the global
-# CLAUDE.md, and installs a PreToolUse hook (~/.claude/settings.json ->
-# hooks/codectx-primary-search.sh) that denies Grep/grep calls on projects
-# this MCP has indexed, redirecting to its search tools. Best-effort: a
-# failure here shouldn't fail the whole install since the MCP server itself
-# is already registered.
-if node "$SCRIPT_DIR/src/cli.js" init-global; then
-  :
-else
-  warn "Failed to update ~/.claude/CLAUDE.md — run manually: node $SCRIPT_DIR/src/cli.js init-global"
-fi
+# 8. Nothing outside this repo and the MCP registration is touched.
+#
+# Earlier versions also rewrote ~/.claude/CLAUDE.md and installed a PreToolUse
+# hook that DENIED grep in every indexed project, machine-wide and unattended.
+# That degraded unrelated projects on the same machine and blocked legitimate
+# greps of docs and config. Both are now opt-in, per project, and advisory by
+# default. If you had the old setup, `codecontext uninstall` removes it.
 
 log "Setup complete. Edit .env with your embedding API key if you haven't already, then restart Claude Code."
+log ""
+log "Optional, per project:"
+log "  codecontext init          document the project name in ./CLAUDE.md"
+log "  codecontext hook install  nudge agents toward WayContext instead of grep"

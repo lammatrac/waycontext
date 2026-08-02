@@ -1,15 +1,32 @@
 #!/usr/bin/env bash
-# PreToolUse gate for Grep/Bash-grep: when the current project is indexed by
-# the code-context MCP server, deny the call and redirect to code-context's
-# search tools instead. Bypass with a trailing `# codectx-skip` comment when
-# grep really is the right tool (docs, config, logs, non-indexed content).
+# PreToolUse nudge for Grep/Bash-grep: when the current project is indexed by
+# the WayContext MCP server, remind the agent that the MCP's search tools
+# usually answer code questions better than grep.
 #
-# Installed into ~/.claude/settings.json by `node src/cli.js init-global`
-# (see install.sh) — this file is the single source of truth; the settings
-# entry just points here, so a `git pull` picks up changes automatically.
+# This hook is OPT-IN (`codecontext hook install`) and advisory by default:
+# the grep still runs, and the model just sees a note next to the result.
+# Stronger modes are available for people who want them:
+#
+#   advise (default)  grep runs; the agent is told to prefer WayContext next time
+#   ask               the user is prompted to approve the grep
+#   deny              the grep is blocked and the agent is redirected
+#
+# Mode and the registered MCP name are read from the project cache written by
+# `codecontext hook install` / `codecontext index_project`:
+#   ${XDG_CACHE_HOME:-$HOME/.cache}/waycontext/projects.json
+#
+# The cache is deliberately the only input: an earlier version shelled out to
+# psql on every matching command, which put a DB round-trip on the agent's
+# hottest path. Anything unexpected here (no cache, no jq, cwd not indexed)
+# exits 0 and leaves the tool call alone.
+#
+# Bypass any mode once with a trailing `# codectx-skip` comment.
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BYPASS_TOKEN="codectx-skip"
+CACHE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/waycontext/projects.json"
+
+command -v jq >/dev/null 2>&1 || exit 0
+[[ -f "$CACHE_FILE" ]] || exit 0
 
 input=$(cat)
 tool_name=$(printf '%s' "$input" | jq -r '.tool_name // empty')
@@ -17,15 +34,11 @@ tool_name=$(printf '%s' "$input" | jq -r '.tool_name // empty')
 case "$tool_name" in
   Grep)
     pattern=$(printf '%s' "$input" | jq -r '.tool_input.pattern // empty')
-    if [[ "$pattern" == *"$BYPASS_TOKEN"* ]]; then
-      exit 0
-    fi
+    [[ "$pattern" == *"$BYPASS_TOKEN"* ]] && exit 0
     ;;
   Bash)
     command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
-    if [[ "$command" == *"$BYPASS_TOKEN"* ]]; then
-      exit 0
-    fi
+    [[ "$command" == *"$BYPASS_TOKEN"* ]] && exit 0
     if ! printf '%s' "$command" | grep -Eq '(^|[|;&(]|[[:space:]])(grep|egrep|fgrep|rg|ag)([[:space:]]|$)'; then
       exit 0
     fi
@@ -36,45 +49,60 @@ case "$tool_name" in
 esac
 
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
-if [[ -z "$cwd" ]]; then
-  cwd="$PWD"
-fi
+[[ -z "$cwd" ]] && cwd="$PWD"
 
-env_file="$REPO_ROOT/.env"
-if [[ ! -f "$env_file" ]]; then
-  exit 0
-fi
+# Deepest matching root wins, so a project nested inside another indexed
+# root resolves to the inner one.
+# $root is bound to a variable before use: inside startswith(...) the argument
+# is evaluated against startswith's own input (the cwd string), so referring to
+# .root_path there would try to index a string.
+project_name=$(jq -r --arg cwd "$cwd" '
+  [.projects[]?
+   | select(.root_path != null)
+   | (.root_path | sub("/$"; "")) as $root
+   | select($cwd == $root or ($cwd | startswith($root + "/")))
+   | {name: .name, root: $root}]
+  | sort_by(.root | length)
+  | last // empty
+  | .name // empty
+' "$CACHE_FILE" 2>/dev/null)
 
-db_url=$(grep -m1 '^DATABASE_URL=' "$env_file" | cut -d= -f2-)
-if [[ -z "$db_url" ]]; then
-  exit 0
-fi
+[[ -z "$project_name" ]] && exit 0
 
-rows=$(psql "$db_url" -tAc "SELECT name || '|' || root_path FROM projects" 2>/dev/null)
-if [[ $? -ne 0 ]]; then
-  exit 0
-fi
+mcp_name=$(jq -r '.mcpName // "waycontext"' "$CACHE_FILE" 2>/dev/null)
+mode=$(jq -r '.mode // "advise"' "$CACHE_FILE" 2>/dev/null)
 
-project_name=""
-while IFS='|' read -r name root_path; do
-  [[ -z "$root_path" ]] && continue
-  if [[ "$cwd" == "$root_path" || "$cwd" == "$root_path"/* ]]; then
-    project_name="$name"
-    break
-  fi
-done <<< "$rows"
+tools="mcp__${mcp_name}__search_code,mcp__${mcp_name}__get_symbol,mcp__${mcp_name}__get_callers,mcp__${mcp_name}__get_graph,mcp__${mcp_name}__get_file_outline"
+advice="This project (\"$project_name\") is indexed by the WayContext MCP server, which searches code semantically and by call graph. For questions about code — where a symbol is defined, who calls it, what a change affects — prefer ToolSearch with query \"select:$tools\" over grep. Grep remains the right tool for docs, config, logs, test output, and non-indexed file types."
 
-if [[ -z "$project_name" ]]; then
-  exit 0
-fi
-
-reason="This project (\"$project_name\") is indexed by the code-context MCP server. code-context is the primary search tool here, not Grep/grep. Call ToolSearch with query \"select:mcp__code-context__search_code,mcp__code-context__get_symbol,mcp__code-context__get_callers,mcp__code-context__get_graph,mcp__code-context__get_file_outline\" and use those instead. If you are searching non-indexed content (docs, config, logs, test output) or code-context genuinely can't answer this, retry the exact same command with a trailing '# codectx-skip' comment to bypass this check once."
-
-jq -n --arg reason "$reason" '{
-  hookSpecificOutput: {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason: $reason
-  }
-}'
+case "$mode" in
+  deny)
+    jq -n --arg reason "$advice Retry the exact same command with a trailing '# codectx-skip' comment to bypass this check once." '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: $reason
+      }
+    }'
+    ;;
+  ask)
+    jq -n --arg reason "$advice" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason: $reason
+      }
+    }'
+    ;;
+  *)
+    # advise: the grep runs; the model just sees the note next to the result.
+    jq -n --arg ctx "$advice" '{
+      suppressOutput: true,
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        additionalContext: $ctx
+      }
+    }'
+    ;;
+esac
 exit 0

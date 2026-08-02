@@ -1,6 +1,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSection, extractExistingName, upsertSection } from "../src/claudeMdInit.js";
+import {
+  buildSection, extractExistingName, upsertSection,
+  upsertGlobalSection, removeGlobalSection,
+} from "../src/claudeMdInit.js";
+
+test("removeGlobalSection is a no-op when the section was never installed", () => {
+  const content = "# My rules\n\nSome guidance.\n";
+  assert.equal(removeGlobalSection(content), content);
+});
+
+test("removeGlobalSection undoes upsertGlobalSection, preserving the rest", () => {
+  const original = "# My rules\n\nSome guidance.\n\n## Git Commit\n\nUse conventional commits.\n";
+  const { content } = upsertGlobalSection(original);
+  assert.match(content, /## Code Context MCP Workflow/);
+
+  const cleaned = removeGlobalSection(content);
+  assert.doesNotMatch(cleaned, /Code Context MCP Workflow/);
+  assert.match(cleaned, /# My rules/);
+  assert.match(cleaned, /## Git Commit/);
+  assert.match(cleaned, /Use conventional commits\./);
+});
+
+test("removeGlobalSection does not leave a run of blank lines behind", () => {
+  const { content } = upsertGlobalSection("# Rules\n\nA.\n\n## Later\n\nB.\n");
+  assert.doesNotMatch(removeGlobalSection(content), /\n{3,}/);
+});
 
 test("buildSection embeds the project name in the expected format", () => {
   const section = buildSection("my-app");

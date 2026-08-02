@@ -3,14 +3,14 @@
 // Run `node src/cli.js help` for the full command list.
 import { spawn } from "node:child_process";
 import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
-import { indexProject } from "./indexer.js";
-import {
-  searchCode, getSymbol, getCallers, getCallees,
-  getSubgraph, getFileOutline, getProjectOverview, findRelated,
-} from "./graph.js";
+import { migrationStatus } from "./migrate.js";
+import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
 import { config } from "./config.js";
-import { upsertSection, extractExistingName, upsertGlobalSection } from "./claudeMdInit.js";
-import { upsertHook } from "./hookInit.js";
+import { upsertSection, extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
+import { upsertHook, removeHook } from "./hookInit.js";
+import {
+  writeProjectCache, cachePath, HOOK_MODES, DEFAULT_MODE,
+} from "./projectCache.js";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
 import os from "node:os";
@@ -89,25 +89,32 @@ async function withSpinner(label, fn) {
   }
 }
 
-const HELP = `Commands:
-  init-db
-  init                                    interactively write/update the CLAUDE.md Code Context MCP section
-  init-global                            write/update the Code Context MCP Workflow section in ~/.claude/CLAUDE.md
-  index_project <project> <path>        (alias: index, reindex)
-  list_projects
-  delete_project <project> [--yes]      delete a project and all its indexed data
-  stats                                  (alias for list_projects, table output)
-  project_overview <project>
-  search_code <project> <query> [limit]
-  get_symbol <project> <name>
-  get_callers <project> <name>
-  get_callees <project> <name>
-  get_graph <project> <name> [depth]
-  get_file_outline <project> <path>
-  find_related <project> <name> [limit]
-  db                                     interactive psql session
-  tables [table] [limit]                 list tables, or browse rows of one table (default limit 20)
-  usage [project]                        embedding token usage per provider/model, with est. cost if configured`;
+// The operation lines are generated from src/operations.js, so a new
+// capability shows up in `help` automatically and the usage strings can't
+// drift from what the parser actually accepts.
+function buildHelp() {
+  const opLines = operations.map((op) => {
+    const aliases = op.cli.aliases?.length ? `(alias: ${op.cli.aliases.join(", ")})` : "";
+    return `  ${usageLine(op).padEnd(38)}${aliases}`.trimEnd();
+  });
+  return [
+    "Commands:",
+    "  init-db",
+    "  migrate [--status]                    apply pending SQL migrations, or just report their state",
+    "  init                                  interactively write/update the CLAUDE.md Code Context MCP section",
+    "  hook install [--global] [--mode M]    install the opt-in search hook (M: advise|ask|deny, default advise)",
+    "  hook uninstall [--global]             remove the search hook",
+    "  uninstall                             remove the hook, the global CLAUDE.md section and the project cache",
+    ...opLines,
+    "  delete_project <project> [--yes]      delete a project and all its indexed data",
+    "  stats                                 (alias for list_projects, table output)",
+    "  db                                    interactive psql session",
+    "  tables [table] [limit]                list tables, or browse rows of one table (default limit 20)",
+    "  usage [project]                       embedding token usage per provider/model, with est. cost if configured",
+  ].join("\n");
+}
+
+const HELP = buildHelp();
 
 function priceFor(provider) {
   if (provider === "voyage") return config.voyage.pricePerMTokens;
@@ -115,11 +122,97 @@ function priceFor(provider) {
   return null;
 }
 
+/**
+ * Run one operation from src/operations.js.
+ *
+ * Argument names, defaults, validation ranges and the usage line all come
+ * from the declaration -- this function knows nothing about any specific
+ * command, so adding an operation needs no change here.
+ */
+async function runOperation(op) {
+  let parsed;
+  try {
+    parsed = parseCliArgs(op, args);
+  } catch (e) {
+    const detail = e.issues
+      ? e.issues.map((i) => `  ${i.path.join(".") || "(argument)"}: ${i.message}`).join("\n")
+      : e.message;
+    usageAndExit(`Usage: ${usageLine(op)}\n${detail}`);
+  }
+
+  if (op.cli.ensureSchema) await initDb();
+
+  // A streaming operation prints its own milestones, so the spinner has to
+  // step aside for each line rather than fight it for the same terminal row.
+  if (op.cli.streams) {
+    const t0 = Date.now();
+    const stop = startSpinner(op.cli.label(parsed));
+    const log = (m) => {
+      stop.pause();
+      console.log("·", m);
+      stop.resume();
+    };
+    let result;
+    try {
+      result = await op.handler(parsed, { log });
+    } catch (e) {
+      stop(false);
+      throw e;
+    }
+    stop(true);
+    try {
+      writeProjectCache({ projects: await listProjects() });
+    } catch { /* the hook cache going stale must not fail an index */ }
+    console.log(`Done in ${((Date.now() - t0) / 1000).toFixed(1)}s:`, result);
+    return;
+  }
+
+  printJson(await withSpinner(op.cli.label(parsed), () => op.handler(parsed, { log: () => {} })));
+}
+
 async function main() {
+  // Operations first: anything declared in src/operations.js is dispatched
+  // generically. The switch below is only for commands that are genuinely
+  // CLI-shaped -- interactive prompts, a psql shell, local config.
+  const op = findOperation(cmd);
+  if (op) {
+    await runOperation(op);
+    await pool.end();
+    return;
+  }
+
   switch (cmd) {
     case "init-db": {
-      await withSpinner("Ensuring schema", () => initDb());
-      console.log("Schema created / verified.");
+      const result = await withSpinner("Ensuring schema", () => initDb());
+      console.log(
+        result.applied.length
+          ? `Schema up to date. Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`
+          : "Schema up to date. No pending migrations."
+      );
+      for (const w of result.warnings) console.warn(`Warning: ${w}`);
+      break;
+    }
+    case "migrate": {
+      if (args.includes("--status")) {
+        const rows = await withSpinner("Reading migration ledger", () => migrationStatus());
+        console.table(
+          rows.map((r) => ({
+            version: r.version,
+            file: r.file,
+            status: r.status,
+            applied_at: r.applied_at ? r.applied_at.toISOString() : "",
+            checksum: r.checksum_ok ? "ok" : "CHANGED",
+          }))
+        );
+        break;
+      }
+      const result = await withSpinner("Applying migrations", () => initDb());
+      console.log(
+        result.applied.length
+          ? `Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`
+          : `No pending migrations (${result.skipped} already applied).`
+      );
+      for (const w of result.warnings) console.warn(`Warning: ${w}`);
       break;
     }
     case "init": {
@@ -157,79 +250,103 @@ async function main() {
       }
       break;
     }
-    case "init-global": {
-      // Unlike "init" (per-project, needs a project name, interactive), this
-      // section is fixed and non-parametrized — code-context's tools are
-      // always exposed under the same names regardless of the alias `claude
-      // mcp add --scope user <alias>` registered it under — so it's safe to
-      // run unattended from install.sh as well as by hand.
-      const globalDir = path.join(os.homedir(), ".claude");
-      const globalPath = path.join(globalDir, "CLAUDE.md");
-      const existing = fs.existsSync(globalPath) ? fs.readFileSync(globalPath, "utf8") : "";
-      const { content, mode } = upsertGlobalSection(existing);
+    case "hook": {
+      // The search hook is opt-in and project-scoped by default. It used to be
+      // installed globally and unattended by install.sh, which degraded every
+      // project on the machine -- including ones that have nothing to do with
+      // WayContext -- and denied greps outright. Now you ask for it, per
+      // project, and it only advises unless you choose otherwise.
+      const [sub] = args;
+      const global = args.includes("--global");
+      const settingsPath = global
+        ? path.join(os.homedir(), ".claude", "settings.json")
+        : path.join(process.cwd(), ".claude", "settings.json");
+      const scope = global ? "global" : "project";
 
-      if (mode === "unchanged") {
-        console.log(`${globalPath} already has the Code Context MCP Workflow section, skipping.`);
-      } else {
-        fs.mkdirSync(globalDir, { recursive: true });
-        fs.writeFileSync(globalPath, content);
-        if (mode === "created") console.log(`Created ${globalPath} with the Code Context MCP Workflow section.`);
-        else if (mode === "appended") console.log(`Updated ${globalPath} — appended the Code Context MCP Workflow section.`);
-        else console.log(`Updated ${globalPath} — refreshed the Code Context MCP Workflow section.`);
+      if (sub === "uninstall") {
+        if (!fs.existsSync(settingsPath)) {
+          console.log(`No ${settingsPath} — nothing to remove.`);
+          break;
+        }
+        const { settings, mode } = removeHook(JSON.parse(fs.readFileSync(settingsPath, "utf8")));
+        if (mode === "absent") {
+          console.log(`${settingsPath} has no WayContext search hook — nothing to remove.`);
+        } else {
+          fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+          console.log(`Removed the WayContext search hook from ${settingsPath}.`);
+        }
+        break;
       }
 
-      // Also install the PreToolUse hook that enforces code-context as the
-      // primary search tool (denies Grep/grep on indexed projects) — see
-      // hooks/codectx-primary-search.sh. Best-effort like the section above.
-      const settingsPath = path.join(globalDir, "settings.json");
+      if (sub !== "install") {
+        usageAndExit("Usage: hook install [--project|--global] [--mode advise|ask|deny]\n       hook uninstall [--project|--global]");
+      }
+
+      const modeFlag = args.indexOf("--mode");
+      const hookMode = modeFlag === -1 ? DEFAULT_MODE : args[modeFlag + 1];
+      if (!HOOK_MODES.includes(hookMode)) {
+        usageAndExit(`Unknown --mode "${hookMode}". Expected one of: ${HOOK_MODES.join(", ")}`);
+      }
+
+      // The hook reads project roots from the cache rather than the database,
+      // so seed it now -- otherwise the hook silently no-ops until the next index.
+      const projects = await listProjects();
+      writeProjectCache({ mode: hookMode, projects });
+
       const hookScriptPath = path.join(__dirname, "..", "hooks", "codectx-primary-search.sh");
       const existingSettings = fs.existsSync(settingsPath)
         ? JSON.parse(fs.readFileSync(settingsPath, "utf8"))
         : {};
-      const { settings, mode: hookMode } = upsertHook(existingSettings, hookScriptPath);
+      const { settings, mode: result } = upsertHook(existingSettings, hookScriptPath);
 
-      if (hookMode === "unchanged") {
-        console.log(`${settingsPath} already has the code-context primary-search hook, skipping.`);
+      if (result === "unchanged") {
+        console.log(`${settingsPath} already has the WayContext search hook (mode: ${hookMode}).`);
       } else {
-        fs.mkdirSync(globalDir, { recursive: true });
+        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-        if (hookMode === "created") console.log(`Updated ${settingsPath} — added the code-context primary-search hook.`);
-        else if (hookMode === "appended") console.log(`Updated ${settingsPath} — added the code-context primary-search hook alongside existing hooks.`);
-        else console.log(`Updated ${settingsPath} — refreshed the code-context primary-search hook.`);
+        console.log(`Installed the WayContext search hook (${scope} scope, mode: ${hookMode}) in ${settingsPath}.`);
+      }
+      if (hookMode === "advise") {
+        console.log("Mode 'advise': grep still runs; the agent is just told WayContext is available.");
       }
       break;
     }
-    case "index":
-    case "reindex":
-    case "index_project": {
-      // Its own step-by-step log() output only fires at a handful of
-      // milestones (git diff, file count, edge resolution, embeddings) —
-      // the file-by-file processing in between is otherwise silent, which
-      // reads as "stuck" on a large project. Run the spinner throughout,
-      // pausing it around each log line so the two don't fight.
-      const [project, dir] = args;
-      if (!project || !dir) usageAndExit("Usage: index_project <project> <path>");
-      await initDb();
-      const t0 = Date.now();
-      const stop = startSpinner(`Indexing "${project}"`);
-      const log = (m) => {
-        stop.pause();
-        console.log("·", m);
-        stop.resume();
-      };
-      let stats;
-      try {
-        stats = await indexProject(project, dir, log);
-      } catch (e) {
-        stop(false);
-        throw e;
+    case "uninstall": {
+      // Reverse everything WayContext put outside its own directory. Cheap to
+      // provide, and a product that can't be cleanly removed doesn't get installed.
+      const globalDir = path.join(os.homedir(), ".claude");
+      for (const settingsPath of [
+        path.join(process.cwd(), ".claude", "settings.json"),
+        path.join(globalDir, "settings.json"),
+      ]) {
+        if (!fs.existsSync(settingsPath)) continue;
+        const { settings, mode } = removeHook(JSON.parse(fs.readFileSync(settingsPath, "utf8")));
+        if (mode === "removed") {
+          fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+          console.log(`Removed the search hook from ${settingsPath}.`);
+        }
       }
-      stop(true);
-      console.log(`Done in ${((Date.now() - t0) / 1000).toFixed(1)}s:`, stats);
-      break;
-    }
-    case "list_projects": {
-      printJson(await withSpinner("Listing projects", () => listProjects()));
+
+      const globalClaudeMd = path.join(globalDir, "CLAUDE.md");
+      if (fs.existsSync(globalClaudeMd)) {
+        const before = fs.readFileSync(globalClaudeMd, "utf8");
+        const after = removeGlobalSection(before);
+        if (after !== before) {
+          fs.writeFileSync(globalClaudeMd, after);
+          console.log(`Removed the Code Context MCP Workflow section from ${globalClaudeMd}.`);
+        }
+      }
+
+      const cache = cachePath();
+      if (fs.existsSync(cache)) {
+        fs.rmSync(cache, { force: true });
+        console.log(`Removed ${cache}.`);
+      }
+
+      console.log("\nStill installed (remove by hand if you want them gone):");
+      console.log("  claude mcp remove --scope user waycontext");
+      console.log("  npm unlink -g code-context-mcp");
+      console.log("  the codectx Postgres database (codecontext db, then DROP DATABASE)");
       break;
     }
     case "delete_project": {
@@ -273,54 +390,6 @@ async function main() {
     }
     case "stats": {
       console.table(await withSpinner("Listing projects", () => listProjects()));
-      break;
-    }
-    case "project_overview": {
-      const [project] = args;
-      if (!project) usageAndExit("Usage: project_overview <project>");
-      printJson(await withSpinner(`Building overview for "${project}"`, () => getProjectOverview(project)));
-      break;
-    }
-    case "search_code": {
-      const [project, query, limit] = args;
-      if (!project || !query) usageAndExit("Usage: search_code <project> <query> [limit]");
-      printJson(await withSpinner(`Searching "${query}"`, () => searchCode(project, query, limit ? Number(limit) : 10)));
-      break;
-    }
-    case "get_symbol": {
-      const [project, name] = args;
-      if (!project || !name) usageAndExit("Usage: get_symbol <project> <name>");
-      printJson(await withSpinner(`Fetching "${name}"`, () => getSymbol(project, name)));
-      break;
-    }
-    case "get_callers": {
-      const [project, name] = args;
-      if (!project || !name) usageAndExit("Usage: get_callers <project> <name>");
-      printJson(await withSpinner(`Finding callers of "${name}"`, () => getCallers(project, name)));
-      break;
-    }
-    case "get_callees": {
-      const [project, name] = args;
-      if (!project || !name) usageAndExit("Usage: get_callees <project> <name>");
-      printJson(await withSpinner(`Finding callees of "${name}"`, () => getCallees(project, name)));
-      break;
-    }
-    case "get_graph": {
-      const [project, name, depth] = args;
-      if (!project || !name) usageAndExit("Usage: get_graph <project> <name> [depth]");
-      printJson(await withSpinner(`Building graph around "${name}"`, () => getSubgraph(project, name, depth ? Number(depth) : 2)));
-      break;
-    }
-    case "get_file_outline": {
-      const [project, path] = args;
-      if (!project || !path) usageAndExit("Usage: get_file_outline <project> <path>");
-      printJson(await withSpinner(`Outlining "${path}"`, () => getFileOutline(project, path)));
-      break;
-    }
-    case "find_related": {
-      const [project, name, limit] = args;
-      if (!project || !name) usageAndExit("Usage: find_related <project> <name> [limit]");
-      printJson(await withSpinner(`Finding symbols related to "${name}"`, () => findRelated(project, name, limit ? Number(limit) : 10)));
       break;
     }
     case "db": {
