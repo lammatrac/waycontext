@@ -175,40 +175,51 @@ export function parseFile(lang, source) {
   }
 
   function heritage(classNode, className) {
-    // JS/TS: class_heritage / extends_clause / implements_clause
-    for (const c of classNode.namedChildren) {
-      if (c.type === "class_heritage" || c.type === "extends_clause") {
-        for (const t of c.namedChildren) {
-          relations.push({ srcName: className, relation: "EXTENDS", dstName: text(t).slice(0, 200), line: line(c) });
-        }
+    const emit = (relation, target, at) => {
+      // Generic arguments (`extends Base<T>`) are separate named children of
+      // the clause; the edge belongs on the base type, not on "<T>".
+      if (target.type === "type_arguments" || target.type === "type_parameters") return;
+      relations.push({ srcName: className, relation, dstName: text(target).slice(0, 200), line: line(at) });
+    };
+
+    const visitClause = (c) => {
+      switch (c.type) {
+        case "class_heritage":
+          // TypeScript nests extends_clause/implements_clause inside
+          // class_heritage; plain JavaScript puts the base type directly in
+          // it. Recursing handles both -- without this, a TS `implements`
+          // was emitted as EXTENDS with the clause's whole text ("implements
+          // Shape") as the target, which could never resolve to a symbol.
+          for (const inner of c.namedChildren) {
+            if (inner.type === "extends_clause" || inner.type === "implements_clause") visitClause(inner);
+            else emit("EXTENDS", inner, c);
+          }
+          break;
+        case "extends_clause":
+        case "base_clause": // PHP
+          for (const t of c.namedChildren) emit("EXTENDS", t, c);
+          break;
+        case "implements_clause":
+        case "class_interface_clause": // PHP
+          for (const t of c.namedChildren) emit("IMPLEMENTS", t, c);
+          break;
       }
-      if (c.type === "implements_clause") {
-        for (const t of c.namedChildren) {
-          relations.push({ srcName: className, relation: "IMPLEMENTS", dstName: text(t).slice(0, 200), line: line(c) });
-        }
-      }
-      // PHP: base_clause (extends), class_interface_clause (implements)
-      if (c.type === "base_clause") {
-        for (const t of c.namedChildren) {
-          relations.push({ srcName: className, relation: "EXTENDS", dstName: text(t).slice(0, 200), line: line(c) });
-        }
-      }
-      if (c.type === "class_interface_clause") {
-        for (const t of c.namedChildren) {
-          relations.push({ srcName: className, relation: "IMPLEMENTS", dstName: text(t).slice(0, 200), line: line(c) });
-        }
-      }
-    }
+    };
+
+    for (const c of classNode.namedChildren) visitClause(c);
   }
 
   function walkTopLevel(node, namespace = "") {
+    // Mutable, because PHP's statement-form `namespace App;` has no body and
+    // applies to every following sibling in the file rather than to a block.
+    let ns = namespace;
     for (const n of node.namedChildren) {
       switch (n.type) {
         // ---- shared ----
         case "class_declaration": {
           const nameNode = n.childForFieldName("name");
           if (!nameNode) break;
-          const name = namespace + text(nameNode);
+          const name = ns + text(nameNode);
           addSymbol(name, "class", n);
           heritage(n, name);
           classMembers(n, name, "body");
@@ -216,7 +227,7 @@ export function parseFile(lang, source) {
         }
         case "interface_declaration": {
           const nameNode = n.childForFieldName("name");
-          if (nameNode) addSymbol(namespace + text(nameNode), "interface", n);
+          if (nameNode) addSymbol(ns + text(nameNode), "interface", n);
           break;
         }
         // ---- JS/TS ----
@@ -224,7 +235,7 @@ export function parseFile(lang, source) {
         case "generator_function_declaration": {
           const nameNode = n.childForFieldName("name");
           if (!nameNode) break;
-          const name = namespace + text(nameNode);
+          const name = ns + text(nameNode);
           addSymbol(name, "function", n);
           collectRefs(n, name);
           break;
@@ -237,7 +248,7 @@ export function parseFile(lang, source) {
             const nameNode = d.childForFieldName("name");
             const value = d.childForFieldName("value");
             if (nameNode && value && ["arrow_function", "function_expression", "function"].includes(value.type)) {
-              const name = namespace + text(nameNode);
+              const name = ns + text(nameNode);
               addSymbol(name, "function", n);
               collectRefs(value, name);
             }
@@ -252,14 +263,14 @@ export function parseFile(lang, source) {
           break;
         }
         case "export_statement": {
-          walkTopLevel(n, namespace); // unwrap "export function foo() {}"
+          walkTopLevel(n, ns); // unwrap "export function foo() {}"
           break;
         }
         // ---- PHP ----
         case "function_definition": {
           const nameNode = n.childForFieldName("name");
           if (!nameNode) break;
-          const name = namespace + text(nameNode);
+          const name = ns + text(nameNode);
           addSymbol(name, "function", n);
           collectRefs(n, name);
           break;
@@ -267,16 +278,27 @@ export function parseFile(lang, source) {
         case "trait_declaration": {
           const nameNode = n.childForFieldName("name");
           if (!nameNode) break;
-          const name = namespace + text(nameNode);
+          const name = ns + text(nameNode);
           addSymbol(name, "trait", n);
           classMembers(n, name, "body");
           break;
         }
         case "namespace_definition": {
           const nameNode = n.childForFieldName("name");
-          const ns = nameNode ? text(nameNode) + "\\" : "";
+          const declared = nameNode ? text(nameNode) + "\\" : "";
           const body = n.childForFieldName("body");
-          walkTopLevel(body || n, ns);
+          if (body) {
+            // Braced form: `namespace App { ... }` -- scoped to the block.
+            walkTopLevel(body, declared);
+          } else {
+            // Statement form: `namespace App;` -- applies to the rest of the
+            // file. This is the form PSR-4/PSR-12 mandate, so it covers most
+            // modern PHP. Previously it prefixed nothing, because the
+            // declarations are siblings of this node rather than children,
+            // which made `App\Billing\Invoice` and `App\Domain\Invoice`
+            // collide as a bare `Invoice`.
+            ns = declared;
+          }
           break;
         }
         case "namespace_use_declaration": {
@@ -294,7 +316,7 @@ export function parseFile(lang, source) {
           if (n.type === "expression_statement") {
             collectRefs(n, "@file");
           } else if (n.namedChildCount > 0 && ["program", "text_interpolation"].includes(n.type)) {
-            walkTopLevel(n, namespace);
+            walkTopLevel(n, ns);
           }
         }
       }

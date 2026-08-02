@@ -231,6 +231,44 @@ async function runIndex(project, root, log) {
        AND s.name LIKE '%::' || e.dst_name`,
     [project.id]
   );
+  // PHP fully-qualified reference ("\App\Domain\Invoice") against a symbol
+  // stored under its namespaced name.
+  await pool.query(
+    `UPDATE edges e SET dst = s.id
+     FROM symbols s
+     WHERE e.project_id = $1 AND s.project_id = $1
+       AND e.dst IS NULL AND e.dst_name LIKE '\\\\%'
+       AND ltrim(e.dst_name, '\\') = s.name`,
+    [project.id]
+  );
+  // Unqualified reference to a namespaced symbol: `new Invoice()` inside
+  // (or importing from) App\Domain resolves to App\Domain\Invoice.
+  //
+  // Symbols carry their namespace but call sites almost never repeat it, so
+  // without this pass qualifying PHP names would strand most edges: measured
+  // on a real WordPress codebase, exact-match alone resolved 0.4% of targets
+  // versus 2.8% before namespaces were recorded at all. Matching on the
+  // unqualified suffix restores 2.7%.
+  //
+  // Only unique matches are linked -- pointing an edge at an arbitrary one of
+  // several same-named classes would be worse than leaving it unresolved.
+  await pool.query(
+    `WITH candidate AS (
+       SELECT e.id AS edge_id, min(s.id) AS symbol_id, count(*) AS matches
+       FROM edges e
+       JOIN symbols s
+         ON s.project_id = e.project_id
+        AND s.kind <> 'method'
+        AND s.name LIKE '%\\\\%'
+        AND regexp_replace(s.name, '^.*\\\\', '') = e.dst_name
+       WHERE e.project_id = $1 AND e.dst IS NULL
+       GROUP BY e.id
+     )
+     UPDATE edges e SET dst = c.symbol_id
+     FROM candidate c
+     WHERE e.id = c.edge_id AND c.matches = 1`,
+    [project.id]
+  );
 
   // embeddings
   if (embeddingsEnabled()) {
