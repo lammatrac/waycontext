@@ -344,6 +344,7 @@ Usage tracking only covers calls made after upgrading to this version — run `w
 | `find_related` | Semantically similar symbols — discover a feature's full surface. |
 | `get_history` | Commits that touched a file, symbol or directory, with issue refs — "what broke last time someone touched this?" |
 | `who_owns` | Recency-weighted contributors for a file, symbol or directory — "who should I ask about this?" |
+| `search_knowledge` | Code **and** docs/ADRs in one fused ranking — "why is it this way?", where the answer is prose rather than a function body. |
 
 ## Database schema
 
@@ -434,6 +435,76 @@ One row per embedding API call (indexing a batch of symbols, or embedding a `sea
 | `created_at` | `timestamptz` | When the call happened. |
 
 Indexed on `project_id` and on `(provider, model)`.
+
+### `documents`
+
+One row per ingested Markdown file — a 1:1 satellite of `entities(kind='document')`. The
+embeddable text lives in `chunks`; this table owns what you filter and aggregate on.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `entity_id` | `bigint` (PK, FK → `entities.id`) | The durable id. Knowledge attaches here, not to the file row. |
+| `file_id` | `bigint` (FK → `files.id`) | The `files` row docs share with code, which is what gives them the sha256 hash-skip and deletion cascade for free. |
+| `path` | `text` | Repo-relative path. Unique per project, and the entity's `natural_key`. |
+| `doc_type` | `text` | `adr` \| `readme` \| `changelog` \| `contributing` \| `guide` \| `note`. |
+| `title` | `text` | Frontmatter `title`, else the first heading, else the filename. |
+| `frontmatter` | `jsonb` | The parsed `---` block. |
+| `adr` | `jsonb` | `{status, context, decision, consequences}` for `doc_type='adr'`, else `NULL`. |
+| `mentions` | `jsonb` | `{paths, identifiers}` — the prose references found in the document. GIN-indexed. |
+| `content_hash` | `text` | sha256 of the file, mirroring `files.hash`. |
+| `chunk_count` | `int` | How many `chunks` rows this document currently has. |
+
+**Why `mentions` is jsonb and not link rows.** Backticked identifiers that match exactly
+one symbol become `entity_links(relation='MENTIONS')` — the same "unique match or nothing"
+rule the namespaced-edge resolver uses. Path references stay in this column instead,
+because a file is not an entity here, so the only available link target would be *every*
+symbol in that file: one prose mention of `src/graph.js` would become a dozen link rows and
+drown the specific ones. "Which docs mention this file?" is one indexed query:
+
+```sql
+SELECT path FROM documents WHERE mentions->'paths' ? 'src/graph.js';
+```
+
+## Docs & ADRs: `search_knowledge`
+
+Indexing a project also ingests its Markdown — READMEs, guides and above all Architecture
+Decision Records — so an agent can answer *why* the code is shaped the way it is, not only
+where it lives. Like git history: no configuration, no API keys, no network.
+
+```bash
+waycontext knowledge myproject "why do we fuse two ranked lists"
+```
+
+Docs ride the **same** pipeline as code: git-diff scoping, the sha256 hash-skip and the
+deleted-file cascade all key on a path and were already correct for prose. What differs is
+what happens after the read — instead of parse → symbols → edges, a document becomes an
+entity, a `documents` row and a set of `chunks`.
+
+**Chunking rules that matter.** Chunks carry a heading breadcrumb (`Architecture > Storage
+> Chunking`), which is weighted above the body in full-text ranking. A fenced code block is
+never split — half a code block retrieves as noise. The target is 4800 characters with a
+hard cap of 8000, matching the input slice in `src/embeddings.js`, so the text stored can
+never differ from the text the vector was computed from. A heading with no body of its own
+rides along on the chunk it introduces rather than becoming a bare-title chunk.
+
+**Re-embedding is per chunk, not per document.** Each chunk stores its own
+`content_hash`, and a re-index invalidates the embedding only where that hash changed:
+edit one heading in a 40-section ADR and exactly one chunk is re-embedded. The same
+`embedding IS NULL` query that finds those chunks also heals a run that crashed mid-embed,
+so there is one recovery path rather than two.
+
+`search_knowledge` fuses up to four ranked lists — symbol full-text, symbol vector, chunk
+full-text, chunk vector — through the same RRF as `search_code`, using namespaced ids
+(`sym:123`, `chunk:456`). With `EMBEDDING_PROVIDER=none` only the full-text lists exist and
+it degrades exactly the way symbol search already does.
+
+`search_code` was deliberately **not** changed. It is the call agents make by default and
+its quality is measured by [`eval/`](#retrieval-quality-eval) against real commits, so
+mixing prose into it would move a number that has to stay comparable across phases.
+
+Configure with `DOCS_ENABLED`, `DOCS_GLOBS` (default `**/*.md,**/*.mdx`) and
+`DOCS_CHUNK_CHARS`. `.gitignore` and the built-in ignores still apply, so `node_modules`
+and `vendor` docs never get walked.
 
 ## Git history: `get_history` and `who_owns`
 
@@ -578,6 +649,40 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-08-03 — Phase 2: docs & ADR ingestion
+
+- **In-repo Markdown is now indexed** (`DOCS_GLOBS`, default `**/*.md,**/*.mdx`): a
+  document becomes an `entities(kind='document')` row, a `documents` satellite and a set of
+  `chunks`. It rides the existing pipeline rather than a parallel one — git-diff scoping,
+  the sha256 hash-skip and the deleted-file cascade all key on a path and were already
+  correct for prose, so docs cost three edits to the discovery/branch logic instead of a
+  second ingestion path.
+- **New tool `search_knowledge`** (CLI: `knowledge`), fusing symbol full-text, symbol
+  vector, chunk full-text and chunk vector through the *existing* `fuseRankedLists` with
+  namespaced `sym:`/`chunk:` ids — `src/rrf.js` needed no change, since it already keyed on
+  opaque ids. Results are tagged `type: "code"` or `type: "doc"`, and doc hits carry the
+  heading path they came from. `search_code` is untouched on purpose: it is what agents
+  call by default and `eval/` measures its recall against real commits, so prose must not
+  move that number.
+- **ADRs are parsed, not just chunked.** Location, a numbered filename, a frontmatter
+  `status`, or a Context+Decision heading pair each classify a document as an ADR, and its
+  Context / Decision / Consequences sections land in `documents.adr` for later aggregation.
+  Phase 3 is what turns those into rules; this phase only records them.
+- **Re-embedding is per chunk.** Each chunk hashes its own heading path plus body, and a
+  re-index nulls the embedding only where that hash changed — edit one heading in a
+  40-section ADR and one chunk is re-embedded. The `embedding IS NULL` query that picks
+  those up is the same one that heals a crashed run, so there is one recovery mechanism
+  instead of two.
+- **Chunking rules with a reason each:** never split a fenced code block (half a block
+  retrieves as noise); heading breadcrumbs weighted above body text in FTS; a heading with
+  no body of its own rides on the chunk it introduces instead of becoming a bare-title
+  chunk; hard cap 8000 characters to match the input slice in `src/embeddings.js`, so
+  stored text can never differ from what was embedded.
+- **Doc→code links are conservative.** A backticked identifier matching exactly one symbol
+  becomes `entity_links(relation='MENTIONS')`; ambiguous names are left unlinked, as the
+  namespaced-edge resolver already does. Path references stay in `documents.mentions` under
+  a GIN index rather than fanning out to every symbol in the file.
 
 ### 2026-08-03 — Phase 1: identity + git history
 
