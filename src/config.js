@@ -120,4 +120,27 @@ export const config = {
   rulesEnabled: setting("RULES_ENABLED", "1") !== "0",
   ruleCandidateMinConfidence: numeric("RULE_CANDIDATE_MIN_CONFIDENCE", 0.4),
   knowledgeDir: setting("KNOWLEDGE_DIR", ".waycontext/knowledge"),
+
+  // Derived intelligence (Phase 4). Everything here is recomputed from the
+  // planes below it and skipped entirely when its inputs haven't moved, so the
+  // cost of leaving it on is a watermark comparison per index run.
+  deriveEnabled: setting("DERIVE_ENABLED", "1") !== "0",
+  // A module is a directory this many levels deep: 2 gives "src/knowledge",
+  // 1 gives "src". Depth is what makes modules nameable and stable; see
+  // 0009_derived_intelligence.sql for why they aren't graph communities.
+  moduleDepth: numeric("MODULE_DEPTH", 2),
+  // Metrics are a trailing window, and window_days is stored on every row:
+  // churn under 90 days and churn under 365 are not the same number.
+  metricsWindowDays: numeric("METRICS_WINDOW_DAYS", 90),
+  // A commit touching hundreds of files (a reformat, a dependency bump, a
+  // license header sweep) contributes n^2 pairs that mean nothing about
+  // coupling, and it is the single biggest source of both noise and cost in
+  // co-change. Skipped commits are counted and reported, never dropped
+  // silently. Set to 0 to disable the cap.
+  cochangeMaxFiles: numeric("COCHANGE_MAX_FILES", 50),
+  cochangeMinPairCommits: numeric("COCHANGE_MIN_PAIR_COMMITS", 2),
+  // Greedy cosine agglomeration over fix-commit message embeddings. 0.82 is
+  // the roadmap's figure; below ~0.75 unrelated fixes start merging.
+  bugClusterThreshold: numeric("BUG_CLUSTER_THRESHOLD", 0.82),
+  bugClusterMinSize: numeric("BUG_CLUSTER_MIN_SIZE", 2),
 };
