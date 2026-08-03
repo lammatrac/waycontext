@@ -512,19 +512,27 @@ async function runIndex(project, root, log) {
     }
   }
 
-  // Doc chunks, on exactly the same terms as symbols: the query is the whole
-  // pending set (new, edited, or left over from a crashed run), because
-  // writeDocument nulls the embedding of any chunk whose content changed.
-  if (config.docsEnabled && embeddingsEnabled()) {
+  // Chunks, on exactly the same terms as symbols: the query is the whole pending
+  // set (new, edited, or left over from a crashed run), because whoever wrote
+  // the chunk nulled the embedding of any row whose content changed.
+  //
+  // Joined on entities rather than documents so every chunk-bearing kind is
+  // covered -- documents in Phase 2, memories in Phase 3 -- and gated on
+  // embeddings alone, since a memory must still embed when doc ingestion is off.
+  if (embeddingsEnabled()) {
     const pending = await pool.query(
-      `SELECT c.id, c.heading_path, c.content, d.path, d.doc_type
-         FROM chunks c JOIN documents d ON d.entity_id = c.entity_id
+      `SELECT c.id, c.heading_path, c.content,
+              COALESCE(d.path, e.natural_key) AS label,
+              COALESCE(d.doc_type, e.kind)    AS sublabel
+         FROM chunks c
+         JOIN entities e ON e.id = c.entity_id
+         LEFT JOIN documents d ON d.entity_id = c.entity_id
         WHERE c.project_id = $1 AND c.embedding IS NULL
         ORDER BY c.id`,
       [project.id]
     );
     if (pending.rows.length) {
-      log(`Embedding ${pending.rows.length} doc chunk(s)…`);
+      log(`Embedding ${pending.rows.length} chunk(s)…`);
       const CHUNK_BATCH = 32;
       for (let i = 0; i < pending.rows.length; i += CHUNK_BATCH) {
         const batch = pending.rows.slice(i, i + CHUNK_BATCH);
@@ -532,7 +540,7 @@ async function runIndex(project, root, log) {
         try {
           vectors = await embed(
             batch.map((r) =>
-              [`// ${r.path} (${r.doc_type})`, r.heading_path || "", r.content].join("\n")
+              [`// ${r.label} (${r.sublabel})`, r.heading_path || "", r.content].join("\n")
             ),
             "document",
             project.id

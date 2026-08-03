@@ -64,12 +64,23 @@ export async function searchCode(projectName, query, limit = 10) {
   }));
 }
 
-const CHUNK_COLUMNS = "c.id, c.heading_path, c.content, d.path, d.title, d.doc_type";
+const CHUNK_COLUMNS = `
+  c.id, c.heading_path, c.content, e.kind AS entity_kind,
+  d.path, COALESCE(d.title, e.title) AS title, d.doc_type`;
+
+// Joined on entities, not documents: every chunk-bearing kind belongs in this
+// ranking -- documents from Phase 2, memories from Phase 3 -- and a LEFT JOIN
+// keeps the document columns available without excluding the kinds that have no
+// document row.
+const CHUNK_SOURCE = `
+  chunks c
+  JOIN entities e ON e.id = c.entity_id AND e.deleted_at IS NULL
+  LEFT JOIN documents d ON d.entity_id = c.entity_id`;
 
 async function chunkFtsCandidates(projectId, query, poolSize) {
   const res = await pool.query(
     `SELECT ${CHUNK_COLUMNS}
-     FROM chunks c JOIN documents d ON d.entity_id = c.entity_id
+     FROM ${CHUNK_SOURCE}
      WHERE c.project_id = $1 AND c.fts_vector @@ plainto_tsquery('simple', $2)
      ORDER BY ts_rank(c.fts_vector, plainto_tsquery('simple', $2)) DESC
      LIMIT $3`,
@@ -81,7 +92,7 @@ async function chunkFtsCandidates(projectId, query, poolSize) {
 async function chunkVectorCandidates(projectId, queryVector, poolSize) {
   const res = await pool.query(
     `SELECT ${CHUNK_COLUMNS}
-     FROM chunks c JOIN documents d ON d.entity_id = c.entity_id
+     FROM ${CHUNK_SOURCE}
      WHERE c.project_id = $1 AND c.embedding IS NOT NULL
      ORDER BY c.embedding <=> $2
      LIMIT $3`,
@@ -145,7 +156,9 @@ export async function searchKnowledge(projectName, query, limit = 10) {
   }
   for (const r of [...chunkFts, ...chunkVec]) {
     byId.set(`chunk:${r.id}`, {
-      type: "doc",
+      // 'document' reads as 'doc' for symmetry with 'code'; any other
+      // chunk-bearing kind (today: memory) is reported as itself.
+      type: r.entity_kind === "document" ? "doc" : r.entity_kind,
       path: r.path,
       title: r.title,
       heading_path: r.heading_path,
