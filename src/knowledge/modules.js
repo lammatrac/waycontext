@@ -142,14 +142,17 @@ export async function writeModules(project, log = () => {}) {
     await client.query(`DELETE FROM module_deps WHERE project_id = $1`, [project.id]);
     const deps = await client.query(
       `INSERT INTO module_deps (project_id, src_module_id, dst_module_id, edge_count)
-       SELECT $1, sm.module_id, dm.module_id, count(*)
+       -- $1 is cast and left out of the GROUP BY: grouping by a bare parameter
+       -- leaves Postgres deducing two types for it ("inconsistent types deduced
+       -- for parameter $1") since the same placeholder is an int in the WHERE.
+       SELECT $1::int, sm.module_id, dm.module_id, count(*)
          FROM edges e
          JOIN symbols ss ON ss.id = e.src
          JOIN symbols ds ON ds.id = e.dst
          JOIN module_members sm ON sm.file_id = ss.file_id
          JOIN module_members dm ON dm.file_id = ds.file_id
         WHERE e.project_id = $1 AND sm.module_id <> dm.module_id
-        GROUP BY 1, 2, 3`,
+        GROUP BY sm.module_id, dm.module_id`,
       [project.id]
     );
 

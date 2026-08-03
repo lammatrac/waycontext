@@ -14,6 +14,7 @@ import { ingestGitHistory } from "./knowledge/gitHistory.js";
 import { parseDocument } from "./knowledge/docs.js";
 import { proposeRules } from "./knowledge/rules.js";
 import { importKnowledge } from "./knowledge/knowledgeFiles.js";
+import { deriveIntelligence } from "./knowledge/derive.js";
 
 const DEFAULT_IGNORES = [
   "node_modules/**", "vendor/**", ".git/**", "dist/**", "build/**",
@@ -596,6 +597,19 @@ async function runIndex(project, root, log) {
       [project.id]
     );
   }
+  // Derived intelligence runs last, and after the sha update above on purpose:
+  // its watermark is that sha, so computing before the update would record a
+  // watermark one run behind and recompute everything again next time.
+  let derived = null;
+  try {
+    derived = await deriveIntelligence(project, log);
+  } catch (e) {
+    // Same contract as history and rules: additive knowledge never fails a
+    // code index.
+    log(`Derivation skipped: ${e.message}`);
+    derived = { error: e.message };
+  }
+
   return {
     mode: diffResult ? "diff" : "full",
     changed, skipped, removed, failed,
@@ -604,6 +618,7 @@ async function runIndex(project, root, log) {
     history,
     docs: config.docsEnabled ? docStats : null,
     rules,
+    derived,
   };
 }
 

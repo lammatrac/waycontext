@@ -33,6 +33,9 @@ import { getHistory, whoOwns } from "./knowledge/history.js";
 import { getRules } from "./knowledge/rules.js";
 import { remember, recall } from "./knowledge/memory.js";
 import { reviewContext } from "./knowledge/reviewContext.js";
+import {
+  getModules, getModule, getCochange, getBugClusters,
+} from "./knowledge/architecture.js";
 
 const project = z.string().describe("Indexed project name (see list_projects)");
 const limit = z.coerce.number().int().min(1).max(30).default(10);
@@ -237,6 +240,65 @@ export const operations = [
     },
     cli: { args: ["project", "paths"], aliases: ["review"], label: () => "Assembling review context" },
     handler: (a) => reviewContext(a.project, a.paths),
+  },
+  {
+    name: "get_modules",
+    description:
+      "The project's architecture as modules (directories) with churn, defect density and a risk score, most at-risk first. Start here when you don't know a codebase: it answers 'what are the parts, which are hot, and which have been breaking'. Check `risk_basis` — 'churn_only' means the project has no recognisable fix commits, so risk is ranked on change volume alone.",
+    input: {
+      project,
+      sort: z.enum(["risk", "churn", "loc", "path"]).default("risk"),
+      limit: z.coerce.number().int().min(1).max(200).default(30),
+    },
+    cli: {
+      args: ["project", "sort", "limit"],
+      aliases: ["modules"],
+      label: () => "Reading module metrics",
+    },
+    handler: (a) => getModules(a.project, { sort: a.sort, limit: a.limit }),
+  },
+  {
+    name: "get_module",
+    description:
+      "One module in full: its metrics, what it depends on and what depends on it, who has been changing it lately, its largest files, and the recurring bug themes that land in it. Use it before changing unfamiliar code, and to find out who to ask.",
+    input: {
+      project,
+      module: z.string().describe("Module path as returned by get_modules, e.g. src/knowledge"),
+    },
+    cli: {
+      args: ["project", "module"],
+      aliases: ["module"],
+      label: (a) => `Reading module "${a.module}"`,
+    },
+    handler: (a) => getModule(a.project, a.module),
+  },
+  {
+    name: "get_cochange",
+    description:
+      "What else historically changes when this changes — the files coupled to a target by commit history rather than by imports. Use it to catch the file you were about to forget: a test, a migration, a fixture, a doc. Takes a path, directory or symbol name.",
+    input: {
+      project,
+      target: z.string().describe("File path, directory or symbol name"),
+      limit: z.coerce.number().int().min(1).max(50).default(15),
+    },
+    cli: {
+      args: ["project", "target", "limit"],
+      aliases: ["cochange"],
+      label: (a) => `Finding what changes with "${a.target}"`,
+    },
+    handler: (a) => getCochange(a.project, a.target, a.limit),
+  },
+  {
+    name: "get_bug_clusters",
+    description:
+      "Recurring themes across this project's fix commits, grouped and labelled, largest first — 'what keeps breaking here'. Clustered from fix commit messages, not from an issue tracker. `method: 'terms'` means embeddings were off and the grouping is keyword-based, so treat it as weaker evidence.",
+    input: { project, limit: z.coerce.number().int().min(1).max(50).default(10) },
+    cli: {
+      args: ["project", "limit"],
+      aliases: ["bugs"],
+      label: () => "Reading bug clusters",
+    },
+    handler: (a) => getBugClusters(a.project, a.limit),
   },
 ];
 
