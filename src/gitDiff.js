@@ -72,3 +72,34 @@ export async function getChangedFiles(root, lastSha) {
 
   return { changed, deleted, headSha };
 }
+
+/**
+ * Paths changed in the working tree relative to HEAD, including untracked
+ * files, relative to `root`.
+ *
+ * `review_context` asks "what am I about to commit", and a file that exists only
+ * in the working tree is the most likely thing a reviewer wants the rules for --
+ * so untracked files are included even though nothing in the index knows about
+ * them yet. Returns [] for a non-git directory, matching how the rest of this
+ * module treats absent git, and strips the repo-subdirectory prefix so the
+ * paths line up with `files.path`.
+ */
+export async function getWorkingTreeChanges(root) {
+  const toplevel = await tryGit(["-C", root, "rev-parse", "--show-toplevel"]);
+  if (!toplevel) return [];
+
+  const prefix = (await tryGit(["-C", root, "rev-parse", "--show-prefix"])) || "";
+  const pathspecArgs = prefix ? ["--", prefix] : [];
+
+  const [tracked, untracked] = await Promise.all([
+    tryGit(["-C", toplevel, "diff", "--no-renames", "--name-only", "HEAD", ...pathspecArgs]),
+    tryGit(["-C", toplevel, "ls-files", "--others", "--exclude-standard", ...pathspecArgs]),
+  ]);
+
+  const paths = `${tracked || ""}\n${untracked || ""}`
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((p) => p.slice(prefix.length));
+  return [...new Set(paths)];
+}
