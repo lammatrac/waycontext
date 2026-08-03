@@ -164,6 +164,24 @@ test("unknown routes list the ones that exist", async () => {
   assert.ok((await res.json()).routes.includes("/v1/context"));
 });
 
+test("the web UI is served at the root and calls only registry operations", async () => {
+  const res = await get("/");
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /text\/html/);
+  const html = await res.text();
+  assert.match(html, /<title>WayContext/);
+
+  // The page must not reach for an endpoint that doesn't exist -- it has no build
+  // step and no type checking, so this is the only thing standing between a
+  // renamed operation and a blank panel.
+  const { findOperation } = await import("../src/operations.js");
+  const called = [...html.matchAll(/op\("([a-z_]+)"/g)].map((m) => m[1]);
+  assert.ok(called.length >= 3, `only found ${called.length} operation calls`);
+  for (const name of new Set(called)) {
+    assert.ok(findOperation(name), `the web UI calls "${name}", which is not an operation`);
+  }
+});
+
 test("static paths cannot escape the web directory", async () => {
   // %2e%2e%2f is ../ url-encoded; node's URL parser normalises plain ../ before
   // the handler ever sees it, so the encoded form is the one worth asserting.

@@ -16,6 +16,7 @@
     "stats": "node src/cli.js stats",
     "init-db": "node src/cli.js init-db",
     "migrate": "node src/cli.js migrate",
+    "serve": "node src/cli.js serve",
     "eval": "node eval/recall.js",
     "update": "bash update.sh",
     "test": "node --test test/**/*.test.js"
@@ -30,6 +31,8 @@
   },
   "files": [
     "src/",
+    "web/",
+    "extension/",
     "hooks/",
     "docker/",
     "install.sh",

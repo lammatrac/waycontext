@@ -1,0 +1,40 @@
+{
+  "name": "waycontext-vscode",
+  "displayName": "WayContext",
+  "description": "Engineering intelligence in the editor: search code, docs and memory, see a module's risk and owners, and assemble task context — all from a local WayContext server.",
+  "version": "0.2.0",
+  "publisher": "waycontext",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["code-search", "code-intelligence", "mcp", "call-graph"],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "waycontext.search", "title": "WayContext: Search code, docs and memory" },
+      { "command": "waycontext.reviewContext", "title": "WayContext: Review context for my changes" },
+      { "command": "waycontext.explainModule", "title": "WayContext: Explain this module" },
+      { "command": "waycontext.composeContext", "title": "WayContext: Compose context for a task" },
+      { "command": "waycontext.remember", "title": "WayContext: Remember something" },
+      { "command": "waycontext.openGraph", "title": "WayContext: Open the knowledge graph" }
+    ],
+    "configuration": {
+      "title": "WayContext",
+      "properties": {
+        "waycontext.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4747",
+          "description": "The local WayContext server (start it with `waycontext serve`). No credentials are sent; the server has no authentication and binds to localhost."
+        },
+        "waycontext.project": {
+          "type": "string",
+          "default": "",
+          "description": "Indexed project name. Left blank, the project whose indexed root contains the active file is used."
+        }
+      }
+    }
+  }
+}

@@ -353,6 +353,102 @@ Usage tracking only covers calls made after upgrading to this version — run `w
 | `get_module` | One module in full: metrics, dependencies both ways, owners, largest files, recurring bugs. |
 | `get_cochange` | What historically changes *with* a file — coupling by commit history rather than by imports. |
 | `get_bug_clusters` | Recurring themes across fix commits — "what keeps breaking here?" |
+| `compose_context` | **All of the above, fused into one answer for one task** — rules, code, docs, memory and past fixes, cited and packed into a token budget. |
+
+## The context API
+
+`compose_context` is the one call that replaces firing four tools by hand. Given a task in
+plain language it returns the rules governing the code involved, the code and prose that
+match, what was fixed there before, and what the project has learned — every item with a
+citation, packed into a token budget.
+
+```bash
+waycontext context myproject "fix the retry logic in indexProject" 2500 markdown
+```
+
+**No LLM in the hot path.** The task is parsed by regex and one dictionary lookup: quoted
+phrases, backticked identifiers, path-shaped tokens, then a single
+`name = ANY($tokens)` query against `symbols` and `files` to see which of the guesses the
+project actually contains. Whatever didn't resolve is reported back in `understood.unresolved`
+— "you mentioned `src/billing`, which this project doesn't have" is often the most useful
+line in the response.
+
+**Five channels, fused, each bounded.** Code/docs (one `search_knowledge` call, split into
+two ranked lists), scoped rules, memory, history of the named paths, and **graph expansion** —
+the step a pure vector retriever structurally cannot take, since the symbol a task names is
+rarely the only one that must change, and its neighbours are a fact in `edges` rather than
+something to hope similarity surfaces. Results are combined with weighted RRF.
+
+**Rules bypass the fusion entirely and are exempt from the budget.** Ranking a confirmed
+constraint against a search hit would mean a sufficiently good search hit could push it out,
+which is exactly what the human-confirmation gate exists to prevent. If the rules alone
+exceed the budget, the budget is overspent and `over_budget` says so rather than dropping
+them. An agent that never saw "never edit an applied migration" will confidently edit one; a
+missing code snippet only makes it search again.
+
+**Latency comes from one place, so that is where the fix is.** The query embedding is a
+network round trip and does not fit a deadline meant for Postgres — with one 400 ms budget for
+everything, both embedding-dependent channels timed out on *every* cold request, degrading to
+full-text on exactly the queries where semantic matching matters. It is now warmed once up
+front on its own longer deadline, and `embedQuery` has an LRU cache that is **single-flight**:
+the parallel channels asking for the same task text share one in-flight call rather than
+making two. Warm requests land in ~450 ms; cold ones cost one provider round trip more.
+
+`snippet: null` is a supported answer, not a bug — paths, names and citations without bodies
+is what makes a privacy tier possible later, so the path is exercised now via
+`{ snippets: false }`.
+
+Every channel that misses its deadline or errors is named in `meta.degraded_channels`.
+Returning less context without saying so is worse than either failure.
+
+## `waycontext serve` — HTTP, MCP-over-HTTP, and the web graph
+
+```bash
+waycontext serve            # http://127.0.0.1:4747
+```
+
+| Route | Purpose |
+|---|---|
+| `GET /health` | Liveness, version, query-cache stats. |
+| `GET /v1/ops` | The operation catalogue, generated from the registry. |
+| `POST /v1/ops/:name` | **Any** operation, by name or alias. |
+| `POST /v1/context` | The composer. `format: "markdown"` returns text, not JSON. |
+| `/mcp` | MCP over StreamableHTTP — `claude mcp add --transport http` is a one-liner. |
+| `GET /` | The web knowledge graph. |
+
+`POST /v1/ops/:name` is what makes "every surface reads the same registry" literal rather
+than aspirational: the web UI and the VS Code extension both go through it, so a new
+operation appears in both without either being edited. The registry is also the **allow-list** —
+there is no path from HTTP to a function that isn't declared an operation, which keeps the
+human-only commands (`rule confirm`, `knowledge-import`, `serve` itself) off this surface
+exactly as they are off MCP. A test asserts that.
+
+**There is no authentication.** It binds to `127.0.0.1` and *refuses* to bind anywhere else
+unless `WAYCONTEXT_ALLOW_PUBLIC_BIND=1` is set, because an unauthenticated endpoint that
+reads your source code must not be one config typo away from the network. Auth, rate
+limiting and multi-tenancy are Team/Enterprise concerns and are deliberately absent rather
+than half-present.
+
+### Web knowledge graph
+
+Served at `/`: modules as a force-directed graph sized by lines and coloured by risk, click
+through to metrics, owners, dependencies both ways and recurring bugs, plus a search box over
+`search_knowledge`. One self-contained HTML file — no bundler, no CDN, no framework, no build
+step. The layout is ~40 lines of Verlet integration; a graph library would be 200 KB to draw
+fewer than a hundred nodes.
+
+### VS Code extension
+
+`extension/`, plain JS, talking to `/v1/ops/:name`. Commands: search code/docs/memory and
+jump to the result, review context for the working tree, explain the current file's module,
+compose context for a task, remember something, open the graph. If the server isn't running,
+the error offers to start it rather than reporting "fetch failed".
+
+**Honest limit:** there is no headless VS Code in this repo, so `npm test` cannot exercise the
+extension's UI. What *is* tested is `extension/client.js` — every request, every error path —
+against a real server, plus an assertion that the commands `extension.js` implements are
+exactly the ones `package.json` declares, since those two drift silently into a palette entry
+that throws "command not found".
 
 ## Database schema
 
@@ -835,6 +931,41 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-08-03 — Phases 5 & 6: context API, HTTP, web graph, VS Code
+
+- **`compose_context`** (CLI: `context`) — one call that assembles rules, code, docs, memory
+  and past fixes for a task, cited, with rules exempt from the token budget. See
+  [The context API](#the-context-api). Task parsing is regex plus one dictionary query; there
+  is no LLM in the hot path.
+- **`waycontext serve`** — `/health`, `/v1/ops`, `POST /v1/ops/:name`, `POST /v1/context`,
+  `/mcp` over StreamableHTTP, and the web UI at `/`. Localhost-only and it refuses to bind
+  elsewhere without an explicit opt-in, because it has no authentication.
+- **Web knowledge graph** and a **VS Code extension**, both going through
+  `POST /v1/ops/:name`, so neither hardcodes a schema and a new operation reaches both for
+  free.
+- **Extracted `buildMcpServer()`** from `src/server.js` so stdio and HTTP register tools from
+  one loop. Two copies would drift the moment one transport gained a tool the other didn't.
+- **Query-embedding cache, single-flight.** The composer's channels run in parallel and two of
+  them embed the *same* task text at the same instant, so caching only resolved values would
+  still make two API calls; the in-flight promise is what's cached. Failures are never cached,
+  and the key includes provider, model and dimension so switching provider can't serve vectors
+  from the wrong space.
+- **Fixed the composer degrading on every cold request.** One 400 ms deadline for all channels
+  meant both embedding-dependent ones always timed out — a network round trip does not fit a
+  budget meant for Postgres. The query embedding is now warmed up front on its own deadline
+  and the channels' deadline governs database time only.
+- **Fixed two parser bugs found by its own tests:** identifiers were being searched a second
+  time as plain words, because `consumed` was compared case-sensitively against lowercased
+  terms; and "and/or" was parsed as a file path, which also stripped both words out of the
+  search terms. A slash-joined candidate whose every segment is an English function word is
+  now rejected.
+- **Fixed clustering keyed on the wrong thing:** it checked whether the embedding provider was
+  switched on rather than whether vectors existed, so querying an already-embedded database
+  with `EMBEDDING_PROVIDER=none` silently dropped to keyword buckets while semantic vectors
+  sat unused.
+- **`waycontext <op>` prints text as text.** `compose_context` with `format: markdown` was
+  being JSON-encoded into one escaped line, which defeats the point of a paste-ready format.
 
 ### 2026-08-03 — Phase 4: derived intelligence
 
