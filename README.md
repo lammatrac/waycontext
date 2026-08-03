@@ -506,6 +506,18 @@ Configure with `DOCS_ENABLED`, `DOCS_GLOBS` (default `**/*.md,**/*.mdx`) and
 `DOCS_CHUNK_CHARS`. `.gitignore` and the built-in ignores still apply, so `node_modules`
 and `vendor` docs never get walked.
 
+> **Already-indexed projects need one full scan.** Re-indexing is scoped to `git diff`
+> since `projects.last_indexed_sha`, so docs that haven't been edited since your last index
+> are in no diff and will never be picked up by an incremental run. One full scan fixes it
+> permanently:
+>
+> ```sql
+> UPDATE projects SET last_indexed_sha = NULL WHERE name = 'myproject';
+> ```
+>
+> then `waycontext index myproject <path>` once. New projects need nothing — their first
+> index is a full scan anyway.
+
 ## Git history: `get_history` and `who_owns`
 
 Indexing a project also reads its git history — no configuration, no API keys, no
@@ -679,6 +691,15 @@ Re-run index_project after committing changes.
   no body of its own rides on the chunk it introduces instead of becoming a bare-title
   chunk; hard cap 8000 characters to match the input slice in `src/embeddings.js`, so
   stored text can never differ from what was embedded.
+- **`eval/recall.js` now requires ground-truth files to contain symbols.** Indexing docs
+  gives them `files` rows, which silently pulled prose-only commits into the sample — and
+  `search_code` returns symbols, so those commits were unanswerable by construction and
+  dragged recall@10 from 0.66 to 0.38 without a single retrieval path changing. Scoring a
+  symbol search against files that have no symbols measures nothing; doc retrieval needs
+  its own harness against `search_knowledge`.
+- **Enabling docs on an existing project needs one full scan** — incremental runs are
+  scoped to `git diff`, and docs untouched since the last index appear in no diff. See the
+  note under [Docs & ADRs](#docs--adrs-search_knowledge).
 - **Doc→code links are conservative.** A backticked identifier matching exactly one symbol
   becomes `entity_links(relation='MENTIONS')`; ambiguous names are left unlinked, as the
   namespaced-edge resolver already does. Path references stay in `documents.mentions` under

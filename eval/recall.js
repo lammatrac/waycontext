@@ -54,6 +54,13 @@ function parseArgs(argv) {
  *   reverts                 the message describes the undo, not the intent
  *   commits with no indexed file
  *                           unanswerable: the target isn't in the index
+ *   files with no symbols   searchCode returns symbols, so a commit that only
+ *                           touched prose (a README, an ADR) is unanswerable by
+ *                           construction. Since Phase 2 those files have `files`
+ *                           rows too, and counting them would make the score
+ *                           drop for a reason that has nothing to do with
+ *                           retrieval quality. Doc retrieval is search_knowledge's
+ *                           job and needs its own harness.
  *   sprawling commits       a 40-file refactor is a rename sweep, not a task;
  *                           including them mostly measures repo layout
  *   one-word subjects       "wip", "fixes" -- no retrievable signal
@@ -70,6 +77,7 @@ async function sampleCommits(project, { commits, minFiles, maxFiles }) {
          FROM commits c
          JOIN commit_files cf ON cf.commit_entity_id = c.entity_id
          JOIN files f ON f.project_id = c.project_id AND f.path = cf.path
+                     AND EXISTS (SELECT 1 FROM symbols s WHERE s.file_id = f.id)
         WHERE c.project_id = $1
           AND NOT c.is_merge AND NOT c.is_revert
           AND length(coalesce(c.subject, '')) >= 15
