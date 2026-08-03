@@ -148,7 +148,12 @@ async function runIndex(project, root, log) {
     try {
       const stat = fs.statSync(abs);
       if (stat.size > config.maxFileSize) { skipped++; continue; }
-      content = fs.readFileSync(abs, "utf8");
+      // Postgres text columns cannot hold 0x00 at all, so one stray NUL byte
+      // (a minified asset, a half-binary fixture) failed the whole file -- and
+      // because a failed file holds back last_indexed_sha, every later
+      // incremental run retried the same diff forever. Strip before hashing so
+      // the stored hash describes what we actually stored.
+      content = fs.readFileSync(abs, "utf8").replaceAll(String.fromCharCode(0), "");
     } catch { failed++; continue; }
 
     const hash = sha256(content);

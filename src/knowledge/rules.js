@@ -302,9 +302,11 @@ export async function proposeRules(project, log = () => {}) {
     // describes the change ("fix: don't advance the sha on failure"), not a rule
     // -- measured on this repo, every subject-derived candidate was noise. The
     // body is where a "always do X from now on" lesson actually gets written.
-    const body = (fix.body ?? "").startsWith(fix.subject ?? " ")
-      ? fix.body.slice(fix.subject.length)
-      : fix.body;
+    const subject = fix.subject ?? "";
+    const message = fix.body ?? "";
+    const body = subject && message.startsWith(subject)
+      ? message.slice(subject.length)
+      : message;
     for (const found of extractNormativeSentences(body)) {
       proposals.push({
         statement: found.sentence, scope, origin: "fix_commit", originRef: fix.sha,

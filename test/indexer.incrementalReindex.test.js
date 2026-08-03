@@ -142,6 +142,51 @@ test("a failed file does not advance last_indexed_sha, so it's retried next run"
   }
 });
 
+test("a NUL byte is stripped rather than failing the file forever", async () => {
+  const NUL_PROJECT = "indexer_nul_byte_fixture";
+  const dir = createGitRepo();
+  try {
+    await cleanupTestProject(NUL_PROJECT);
+
+    // A stray 0x00 is not exotic -- minified bundles, half-binary fixtures and
+    // (as it turned out) this project's own rule extractor all carried one.
+    // Postgres text columns cannot store it at all, so the insert threw and the
+    // whole file failed; and because a failed file holds last_indexed_sha back,
+    // every later incremental run recomputed the same diff and failed again.
+    const NUL = String.fromCharCode(0);
+    writeRepoFile(dir, "nul.js", `function withNul() { return "a${NUL}b"; }`);
+    const sha = commitAll(dir, "first");
+
+    const stats = await indexProject(NUL_PROJECT, dir);
+    assert.equal(stats.failed, 0);
+    assert.equal(stats.changed, 1);
+
+    const syms = await pool.query(
+      `SELECT s.name, s.body FROM symbols s JOIN projects p ON p.id = s.project_id
+       WHERE p.name = $1`,
+      [NUL_PROJECT]
+    );
+    assert.equal(syms.rows.length, 1);
+    assert.equal(syms.rows[0].name, "withNul");
+    assert.equal(syms.rows[0].body.includes(NUL), false, "the NUL is gone");
+    assert.match(syms.rows[0].body, /"ab"/, "and nothing around it was dropped");
+
+    // The run counts as clean, so the sha advances and the next run is a no-op.
+    const row = await pool.query(
+      `SELECT last_indexed_sha FROM projects WHERE name = $1`, [NUL_PROJECT]
+    );
+    assert.equal(row.rows[0].last_indexed_sha, sha);
+
+    // Hashing happens after the strip, so the stored hash describes what was
+    // stored and a re-run skips the file instead of rewriting it every time.
+    const again = await indexProject(NUL_PROJECT, dir);
+    assert.equal(again.changed, 0);
+  } finally {
+    await cleanupTestProject(NUL_PROJECT);
+    cleanupGitRepo(dir);
+  }
+});
+
 test("a failed file on the very first (full) scan leaves last_indexed_sha unset", async () => {
   const FAIL_PROJECT = "incremental_reindex_failure_first_run_fixture";
   const dir = createGitRepo();

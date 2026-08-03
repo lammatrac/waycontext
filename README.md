@@ -767,6 +767,17 @@ Re-run index_project after committing changes.
 
 ## Changes
 
+### 2026-08-03 — indexing robustness
+
+- **A stray NUL byte no longer fails a file — permanently.** Postgres `text` cannot hold
+  `0x00` at all, so one such byte threw on insert and failed the whole file; and because a
+  failed file deliberately holds `last_indexed_sha` back, every later incremental run
+  recomputed the same diff and failed on the same file forever. `indexProject` now strips
+  NULs at the read boundary, before hashing, so the stored hash describes what was actually
+  stored and a re-run skips the file. Found by dogfooding: `src/knowledge/rules.js` itself
+  contained one, so the rule extractor was the one file in this repo its own indexer could
+  not index.
+
 ### 2026-08-03 — Phase 3: rules & engineering memory
 
 - **`rules` and `memories`**, two more satellites of `entities`. Rules are prescriptive and
