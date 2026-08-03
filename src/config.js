@@ -113,4 +113,11 @@ export const config = {
     .map((g) => g.trim())
     .filter(Boolean),
   docsChunkChars: numeric("DOCS_CHUNK_CHARS", 4800),
+
+  // Rules + engineering memory (Phase 3). One threshold, not two: nothing is
+  // injected into context unless a human set state='active', whatever its
+  // confidence, so this only decides what is worth proposing at all.
+  rulesEnabled: setting("RULES_ENABLED", "1") !== "0",
+  ruleCandidateMinConfidence: numeric("RULE_CANDIDATE_MIN_CONFIDENCE", 0.4),
+  knowledgeDir: setting("KNOWLEDGE_DIR", ".waycontext/knowledge"),
 };
