@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import fg from "fast-glob";
 import ignore from "ignore";
+import picomatch from "picomatch";
 import { pool, toVector, getOrCreateProject } from "./db.js";
 import { parseFile, EXT_LANG } from "./parser.js";
 import { embed, embeddingsEnabled } from "./embeddings.js";
@@ -10,6 +11,7 @@ import { config } from "./config.js";
 import { getChangedFiles, getHeadSha } from "./gitDiff.js";
 import { assignSymbolKeys, matchRenames } from "./identity.js";
 import { ingestGitHistory } from "./knowledge/gitHistory.js";
+import { parseDocument } from "./knowledge/docs.js";
 
 const DEFAULT_IGNORES = [
   "node_modules/**", "vendor/**", ".git/**", "dist/**", "build/**",
@@ -47,6 +49,23 @@ function loadGlobIgnores(root) {
 
 function sha256(s) {
   return crypto.createHash("sha256").update(s).digest("hex");
+}
+
+let docMatcher = null;
+let docMatcherGlobs = null;
+
+/**
+ * Is this path a document, per config.docsGlobs? The compiled matcher is cached
+ * and rebuilt only when the glob list itself changes, since this runs once per
+ * candidate path on a full scan of a large repo.
+ */
+function isDocPath(rel) {
+  if (!config.docsEnabled) return false;
+  if (docMatcherGlobs !== config.docsGlobs) {
+    docMatcher = picomatch(config.docsGlobs, { dot: false });
+    docMatcherGlobs = config.docsGlobs;
+  }
+  return docMatcher(rel);
 }
 
 /**
@@ -87,12 +106,13 @@ async function runIndex(project, root, log) {
   let gitDeletedPaths = [];
   if (diffResult) {
     filePaths = diffResult.changed.filter(
-      (p) => EXT_LANG[path.extname(p)] && !ig.ignores(p)
+      (p) => (EXT_LANG[path.extname(p)] || isDocPath(p)) && !ig.ignores(p)
     );
     gitDeletedPaths = diffResult.deleted;
     log(`Git diff since last index: ${filePaths.length} changed, ${gitDeletedPaths.length} deleted`);
   } else {
     const patterns = Object.keys(EXT_LANG).map((ext) => `**/*${ext}`);
+    if (config.docsEnabled) patterns.push(...config.docsGlobs);
     const found = await fg(patterns, { cwd: root, dot: false, ignore: loadGlobIgnores(root) });
     filePaths = found.filter((p) => !ig.ignores(p));
     log(`Found ${filePaths.length} source files`);
@@ -117,6 +137,7 @@ async function runIndex(project, root, log) {
   // than the one the symbol left.
   const retired = [];  // { key, path, kind, name, fingerprint, entityId }
   const appeared = []; // { key, path, kind, name, fingerprint }
+  const docStats = { documents: 0, chunks: 0, embedded: 0, mentions: 0 };
 
   for (const rel of filePaths) {
     seen.add(rel);
@@ -131,6 +152,31 @@ async function runIndex(project, root, log) {
     const hash = sha256(content);
     const prev = existing.get(rel);
     if (prev && prev.hash === hash) { skipped++; continue; }
+
+    // Docs branch away from parse->symbols->edges but keep everything above
+    // this line: the same git-diff scoping, the same hash-skip, and below, the
+    // same deleted-file handling. An extension that parses wins over the doc
+    // globs, so a hypothetical `**/*.ts` in DOCS_GLOBS can't silently stop code
+    // being parsed.
+    if (!EXT_LANG[path.extname(rel)] && isDocPath(rel)) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const fileId = await upsertFileRow(client, project, prev, rel, "markdown", hash, content);
+        const written = await writeDocument(client, project, fileId, rel, content, hash);
+        await client.query("COMMIT");
+        docStats.documents++;
+        docStats.chunks += written.chunks;
+        changed++;
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        log(`DB error on ${rel}: ${e.message}`);
+        failed++;
+      } finally {
+        client.release();
+      }
+      continue;
+    }
 
     const lang = EXT_LANG[path.extname(rel)];
     let parsed;
@@ -150,7 +196,6 @@ async function runIndex(project, root, log) {
     try {
       await client.query("BEGIN");
       // upsert file; cascade-delete old symbols/edges for this file
-      let fileId;
       const prevKeys = new Set();
       if (prev) {
         // Read the outgoing keys before the DELETE below destroys them. They
@@ -175,19 +220,8 @@ async function runIndex(project, root, log) {
         }
         await client.query(`DELETE FROM symbols WHERE file_id = $1`, [prev.id]);
         await client.query(`DELETE FROM edges WHERE file_id = $1`, [prev.id]);
-        await client.query(
-          `UPDATE files SET hash = $1, loc = $2, updated_at = now() WHERE id = $3`,
-          [hash, content.split("\n").length, prev.id]
-        );
-        fileId = prev.id;
-      } else {
-        const fr = await client.query(
-          `INSERT INTO files (project_id, path, language, hash, loc)
-           VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-          [project.id, rel, lang, hash, content.split("\n").length]
-        );
-        fileId = fr.rows[0].id;
       }
+      const fileId = await upsertFileRow(client, project, prev, rel, lang, hash, content);
 
       // insert symbols
       const nameToId = new Map();
@@ -363,6 +397,37 @@ async function runIndex(project, root, log) {
     [project.id]
   );
 
+  // Resolve doc -> symbol mentions once the symbol table for this run has
+  // settled. Only unique matches are linked: pointing a document at an
+  // arbitrary one of seven same-named functions is worse than not linking it,
+  // which is the rule the namespace edge resolver above already follows.
+  //
+  // Path mentions are deliberately not resolved here -- they stay on
+  // documents.mentions under a GIN index. See 0007_documents.sql.
+  if (config.docsEnabled) {
+    const mentionRes = await pool.query(
+      `WITH mention AS (
+         SELECT d.entity_id AS doc_id,
+                jsonb_array_elements_text(coalesce(d.mentions->'identifiers', '[]'::jsonb)) AS ident
+           FROM documents d
+          WHERE d.project_id = $1
+       ),
+       resolved AS (
+         SELECT m.doc_id, min(e.id) AS sym_id, count(*) AS matches
+           FROM mention m
+           JOIN entities e
+             ON e.project_id = $1 AND e.kind = 'symbol' AND e.deleted_at IS NULL
+            AND (e.title = m.ident OR e.title LIKE '%::' || m.ident)
+          GROUP BY m.doc_id, m.ident
+       )
+       INSERT INTO entity_links (org_id, src_id, dst_id, relation)
+       SELECT $2, doc_id, sym_id, 'MENTIONS' FROM resolved WHERE matches = 1
+       ON CONFLICT (src_id, relation, dst_id) DO NOTHING`,
+      [project.id, project.org_id]
+    );
+    docStats.mentions = mentionRes.rowCount ?? 0;
+  }
+
   const identity = await reconcileIdentity(project, retired, appeared, log);
 
   let history = null;
@@ -432,6 +497,47 @@ async function runIndex(project, root, log) {
     }
   }
 
+  // Doc chunks, on exactly the same terms as symbols: the query is the whole
+  // pending set (new, edited, or left over from a crashed run), because
+  // writeDocument nulls the embedding of any chunk whose content changed.
+  if (config.docsEnabled && embeddingsEnabled()) {
+    const pending = await pool.query(
+      `SELECT c.id, c.heading_path, c.content, d.path, d.doc_type
+         FROM chunks c JOIN documents d ON d.entity_id = c.entity_id
+        WHERE c.project_id = $1 AND c.embedding IS NULL
+        ORDER BY c.id`,
+      [project.id]
+    );
+    if (pending.rows.length) {
+      log(`Embedding ${pending.rows.length} doc chunk(s)…`);
+      const CHUNK_BATCH = 32;
+      for (let i = 0; i < pending.rows.length; i += CHUNK_BATCH) {
+        const batch = pending.rows.slice(i, i + CHUNK_BATCH);
+        let vectors;
+        try {
+          vectors = await embed(
+            batch.map((r) =>
+              [`// ${r.path} (${r.doc_type})`, r.heading_path || "", r.content].join("\n")
+            ),
+            "document",
+            project.id
+          );
+        } catch (e) {
+          log(`Chunk embedding batch failed (${batch.length} chunks): ${e.message}`);
+          continue;
+        }
+        for (let j = 0; j < vectors.length; j++) {
+          if (!vectors[j]) continue;
+          await pool.query(`UPDATE chunks SET embedding = $1 WHERE id = $2`, [
+            toVector(vectors[j]),
+            batch[j].id,
+          ]);
+          docStats.embedded++;
+        }
+      }
+    }
+  }
+
   // Only advance last_indexed_sha when the whole run succeeded. If any file
   // failed (transient read/parse/DB error), leave the stored sha where it
   // was: the next run will re-diff from the same base, already-succeeded
@@ -457,7 +563,123 @@ async function runIndex(project, root, log) {
     total: filePaths.length, // candidates considered this run, not project size in diff mode
     identity,
     history,
+    docs: config.docsEnabled ? docStats : null,
   };
+}
+
+/**
+ * Upsert the `files` row for a path and return its id.
+ *
+ * Shared by the code and doc branches: `files.hash` is what makes the
+ * incremental skip work, and there is no reason for two implementations of it.
+ * `language` is updated on the way through, so a path that changes kind (or an
+ * old row written before docs were indexed) converges instead of lying.
+ */
+async function upsertFileRow(client, project, prev, rel, language, hash, content) {
+  const loc = content.split("\n").length;
+  if (prev) {
+    await client.query(
+      `UPDATE files SET hash = $1, loc = $2, language = $3, updated_at = now() WHERE id = $4`,
+      [hash, loc, language, prev.id]
+    );
+    return prev.id;
+  }
+  const fr = await client.query(
+    `INSERT INTO files (project_id, path, language, hash, loc)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [project.id, rel, language, hash, loc]
+  );
+  return fr.rows[0].id;
+}
+
+/**
+ * Persist one document: its entity, its satellite row, and its chunks.
+ *
+ * The chunk upsert nulls `embedding` only where `content_hash` actually
+ * changed, which is what makes "edit one heading in a 40-section ADR, re-embed
+ * one chunk" true rather than aspirational. The run's embedding phase then
+ * picks up exactly those rows through its `embedding IS NULL` query -- the same
+ * path that heals a crashed run, so there is one recovery mechanism instead of
+ * two.
+ */
+async function writeDocument(client, project, fileId, rel, content, hash) {
+  const doc = parseDocument(rel, content, { target: config.docsChunkChars });
+
+  const er = await client.query(
+    `INSERT INTO entities (org_id, project_id, kind, natural_key, title, summary, source, data)
+     VALUES ($1,$2,'document',$3,$4,$5,'parsed',$6)
+     ON CONFLICT (project_id, kind, natural_key) DO UPDATE
+        SET title      = EXCLUDED.title,
+            summary    = EXCLUDED.summary,
+            data       = entities.data || EXCLUDED.data,
+            deleted_at = NULL,
+            updated_at = now()
+     RETURNING id`,
+    [
+      project.org_id, project.id, rel, doc.title,
+      // An ADR's decision is the one line worth carrying on the entity itself;
+      // everything else is reachable through the satellite or the chunks.
+      doc.adr?.decision ?? null,
+      JSON.stringify({ doc_type: doc.docType, path: rel }),
+    ]
+  );
+  const entityId = er.rows[0].id;
+
+  await client.query(
+    `INSERT INTO documents (entity_id, org_id, project_id, file_id, path, doc_type, title,
+                            frontmatter, adr, mentions, content_hash, chunk_count)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (project_id, path) DO UPDATE
+        SET entity_id    = EXCLUDED.entity_id,
+            file_id      = EXCLUDED.file_id,
+            doc_type     = EXCLUDED.doc_type,
+            title        = EXCLUDED.title,
+            frontmatter  = EXCLUDED.frontmatter,
+            adr          = EXCLUDED.adr,
+            mentions     = EXCLUDED.mentions,
+            content_hash = EXCLUDED.content_hash,
+            chunk_count  = EXCLUDED.chunk_count,
+            updated_at   = now()`,
+    [
+      entityId, project.org_id, project.id, fileId, rel, doc.docType, doc.title,
+      JSON.stringify(doc.frontmatter),
+      doc.adr ? JSON.stringify(doc.adr) : null,
+      JSON.stringify(doc.mentions),
+      hash, doc.chunks.length,
+    ]
+  );
+
+  if (doc.chunks.length) {
+    await client.query(
+      `INSERT INTO chunks (org_id, project_id, entity_id, ord, heading_path, content,
+                           content_hash, token_estimate)
+       SELECT $1, $2, $3, u.ord, u.hp, u.content, u.hash, u.tok
+         FROM unnest($4::int[], $5::text[], $6::text[], $7::text[], $8::int[])
+              AS u(ord, hp, content, hash, tok)
+       ON CONFLICT (entity_id, ord) DO UPDATE
+          SET heading_path   = EXCLUDED.heading_path,
+              content        = EXCLUDED.content,
+              content_hash   = EXCLUDED.content_hash,
+              token_estimate = EXCLUDED.token_estimate,
+              embedding      = CASE WHEN chunks.content_hash = EXCLUDED.content_hash
+                                    THEN chunks.embedding ELSE NULL END`,
+      [
+        project.org_id, project.id, entityId,
+        doc.chunks.map((c) => c.ord),
+        doc.chunks.map((c) => c.headingPath),
+        doc.chunks.map((c) => c.content),
+        doc.chunks.map((c) => c.contentHash),
+        doc.chunks.map((c) => c.tokenEstimate),
+      ]
+    );
+  }
+  // A document that lost sections leaves higher ords behind.
+  await client.query(`DELETE FROM chunks WHERE entity_id = $1 AND ord >= $2`, [
+    entityId,
+    doc.chunks.length,
+  ]);
+
+  return { entityId, chunks: doc.chunks.length };
 }
 
 /**
