@@ -29,6 +29,7 @@ import {
   searchCode, getSymbol, getCallers, getCallees,
   getSubgraph, getFileOutline, getProjectOverview, findRelated,
 } from "./graph.js";
+import { getHistory, whoOwns } from "./knowledge/history.js";
 
 const project = z.string().describe("Indexed project name (see list_projects)");
 const limit = z.coerce.number().int().min(1).max(30).default(10);
@@ -127,6 +128,44 @@ export const operations = [
     input: { project, name: z.string(), limit },
     cli: { args: ["project", "name", "limit"], label: (a) => `Finding symbols related to "${a.name}"` },
     handler: (a) => findRelated(a.project, a.name, a.limit),
+  },
+  {
+    name: "get_history",
+    description:
+      "Why is this code the way it is? Returns the commits that touched a file, symbol or directory — newest first — with author, date, whether it was a fix or a revert, and any issue/ticket numbers referenced in the message. Answers 'what broke last time someone touched this' and 'which ticket introduced this behaviour'. Omit `target` for recent project-wide history. Symbols keep their history across renames and file moves.",
+    input: {
+      project,
+      target: z
+        .string()
+        .optional()
+        .describe("File path relative to the project root, a symbol name, or a directory. Omit for the whole project."),
+      limit: z.coerce.number().int().min(1).max(100).default(20),
+    },
+    cli: {
+      args: ["project", "target", "limit"],
+      aliases: ["history"],
+      label: (a) => (a.target ? `Reading history of "${a.target}"` : "Reading project history"),
+    },
+    handler: (a) => getHistory(a.project, a.target, a.limit),
+  },
+  {
+    name: "who_owns",
+    description:
+      "Who should you ask about this code? Ranks contributors to a file, symbol or directory by recency-weighted authorship, so the answer is whoever still has it in their head rather than whoever wrote the most lines in 2019. Returns commit counts, how many of those were fixes, first/last touch and their most recent change. Omit `target` to rank contributors across the whole project.",
+    input: {
+      project,
+      target: z
+        .string()
+        .optional()
+        .describe("File path relative to the project root, a symbol name, or a directory. Omit for the whole project."),
+      limit: z.coerce.number().int().min(1).max(50).default(10),
+    },
+    cli: {
+      args: ["project", "target", "limit"],
+      aliases: ["owners"],
+      label: (a) => (a.target ? `Finding owners of "${a.target}"` : "Ranking project contributors"),
+    },
+    handler: (a) => whoOwns(a.project, a.target, a.limit),
   },
 ];
 

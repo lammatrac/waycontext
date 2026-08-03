@@ -342,10 +342,12 @@ Usage tracking only covers calls made after upgrading to this version — run `w
 | `get_graph` | BFS subgraph around a symbol (depth 1–4) — feature wiring map. |
 | `get_file_outline` | All symbols in one file. |
 | `find_related` | Semantically similar symbols — discover a feature's full surface. |
+| `get_history` | Commits that touched a file, symbol or directory, with issue refs — "what broke last time someone touched this?" |
+| `who_owns` | Recency-weighted contributors for a file, symbol or directory — "who should I ask about this?" |
 
 ## Database schema
 
-Everything is stored in 4 Postgres tables, one project's worth of code broken down into files → symbols → edges. Browse them directly with `waycontext tables` / `waycontext db` (see [CLI](#3-cli)).
+Parsed code is stored as files → symbols → edges; on top of that sit the identity and knowledge tables described under [Stable identity](#stable-identity-symbol-keys-and-entities). Browse any of them directly with `waycontext tables` / `waycontext db` (see [CLI](#3-cli)).
 
 The schema is defined by numbered SQL files in `src/migrations/`, applied in order and recorded once each in a `schema_migrations` ledger. `init-db` and `migrate` are the same operation; the MCP server also runs it at startup, so an install is never left on an older schema. A session-level advisory lock serializes concurrent runners, each file runs in its own transaction, and `${EMBEDDING_DIM}` is substituted from your `.env` before execution. Migrations are forward-only — there are no down migrations. `0001_baseline.sql` is the schema as it existed before the runner and is written entirely with `IF NOT EXISTS`, so it applies as a no-op to databases created by earlier versions; nothing needs to be dumped or recreated when upgrading.
 
@@ -433,6 +435,113 @@ One row per embedding API call (indexing a batch of symbols, or embedding a `sea
 
 Indexed on `project_id` and on `(provider, model)`.
 
+## Git history: `get_history` and `who_owns`
+
+Indexing a project also reads its git history — no configuration, no API keys, no
+network. `index_project` runs one streaming `git log` pass and records commits, per-file
+churn, contributor identities (via `.mailmap`), and any issue numbers mentioned in commit
+messages.
+
+```bash
+waycontext history  myproject src/auth/jwt.php     # what happened to this, and why
+waycontext owners   myproject verifyToken          # who to ask about it
+waycontext history  myproject                      # recent project-wide activity
+```
+
+The target can be a **file path**, a **symbol name** or a **directory** — or omitted for
+the whole project.
+
+**Ownership decays.** `who_owns` weights each commit by `exp(-ln2 · age / half-life)`,
+with a 180-day half-life (`OWNERSHIP_HALF_LIFE_DAYS`). A plain commit count answers "who
+wrote most of this in 2019", which is not who you want to ask today. Merge commits are
+excluded — they rank whoever runs the integrations, not whoever understands the code.
+
+**Issue references work with zero integrations.** `#1532`, `PROJ-1532`, `fixes #34` and
+tracker URLs are pulled out of commit messages, and a referenced issue that has no
+ingested record still gets an entity row, marked `source = 'inferred'`. So
+issue↔code linkage works before you have connected anything; a real Jira or GitHub
+connector later fills in title/state/labels on the same rows rather than replacing them.
+
+**History survives file moves.** Ask for a symbol's history and you get it from before
+the file was renamed, because the symbol's identity is tracked separately from its
+location — see [Stable identity](#stable-identity-symbol-keys-and-entities).
+
+Incremental on re-index via `projects.last_history_sha`, with the same
+`merge-base --is-ancestor` guard as the code index: if history was rewritten, it falls
+back to a full pass instead of silently skipping commits. The first pass over a
+repository is bounded by `HISTORY_WINDOW_MONTHS` (24) and `HISTORY_MAX_COMMITS` (20000);
+set either to `0` to remove the bound, or `HISTORY_ENABLED=0` to skip history entirely.
+
+## Stable identity: symbol keys and entities
+
+`symbols` is disposable by design — re-indexing a changed file deletes and reinserts
+every symbol in it, so `symbols.id` is reassigned constantly. Nothing durable can be
+attached to an id like that, which is why there is a second layer:
+
+| Plane | Tables | Lifecycle |
+|---|---|---|
+| Parse | `files`, `symbols`, `edges` | rebuilt from source, ids churn |
+| Identity | `entities`, `symbol_aliases` | append + tombstone, ids never reused |
+| Knowledge | `commits`, `commit_files`, `people`, `issues`, `entity_links`, `chunks` | durable |
+
+Every symbol gets a **symbol key** — `src/graph.js#function:searchCode`, with a `~n`
+suffix for duplicates in one file — and an `entities` row keyed on it. Deliberately
+*not* a content hash: a content hash changes on every edit, which is exactly the moment
+the link has to survive.
+
+When a symbol moves or its file is renamed, the index run pairs the key that vanished
+with the key that appeared (by identical body fingerprint, then by identical kind and
+name) and carries the **same entity** across, recording the old key in `symbol_aliases`.
+A symbol that genuinely goes away is tombstoned with `deleted_at`, not deleted — if it
+comes back, it gets its original id back. Renaming an identifier *in place* is not
+matched, and reads as delete + create: the declaration is part of the body, so both the
+name and the fingerprint changed, and nothing is left that distinguishes it from two
+unrelated edits.
+
+**Upgrading an existing install.** Symbols indexed before this existed have no key and no
+entity. They pick one up for free the next time their file changes, so nothing is
+required of you. To do it now, without reparsing anything:
+
+```bash
+waycontext backfill-identity                 # all projects
+waycontext backfill-identity myproject       # one project
+waycontext backfill-identity --status --json # what's left to do
+```
+
+It is batched by file, resumable, and safe to interrupt. This is a command rather than
+part of the migration on purpose: `symbols` carries a `vector(1024)` column, a stored
+generated `tsvector` and a multi-gigabyte HNSW index, so any statement touching every row
+rewrites the whole heap and re-inserts every vector into the HNSW graph. On a 326k-symbol
+database that measured **over 12 minutes** — and migrations run at MCP server startup,
+which would have meant 12 minutes of a client that looks hung.
+
+## Retrieval quality: `eval/`
+
+Every repository ships its own labelled dataset for free. A commit is a natural-language
+description of an intent paired with the exact set of files that intent turned out to
+touch — so replaying commits measures retrieval against real ground truth, in your
+codebase, in your domain vocabulary, with nothing to annotate.
+
+```bash
+npm run eval -- myproject --commits 100 --k 10
+```
+
+Reports `recall@k` (of the files a commit touched, what fraction came back in the top k),
+hit rate, and MRR. Merges, reverts, one-word subjects and sprawling refactors are
+excluded; sampling is a deterministic stride, so two runs score the same commits and a
+before/after comparison means something.
+
+Read the absolute number sceptically — a commit message is a lossy description of a diff,
+so perfect recall is neither achievable nor the goal. It is for comparing WayContext to
+WayContext across a retrieval change.
+
+> **Finding from the first run:** with `EMBEDDING_PROVIDER=none`, recall@10 on this
+> repository's own history is **0.00** — `plainto_tsquery` ANDs every term, so a
+> natural-language query returns nothing at all unless one symbol happens to contain all
+> of its words. With embeddings on, the same 26 commits score recall@10 **0.66**, hit rate
+> **0.92**, MRR **0.73**. The "degrades gracefully to full-text" story does not currently
+> hold for natural-language queries.
+
 ## How `search_code` works
 
 `search_code` is a hybrid search: it always runs a Postgres full-text query, and — when an embedding provider is configured — also runs a pgvector nearest-neighbor query, then merges the two ranked lists with Reciprocal Rank Fusion (RRF). (New to any of these terms? See [Algorithms & concepts explained](#algorithms--concepts-explained).)
@@ -469,6 +578,42 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-08-03 — Phase 1: identity + git history
+
+- **Git history ingestion.** `index_project` now also reads the repository's git history
+  in one streaming `git log` pass — commits, per-file churn, `.mailmap`-resolved
+  contributor identities, co-author trailers, fix/revert/merge classification and issue
+  references. No subprocess per commit: the existing `execFile` approach in `gitDiff.js`
+  is fine for a diff and would buffer a 100k-commit log into a single string. Incremental
+  via `projects.last_history_sha`, bounded on first pass by `HISTORY_WINDOW_MONTHS` /
+  `HISTORY_MAX_COMMITS`, and it never fails an index — a directory that isn't a git repo
+  just reports no history.
+- **New tools `get_history` and `who_owns`** (CLI: `history`, `owners`), accepting a file,
+  a symbol, a directory or nothing. Ownership is recency-weighted with a 180-day
+  half-life, because a raw commit count tells you who wrote it, not who remembers it.
+- **Stub issues.** An issue referenced by a commit gets an entity even with no tracker
+  configured, so issue↔code linkage works before anything is connected. A connector
+  later enriches the same rows.
+- **The identity plane** — `entities`, `entity_links`, `symbol_aliases`, plus
+  `symbol_key` / `body_fingerprint` / `entity_id` on `symbols`. Symbols now have an id
+  that survives reindexing, renames and file moves, which is what any durable knowledge
+  has to attach to. Moved symbols carry their entity across and record an alias; deleted
+  ones are tombstoned and get their original id back if they return.
+- **`waycontext backfill-identity`** for existing installs, batched and resumable. This
+  deliberately did *not* go in the migration: the same work as three `UPDATE`s over
+  `symbols` took **over 12 minutes** on a 326k-symbol database, because the table carries
+  a `vector(1024)` column, a stored generated `tsvector` and a 1.6 GB HNSW index — and
+  migrations run at MCP server startup. Nothing depends on having run it; new indexing
+  populates identity at INSERT time.
+- **`eval/`** — retrieval-quality harness replaying real commits from a repository's own
+  history. First result on this repo: recall@10 **0.66** / hit rate **0.92** / MRR
+  **0.73** with embeddings on, and **0.00** with them off, because `plainto_tsquery` ANDs
+  every term. Full-text-only mode does not currently answer natural-language queries at
+  all; that is now a measured number rather than a suspicion.
+- 66 new tests (146 → 212). Also fixed a pre-existing test guard that checked for an API
+  key but not whether the provider was enabled, so `EMBEDDING_PROVIDER=none npm test`
+  crashed instead of skipping when a key was present in `.env`.
 
 ### 2026-08-02 — v0.2.0
 

@@ -97,6 +97,27 @@ jobs:
           node src/cli.js index_project ci_selftest "$GITHUB_WORKSPACE"
           node src/cli.js search_code ci_selftest "index a project directory" 3
           node src/cli.js get_file_outline ci_selftest src/operations.js
+
+          # Git history rides the same index run. actions/checkout defaults to
+          # depth 1, so a shallow clone has exactly one commit -- which is
+          # still enough to prove the ingest path and both query surfaces work.
+          node src/cli.js history ci_selftest src/indexer.js 5
+          node src/cli.js who_owns ci_selftest src/indexer.js 5
+          node src/cli.js history ci_selftest | grep -q '"total_commits"'
+          # Every symbol the indexer wrote must already carry its identity.
+          # If it doesn't, the backfill command has quietly become mandatory
+          # for new data instead of being an upgrade path for old data.
+          status=$(node src/cli.js backfill-identity ci_selftest --status --json)
+          echo "$status"
+          node -e '
+            const rows = JSON.parse(process.argv[1]);
+            const bad = rows.filter((r) => r.unlinked > 0 || r.unkeyed > 0);
+            if (bad.length) {
+              console.error("::error::indexer left symbols without an entity: " + JSON.stringify(bad));
+              process.exit(1);
+            }
+          ' "$status"
+
           node src/cli.js delete_project ci_selftest --yes
           # Argument validation must reject out-of-range input, not clamp it.
           if node src/cli.js search_code ci_selftest q 9999 2>/dev/null; then

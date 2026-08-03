@@ -2,13 +2,17 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { pool, initDb, toVector } from "../src/db.js";
 import { searchCode } from "../src/graph.js";
-import { embed } from "../src/embeddings.js";
+import { embed, embeddingsEnabled } from "../src/embeddings.js";
 import {
   createTestProject, insertTestFile, insertTestSymbol, cleanupTestProject,
 } from "./helpers/testProject.js";
 
 const PROJECT_FUSED = "hybrid_search_code_fused_fixture";
-const hasEmbeddingKey = Boolean(process.env.VOYAGE_API_KEY || process.env.OPENAI_API_KEY);
+// A key alone isn't enough: with a key in .env but EMBEDDING_PROVIDER=none --
+// how you'd run the suite locally without spending credits -- embed() returns
+// nulls and this test used to die on toVector(null) rather than skipping.
+const canEmbed =
+  embeddingsEnabled() && Boolean(process.env.VOYAGE_API_KEY || process.env.OPENAI_API_KEY);
 
 before(async () => {
   await initDb();
@@ -22,7 +26,7 @@ after(async () => {
 
 test(
   "fused search surfaces a vector-only match when embeddings are enabled",
-  { skip: !hasEmbeddingKey && "no VOYAGE_API_KEY/OPENAI_API_KEY set" },
+  { skip: !canEmbed && "embeddings disabled or no VOYAGE_API_KEY/OPENAI_API_KEY set" },
   async () => {
     const project = await createTestProject(PROJECT_FUSED);
     const fileId = await insertTestFile(project.id, "auth.js");

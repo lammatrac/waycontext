@@ -8,6 +8,8 @@ import { parseFile, EXT_LANG } from "./parser.js";
 import { embed, embeddingsEnabled } from "./embeddings.js";
 import { config } from "./config.js";
 import { getChangedFiles, getHeadSha } from "./gitDiff.js";
+import { assignSymbolKeys, matchRenames } from "./identity.js";
+import { ingestGitHistory } from "./knowledge/gitHistory.js";
 
 const DEFAULT_IGNORES = [
   "node_modules/**", "vendor/**", ".git/**", "dist/**", "build/**",
@@ -108,6 +110,14 @@ async function runIndex(project, root, log) {
   let changed = 0, skipped = 0, failed = 0;
   const pendingEmbeds = []; // { symbolId, text }
 
+  // Identity bookkeeping for the whole run. Every symbol key that went away
+  // and every key that turned up gets recorded here, and the two lists are
+  // reconciled once at the end -- a rename can only be recognised by looking
+  // at both sides, and the "new" side may live in a file processed much later
+  // than the one the symbol left.
+  const retired = [];  // { key, path, kind, name, fingerprint, entityId }
+  const appeared = []; // { key, path, kind, name, fingerprint }
+
   for (const rel of filePaths) {
     seen.add(rel);
     const abs = path.join(root, rel);
@@ -132,12 +142,37 @@ async function runIndex(project, root, log) {
       continue;
     }
 
+    const keyed = assignSymbolKeys(rel, parsed.symbols);
+    const fileRetired = [];
+    const fileAppeared = [];
+
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       // upsert file; cascade-delete old symbols/edges for this file
       let fileId;
+      const prevKeys = new Set();
       if (prev) {
+        // Read the outgoing keys before the DELETE below destroys them. They
+        // are the only evidence that a symbol used to exist here, which is
+        // what the rename pass needs to tell "moved" apart from "deleted".
+        const outgoing = await client.query(
+          `SELECT symbol_key, kind, name, body_fingerprint, entity_id
+             FROM symbols WHERE file_id = $1`,
+          [prev.id]
+        );
+        for (const row of outgoing.rows) {
+          if (!row.symbol_key) continue;
+          prevKeys.add(row.symbol_key);
+          fileRetired.push({
+            key: row.symbol_key,
+            path: rel,
+            kind: row.kind,
+            name: row.name,
+            fingerprint: row.body_fingerprint,
+            entityId: row.entity_id,
+          });
+        }
         await client.query(`DELETE FROM symbols WHERE file_id = $1`, [prev.id]);
         await client.query(`DELETE FROM edges WHERE file_id = $1`, [prev.id]);
         await client.query(
@@ -156,14 +191,20 @@ async function runIndex(project, root, log) {
 
       // insert symbols
       const nameToId = new Map();
-      for (const s of parsed.symbols) {
+      for (const [i, s] of parsed.symbols.entries()) {
+        const { key, fingerprint } = keyed[i];
         const sr = await client.query(
-          `INSERT INTO symbols (project_id, file_id, name, kind, signature, doc, start_line, end_line, body)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-          [project.id, fileId, s.name, s.kind, s.signature, s.doc, s.startLine, s.endLine, s.body]
+          `INSERT INTO symbols (project_id, file_id, name, kind, signature, doc, start_line, end_line, body,
+                                symbol_key, body_fingerprint)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+          [project.id, fileId, s.name, s.kind, s.signature, s.doc, s.startLine, s.endLine, s.body,
+           key, fingerprint]
         );
         const id = sr.rows[0].id;
         nameToId.set(s.name, id);
+        if (!prevKeys.has(key)) {
+          fileAppeared.push({ key, path: rel, kind: s.kind, name: s.name, fingerprint });
+        }
         if (embeddingsEnabled()) {
           const embedText = [
             `// ${rel} (${s.kind} ${s.name})`,
@@ -183,7 +224,45 @@ async function runIndex(project, root, log) {
           [project.id, srcId, r.dstName, r.relation, fileId, r.line]
         );
       }
+
+      // Give every symbol in this file its durable entity, in two statements
+      // regardless of how many symbols there are. Immaterial next to the
+      // per-symbol INSERTs above, let alone the embedding round-trips.
+      if (keyed.length) {
+        await client.query(
+          `INSERT INTO entities (org_id, project_id, kind, natural_key, title, source, data)
+           SELECT $1, $2, 'symbol', u.k, u.title, 'parsed',
+                  jsonb_build_object('kind', u.kind, 'path', $3::text, 'fingerprint', u.fp)
+             FROM unnest($4::text[], $5::text[], $6::text[], $7::text[]) AS u(k, title, kind, fp)
+           ON CONFLICT (project_id, kind, natural_key) DO UPDATE
+              SET title      = EXCLUDED.title,
+                  data       = entities.data || EXCLUDED.data,
+                  deleted_at = NULL,
+                  updated_at = now()`,
+          [
+            project.org_id, project.id, rel,
+            keyed.map((k) => k.key),
+            parsed.symbols.map((s) => s.name),
+            parsed.symbols.map((s) => s.kind),
+            keyed.map((k) => k.fingerprint),
+          ]
+        );
+        await client.query(
+          `UPDATE symbols s SET entity_id = e.id
+             FROM entities e
+            WHERE s.file_id = $1
+              AND e.project_id = $2 AND e.kind = 'symbol'
+              AND e.natural_key = s.symbol_key`,
+          [fileId, project.id]
+        );
+      }
+
       await client.query("COMMIT");
+      // Only after the commit: a rolled-back file changed nothing, and
+      // reconciling against keys that were never actually retired would
+      // tombstone entities that are still very much alive.
+      retired.push(...fileRetired);
+      appeared.push(...fileAppeared);
       changed++;
     } catch (e) {
       await client.query("ROLLBACK");
@@ -196,20 +275,34 @@ async function runIndex(project, root, log) {
 
   // remove deleted files
   let removed = 0;
+  const dropFile = async (relPath, row) => {
+    // A file being deleted is the commonest way a symbol "moves": the same
+    // function turns up in another file in the same run. Capture the keys
+    // before the cascade takes them so the rename pass can see it.
+    const outgoing = await pool.query(
+      `SELECT symbol_key, kind, name, body_fingerprint, entity_id
+         FROM symbols WHERE file_id = $1`,
+      [row.id]
+    );
+    for (const s of outgoing.rows) {
+      if (!s.symbol_key) continue;
+      retired.push({
+        key: s.symbol_key, path: relPath, kind: s.kind, name: s.name,
+        fingerprint: s.body_fingerprint, entityId: s.entity_id,
+      });
+    }
+    await pool.query(`DELETE FROM files WHERE id = $1`, [row.id]);
+    removed++;
+  };
+
   if (diffResult) {
     for (const relPath of gitDeletedPaths) {
       const row = existing.get(relPath);
-      if (row) {
-        await pool.query(`DELETE FROM files WHERE id = $1`, [row.id]);
-        removed++;
-      }
+      if (row) await dropFile(relPath, row);
     }
   } else {
     for (const [relPath, row] of existing) {
-      if (!seen.has(relPath)) {
-        await pool.query(`DELETE FROM files WHERE id = $1`, [row.id]);
-        removed++;
-      }
+      if (!seen.has(relPath)) await dropFile(relPath, row);
     }
   }
 
@@ -269,6 +362,21 @@ async function runIndex(project, root, log) {
      WHERE e.id = c.edge_id AND c.matches = 1`,
     [project.id]
   );
+
+  const identity = await reconcileIdentity(project, retired, appeared, log);
+
+  let history = null;
+  if (config.historyEnabled) {
+    try {
+      history = await ingestGitHistory(project, root, log);
+      if (history.commits) log(`Git history: ${history.commits} commit(s) (${history.mode})`);
+    } catch (e) {
+      // History is additive knowledge. A repo without git, a shallow clone, or
+      // a git binary that isn't there must not fail the code index.
+      log(`Git history skipped: ${e.message}`);
+      history = { mode: "failed", commits: 0, error: e.message };
+    }
+  }
 
   // embeddings
   if (embeddingsEnabled()) {
@@ -347,5 +455,126 @@ async function runIndex(project, root, log) {
     mode: diffResult ? "diff" : "full",
     changed, skipped, removed, failed,
     total: filePaths.length, // candidates considered this run, not project size in diff mode
+    identity,
+    history,
   };
+}
+
+/**
+ * Close the identity plane for this run: match renames, then tombstone what
+ * genuinely went away.
+ *
+ * Runs once per index run rather than per file because a rename is only
+ * visible from both ends. The per-file transaction has already created a fresh
+ * entity for the new key; where that turns out to be a renamed or moved
+ * symbol, the fresh entity is discarded and the original is carried over to
+ * the new key instead, with the old key kept as an alias. Anything a knowledge
+ * row was attached to therefore survives the rename, which is the entire point
+ * of the plane.
+ */
+async function reconcileIdentity(project, retired, appeared, log) {
+  const result = { retired: retired.length, appeared: appeared.length, renamed: 0, tombstoned: 0 };
+  if (!retired.length) return result;
+
+  // A key that was rewritten in place (file edited, symbol unchanged) shows up
+  // in both lists; it never left, so it is neither a rename nor a death.
+  const stillPresent = await pool.query(
+    `SELECT symbol_key FROM symbols WHERE project_id = $1 AND symbol_key = ANY($2)`,
+    [project.id, retired.map((r) => r.key)]
+  );
+  const alive = new Set(stillPresent.rows.map((r) => r.symbol_key));
+  const gone = retired.filter((r) => !alive.has(r.key) && r.entityId);
+  if (!gone.length) return result;
+
+  const renames = matchRenames(gone, appeared);
+  const renamedOldKeys = new Set(renames.map((r) => r.oldKey));
+  const appearedByKey = new Map(appeared.map((a) => [a.key, a]));
+  const tombstones = gone.filter((r) => !renamedOldKeys.has(r.key)).map((r) => r.entityId);
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    if (renames.length) {
+      const oldIds = renames.map((r) => r.entityId);
+      const newKeys = renames.map((r) => r.newKey);
+
+      // Discard the entity the per-file pass minted for the new key. It is
+      // seconds old and cannot have acquired any links yet; the guard just
+      // makes sure a self-match could never delete the entity being kept.
+      await client.query(
+        `DELETE FROM entities
+          WHERE project_id = $1 AND kind = 'symbol'
+            AND natural_key = ANY($2) AND NOT (id = ANY($3))`,
+        [project.id, newKeys, oldIds]
+      );
+      // The new key is live again, so it must not also be somebody's alias.
+      await client.query(
+        `DELETE FROM symbol_aliases WHERE project_id = $1 AND symbol_key = ANY($2)`,
+        [project.id, newKeys]
+      );
+      await client.query(
+        // The fingerprint has to be re-stamped, not just the path: a rename
+        // matched by kind+name (rather than by fingerprint) is precisely the
+        // case where the body changed on the way, and leaving the old hash
+        // here would make the next run's match work off stale evidence.
+        `UPDATE entities e
+            SET natural_key = u.new_key,
+                title       = COALESCE(u.new_title, e.title),
+                data        = e.data || jsonb_build_object(
+                                'path', u.new_path, 'fingerprint', u.new_fp),
+                deleted_at  = NULL,
+                updated_at  = now()
+           FROM unnest($2::bigint[], $3::text[], $4::text[], $5::text[], $6::text[])
+                AS u(id, new_key, new_path, new_title, new_fp)
+          WHERE e.id = u.id AND e.project_id = $1`,
+        [
+          project.id, oldIds, newKeys,
+          renames.map((r) => r.newPath),
+          renames.map((r) => appearedByKey.get(r.newKey)?.name ?? null),
+          renames.map((r) => appearedByKey.get(r.newKey)?.fingerprint ?? null),
+        ]
+      );
+      await client.query(
+        `UPDATE symbols s SET entity_id = u.id
+           FROM unnest($2::bigint[], $3::text[]) AS u(id, key)
+          WHERE s.project_id = $1 AND s.symbol_key = u.key`,
+        [project.id, oldIds, newKeys]
+      );
+      await client.query(
+        `INSERT INTO symbol_aliases (org_id, project_id, entity_id, symbol_key, path, reason)
+         SELECT $1, $2, u.id, u.old_key, u.old_path, u.reason
+           FROM unnest($3::bigint[], $4::text[], $5::text[], $6::text[])
+                AS u(id, old_key, old_path, reason)
+         ON CONFLICT (project_id, symbol_key) DO UPDATE
+            SET entity_id = EXCLUDED.entity_id, reason = EXCLUDED.reason`,
+        [
+          project.org_id, project.id, oldIds,
+          renames.map((r) => r.oldKey),
+          renames.map((r) => r.oldPath),
+          renames.map((r) => r.reason),
+        ]
+      );
+      result.renamed = renames.length;
+    }
+
+    if (tombstones.length) {
+      await client.query(
+        `UPDATE entities SET deleted_at = now(), updated_at = now()
+          WHERE id = ANY($1) AND deleted_at IS NULL`,
+        [tombstones]
+      );
+      result.tombstoned = tombstones.length;
+    }
+
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    log(`Identity reconciliation failed: ${e.message}`);
+  } finally {
+    client.release();
+  }
+
+  if (result.renamed) log(`Tracked ${result.renamed} renamed/moved symbol(s)`);
+  return result;
 }

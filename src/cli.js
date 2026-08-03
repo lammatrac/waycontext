@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
 import { migrationStatus } from "./migrate.js";
+import { backfillProjectIdentity, identityBackfillStatus } from "./backfillIdentity.js";
 import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
 import { config } from "./config.js";
@@ -102,6 +103,8 @@ function buildHelp() {
     "Commands:",
     "  init-db",
     "  migrate [--status]                    apply pending SQL migrations, or just report their state",
+    "  backfill-identity [project] [--status] [--json]",
+    "                                        give pre-existing symbols stable keys + entities (batched, resumable)",
     "  init                                  interactively write/update the CLAUDE.md Code Context MCP section",
     "  hook install [--global] [--mode M]    install the opt-in search hook (M: advise|ask|deny, default advise)",
     "  hook uninstall [--global]             remove the search hook",
@@ -216,6 +219,49 @@ async function main() {
           : `No pending migrations (${result.skipped} already applied).`
       );
       for (const w of result.warnings) console.warn(`Warning: ${w}`);
+      break;
+    }
+    case "backfill-identity": {
+      // Symbols indexed before migration 0006 have no symbol_key and no
+      // entity, so nothing durable can be attached to them yet. They would
+      // acquire one anyway the next time their file changes; this does it now
+      // without waiting for that, and without reparsing a line.
+      await initDb();
+      const [maybeProject] = args.filter((a) => !a.startsWith("--"));
+
+      if (args.includes("--status")) {
+        const target = maybeProject ? await getProject(maybeProject) : null;
+        if (maybeProject && !target) usageAndExit(`Project "${maybeProject}" not found.`);
+        const rows = await identityBackfillStatus(target?.id ?? null);
+        // --json so this is scriptable: a table is unparseable, and CI needs
+        // to assert on the numbers, not eyeball them.
+        if (args.includes("--json")) printJson(rows);
+        else console.table(rows);
+        break;
+      }
+
+      const targets = maybeProject
+        ? [await getProject(maybeProject)].filter(Boolean)
+        : await listProjects();
+      if (!targets.length) usageAndExit(`Project "${maybeProject}" not found.`);
+
+      for (const project of targets) {
+        const stop = startSpinner(`Backfilling identity for "${project.name}"`);
+        const log = (m) => { stop.pause(); console.log("·", m); stop.resume(); };
+        let result;
+        try {
+          result = await backfillProjectIdentity(project, { log });
+        } catch (e) {
+          stop(false);
+          throw e;
+        }
+        stop(true);
+        console.log(
+          result.files
+            ? `${project.name}: keyed ${result.symbols} symbol(s) across ${result.files} file(s).`
+            : `${project.name}: already up to date.`
+        );
+      }
       break;
     }
     case "init": {

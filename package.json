@@ -16,6 +16,7 @@
     "stats": "node src/cli.js stats",
     "init-db": "node src/cli.js init-db",
     "migrate": "node src/cli.js migrate",
+    "eval": "node eval/recall.js",
     "update": "bash update.sh",
     "test": "node --test test/**/*.test.js"
   },

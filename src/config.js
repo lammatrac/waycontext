@@ -93,4 +93,14 @@ export const config = {
   orgSlug: setting("ORG_SLUG", "default"),
   embeddingDim: numeric("EMBEDDING_DIM", 1024),
   maxFileSize: numeric("MAX_FILE_SIZE", 1048576),
+
+  // Git history ingestion (Phase 1). Bounds apply to the FIRST pass over a
+  // repository only -- later runs read the sha..HEAD range and are naturally
+  // small. Set either to 0 to remove that bound.
+  historyEnabled: setting("HISTORY_ENABLED", "1") !== "0",
+  historyWindowMonths: numeric("HISTORY_WINDOW_MONTHS", 24),
+  historyMaxCommits: numeric("HISTORY_MAX_COMMITS", 20000),
+  // Ownership decays: someone who owned a file two years ago and hasn't
+  // touched it since is not who you should ask about it today.
+  ownershipHalfLifeDays: numeric("OWNERSHIP_HALF_LIFE_DAYS", 180),
 };
