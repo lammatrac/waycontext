@@ -62,7 +62,11 @@ test("required positionals precede optional ones, so positional order is unambig
 // briefly exactly that bug: `knowledge` is search_knowledge's alias, so it ran
 // a search for the word "export".
 test("human-only admin commands are not reachable as operations", () => {
-  for (const name of ["rule", "knowledge-export", "knowledge-import"]) {
+  // `serve` joins the list in Phase 5: starting a server is not something an
+  // agent should be able to ask for through a tool call, and /v1/ops/:name uses
+  // this same registry as its allow-list, so anything absent here is absent
+  // there too.
+  for (const name of ["rule", "knowledge-export", "knowledge-import", "serve"]) {
     assert.equal(findOperation(name), null, `"${name}" must stay off the MCP surface`);
   }
 });

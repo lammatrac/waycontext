@@ -124,6 +124,7 @@ function buildHelp() {
     "  rule confirm|reject <id> [project]    activate or permanently discard a candidate",
     "  knowledge-export [project]            write .waycontext/knowledge/*.yaml for team sharing",
     "  knowledge-import [project]            read them back (additive: never deactivates a rule)",
+    "  serve [--port=4747] [--host=…]        HTTP API + web knowledge graph on localhost (no auth)",
     ...opLines,
     "  delete_project <project> [--yes]      delete a project and all its indexed data",
     "  stats                                 (alias for list_projects, table output)",
@@ -303,6 +304,22 @@ async function main() {
       const sync = cmd === "knowledge-export" ? exportKnowledge : importKnowledge;
       printJson(await sync(target));
       break;
+    }
+    // Human-only, like the rule and knowledge commands: starting a server is not
+    // something an agent should be able to ask for through a tool call.
+    case "serve": {
+      const { serve } = await import("./http.js");
+      const flag = (name, fallback) => {
+        const hit = args.find((a) => a.startsWith(`--${name}=`));
+        return hit ? hit.slice(name.length + 3) : fallback;
+      };
+      const { url } = await serve({
+        port: Number(flag("port", 4747)),
+        host: flag("host", "127.0.0.1"),
+      });
+      console.log(`${url}  — web UI at ${url}/, operations at ${url}/v1/ops`);
+      console.log("No authentication. Bound to localhost. Ctrl-C to stop.");
+      return; // hold the process open; the server owns the event loop now
     }
     case "backfill-identity": {
       // Symbols indexed before migration 0006 have no symbol_key and no
