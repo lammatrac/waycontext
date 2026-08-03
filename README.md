@@ -345,6 +345,10 @@ Usage tracking only covers calls made after upgrading to this version — run `w
 | `get_history` | Commits that touched a file, symbol or directory, with issue refs — "what broke last time someone touched this?" |
 | `who_owns` | Recency-weighted contributors for a file, symbol or directory — "who should I ask about this?" |
 | `search_knowledge` | Code **and** docs/ADRs in one fused ranking — "why is it this way?", where the answer is prose rather than a function body. |
+| `get_rules` | Human-confirmed rules that apply to a file, symbol or directory. Candidates are never returned. |
+| `remember` | Record a gotcha, fix, convention or postmortem so it outlives the session. |
+| `recall` | Search engineering memory before re-debugging something already hit once. |
+| `review_context` | Rules + memories + recent fixes for the working-tree diff — "what should I know about what I'm about to commit?" |
 
 ## Database schema
 
@@ -464,6 +468,107 @@ drown the specific ones. "Which docs mention this file?" is one indexed query:
 ```sql
 SELECT path FROM documents WHERE mentions->'paths' ? 'src/graph.js';
 ```
+
+### `rules`
+
+Prescriptive project knowledge — the things an agent should be told before it writes code.
+A 1:1 satellite of `entities(kind='rule')`.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `entity_id` | `bigint` (PK) | The durable id. `natural_key` is `rule:<hash of statement + scope>`, so re-extraction converges instead of duplicating. |
+| `statement` | `text` | The rule, as one sentence. |
+| `scope` | `text` | A glob (`src/payments/**`) matched with picomatch. `NULL` means project-wide. |
+| `severity` | `text` | `low` \| `medium` \| `high` \| `critical` — the ordering of `get_rules`. |
+| `origin` / `origin_ref` | `text` | Where it came from: `adr` \| `doc` \| `fix_commit` \| `manual` \| `imported`, plus the doc path, commit sha or YAML file. |
+| `confidence` | `real` | Cue strength at extraction time. Orders the candidate queue; does **not** gate injection. |
+| `state` | `text` | `candidate` \| `active` \| `rejected`. **Only `active` is ever injected.** |
+| `verified_by` / `verified_at` | | Who confirmed it, and when. |
+
+### `memories`
+
+Observational knowledge — what this project has learned. A 1:1 satellite of
+`entities(kind='memory')`.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `entity_id` | `bigint` (PK) | `natural_key` is `mem:<hash of content + scope>`, so remembering the same thing twice is idempotent. |
+| `kind` | `text` | `fix` \| `gotcha` \| `convention` \| `postmortem`. |
+| `content` | `text` | The memory itself. Also written to `chunks`, which is what makes it searchable. |
+| `scope` | `text` | Optional glob, used by `review_context`. |
+| `source` | `text` | `agent` \| `human` \| `extracted` \| `imported`. |
+| `supersedes` | `bigint` | The memory this one corrects. The old row stays readable but stops being recalled. |
+| `pinned` | `boolean` | Always returned first by `recall`. |
+
+Memories deliberately have **no embedding column of their own**: their text goes through the
+Phase 2 chunker into `chunks`, inheriting the HNSW index, the generated `fts_vector`, the
+embed-on-`NULL` healing pass and the embeddings-off degradation already built for
+documents. Rules get neither chunks nor embeddings, because they are selected by scope
+match and never by similarity — a rule can't be pulled into context just for sounding
+relevant.
+
+## Rules & engineering memory
+
+Two kinds of durable knowledge, with deliberately different rules about who may create
+them.
+
+**Rules are prescriptive, so extraction only ever proposes.** At the end of every index,
+normative sentences are pulled out of ADR Decision/Consequences sections, other in-repo
+prose, and fix-commit messages — `never …`, `must …`, `always …`, `should …` — scored by cue
+strength and stored as `state='candidate'`. Nothing reaches an agent until a human
+confirms it:
+
+```bash
+waycontext rule candidates              # review the queue, best-first
+waycontext rule confirm 4213            # → state='active', now injected
+waycontext rule reject 4217             # → permanent; re-extraction won't resurrect it
+waycontext rules src/payments/api.js    # what applies here (confirmed only)
+```
+
+`rule confirm` is **not** an MCP tool, and that is the point: an agent that could promote
+its own extracted guesses into injected rules is the failure mode this design exists to
+prevent. A confidently wrong rule makes an agent measurably worse, and unlike a bad search
+result it is not self-correcting — the agent has no way to know the rule was invented. A
+test asserts these commands stay off the MCP surface.
+
+**Memories are observational, so the agent writes them directly.** The cost of a wrong
+memory is one bad search result:
+
+```bash
+waycontext remember myproject "Charging twice in one request trips the gateway's duplicate filter." gotcha
+waycontext recall myproject "duplicate charge"
+```
+
+Correcting a memory supersedes it rather than editing it — the old belief stays readable,
+which is often the useful part, but stops being recalled.
+
+**`review_context` is the call to make before reviewing a diff.** It defaults to the
+working tree, including untracked files, so a brand-new file still picks up the rules that
+govern it:
+
+```bash
+waycontext review myproject                     # uncommitted changes
+waycontext review myproject src/a.js,src/b.js   # specific paths
+```
+
+### Team sharing: `.waycontext/knowledge/*.yaml`
+
+```bash
+waycontext knowledge-export     # rules.yaml, candidates.yaml, memories.yaml
+waycontext knowledge-import     # also runs automatically at the start of each index
+```
+
+Commit that directory and every developer pointed at their own database gets the same
+rules. A rule can therefore be promoted two ways — `rule confirm`, or a maintainer moving
+an entry into `rules.yaml` and merging the PR.
+
+**Import is additive and promoting only. It never deletes, never deactivates, and never
+downgrades an active rule to a candidate.** That is the hazard of having two promotion
+paths: a stale checkout must not silently switch off a rule someone confirmed by CLI.
+Deactivation is always explicit, through `rule reject`.
+
+Configure with `RULES_ENABLED`, `RULE_CANDIDATE_MIN_CONFIDENCE` (default `0.4` — below it a
+sentence isn't even proposed) and `KNOWLEDGE_DIR`.
 
 ## Docs & ADRs: `search_knowledge`
 
@@ -661,6 +766,50 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-08-03 — Phase 3: rules & engineering memory
+
+- **`rules` and `memories`**, two more satellites of `entities`. Rules are prescriptive and
+  glob-scoped; memories are observational and searchable. The split that matters is who may
+  create them: `remember` is an MCP tool the agent calls itself, while a rule can only be
+  *proposed* by extraction and *confirmed* by a human. An agent able to promote its own
+  guesses into injected rules is the one failure mode here that isn't self-correcting — a
+  bad search result gets ignored, an invented rule gets followed.
+- **Extraction proposes at the end of every index.** Normative sentences (`never`, `must`,
+  `always`, `should`) are pulled from ADR Decision/Consequences sections, other in-repo
+  prose and fix-commit messages, scored by cue strength, and written as
+  `state='candidate'`. The satellite upsert refreshes wording and provenance but **never**
+  touches `state`, `confidence` or `verified_by`, so a confirmed rule survives
+  re-extraction and a rejected one is never resurrected. Re-extraction has no watermark and
+  doesn't need one: the natural key is derived from the statement, so the upsert converges.
+- **New tools `get_rules`, `remember`, `recall`, `review_context`** (CLI: `rules`,
+  `remember`, `recall`, `review`). `review_context` defaults to the working-tree diff
+  including untracked files, because a brand-new file is exactly the one whose rules you
+  want. Human-only: `rule candidates`, `rule confirm`, `rule reject`, `knowledge-export`,
+  `knowledge-import`, all bespoke CLI cases rather than registry entries so they are
+  structurally absent from MCP — with a test asserting it stays that way.
+- **Memories reuse the chunk path instead of growing an embedding column.** A memory's text
+  goes through the Phase 2 chunker into `chunks`, so it inherits the HNSW index, the
+  generated `fts_vector`, the embed-on-`NULL` healing pass and the embeddings-off
+  degradation. Consequences: the indexer's pending-chunk query and `searchKnowledge`'s
+  candidates now join `entities` with a `LEFT JOIN documents` rather than requiring a
+  document row, chunk embedding no longer depends on `DOCS_ENABLED`, and memories surface
+  in `search_knowledge` tagged `type: "memory"`. Rules get no chunks at all — they are
+  selected by scope, never by similarity.
+- **Team sharing through `.waycontext/knowledge/*.yaml`**, imported automatically at the
+  start of each index. Import is additive-and-promoting only: it never deletes, never
+  deactivates, and never downgrades an active rule listed as a candidate, so a stale
+  checkout can't switch off a rule someone confirmed by CLI.
+- **Added `js-yaml`** — the first new runtime dependency since `picomatch`. Phase 2
+  hand-rolled frontmatter parsing to avoid one, which was right for read-only metadata we
+  generate ourselves; this file is hand-edited by humans and needs block scalars, and a
+  fragile parser that eats a rule on someone's `|` block is the worse trade. Note it is
+  ESM-first with named exports only: `import { load, dump } from "js-yaml"`.
+- **Fixed a real collision the parity suite caught:** `knowledge` is already the CLI alias
+  of `search_knowledge`, and operations dispatch before the bespoke commands — so a
+  `knowledge export` subcommand would have run a *search* for the word "export". The admin
+  commands are flat (`knowledge-export`/`knowledge-import`), and a new test asserts no
+  human-only command is resolvable as an operation.
 
 ### 2026-08-03 — Phase 2: docs & ADR ingestion
 
