@@ -79,7 +79,63 @@ export async function embed(texts, inputType = "document", projectId = null) {
   return out;
 }
 
+// Query-embedding cache. Two things, both load-bearing for the context
+// composer:
+//
+//   * LRU, because the same question gets asked repeatedly -- an agent
+//     re-running a search, a UI re-rendering, a retry after an edit -- and the
+//     provider round trip is the single largest cost in a retrieval request.
+//   * single-flight, which matters more: the composer runs its channels in
+//     parallel and two of them embed the SAME task text at the same instant.
+//     Caching only resolved values would still make two API calls, so the
+//     in-flight promise is what gets cached, and the second caller joins it.
+//
+// Keyed on provider, model and dimension as well as the text, so switching
+// EMBEDDING_PROVIDER can't serve vectors from the wrong space.
+const QUERY_CACHE_MAX = 256;
+const queryCache = new Map();
+
+function cacheKey(text) {
+  const model =
+    config.embeddingProvider === "voyage" ? config.voyage.model : config.openai.model;
+  return `${config.embeddingProvider}|${model}|${config.embeddingDim}|${text}`;
+}
+
+/** Exposed for tests and for `waycontext serve`, which reports it. */
+export function queryCacheStats() {
+  return { size: queryCache.size, max: QUERY_CACHE_MAX };
+}
+
+export function clearQueryCache() {
+  queryCache.clear();
+}
+
 export async function embedQuery(text, projectId = null) {
-  const [v] = await embed([text], "query", projectId);
-  return v;
+  if (!embeddingsEnabled()) return null;
+  const key = cacheKey(text);
+
+  const hit = queryCache.get(key);
+  if (hit) {
+    // Re-insert so the Map's insertion order stays least-recently-used first.
+    queryCache.delete(key);
+    queryCache.set(key, hit);
+    return hit;
+  }
+
+  const pending = embed([text], "query", projectId).then(([v]) => v);
+  queryCache.set(key, pending);
+  try {
+    const vector = await pending;
+    // A null vector means the provider is off; caching that would be a lie the
+    // moment it is switched back on.
+    if (vector == null) queryCache.delete(key);
+    while (queryCache.size > QUERY_CACHE_MAX) {
+      queryCache.delete(queryCache.keys().next().value);
+    }
+    return vector;
+  } catch (e) {
+    // A failed call must not poison the cache: the next request should retry.
+    queryCache.delete(key);
+    throw e;
+  }
 }

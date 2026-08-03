@@ -25,6 +25,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const [, , cmd, ...args] = process.argv;
 
 function printJson(data) {
+  // An operation that already returned text -- compose_context with
+  // format=markdown -- is printed as-is. JSON-encoding it would hand the user a
+  // single escaped line with literal \n in it, which is unreadable and
+  // un-pasteable, and the point of that format is pasting it somewhere.
+  if (typeof data === "string") {
+    console.log(data);
+    return;
+  }
   console.log(JSON.stringify(data, null, 2));
 }
 

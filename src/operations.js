@@ -36,6 +36,7 @@ import { reviewContext } from "./knowledge/reviewContext.js";
 import {
   getModules, getModule, getCochange, getBugClusters,
 } from "./knowledge/architecture.js";
+import { composeContext } from "./context/compose.js";
 
 const project = z.string().describe("Indexed project name (see list_projects)");
 const limit = z.coerce.number().int().min(1).max(30).default(10);
@@ -299,6 +300,25 @@ export const operations = [
       label: () => "Reading bug clusters",
     },
     handler: (a) => getBugClusters(a.project, a.limit),
+  },
+  {
+    name: "compose_context",
+    description:
+      "Assemble everything worth knowing before starting a task, in one call: the confirmed rules governing the code involved, the code and docs that match, what was fixed there before, and what this project has learned — each with a citation, packed into a token budget that rules always survive. Prefer this over firing search_code, get_rules, recall and get_history separately; it fuses them and tells you in `understood` what it took your description to mean. `format: markdown` returns paste-ready prose.",
+    input: {
+      project,
+      task: z.string().describe("What you're about to do, in plain language"),
+      budget: z.coerce.number().int().min(200).max(60000).default(6000)
+        .describe("Approximate token budget for the assembled context"),
+      format: z.enum(["json", "markdown"]).default("json"),
+    },
+    cli: {
+      args: ["project", "task", "budget", "format"],
+      aliases: ["context"],
+      label: (a) => `Composing context for "${String(a.task).slice(0, 40)}"`,
+    },
+    handler: (a) =>
+      composeContext(a.project, a.task, { budget: a.budget, format: a.format }),
   },
 ];
 

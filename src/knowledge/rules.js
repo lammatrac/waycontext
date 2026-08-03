@@ -371,15 +371,29 @@ export async function getRules(projectName, target) {
     [project.id]
   );
 
-  const paths = resolved.paths;
-  const rules = res.rows.filter((r) => {
-    if (!r.scope) return true;
-    if (!paths) return true; // project-wide question: every rule is in scope
-    const match = picomatch(r.scope);
-    return paths.some((p) => match(p) || p === r.scope);
-  });
+  return { target: resolved, rules: filterRulesByPaths(res.rows, resolved.paths) };
+}
 
-  return { target: resolved, rules };
+/**
+ * Keep the rules whose scope covers at least one of `paths`.
+ *
+ * Exported because the context composer needs the same rule with the same
+ * matching semantics, and it fetches rules once for several paths rather than
+ * calling getRules per path. Two implementations of "does this rule apply here"
+ * is exactly the drift that ends with a rule injected where it doesn't belong.
+ *
+ * @param {Array<{scope:string|null}>} rules
+ * @param {string[]|null} paths null or empty means "the whole project", where
+ *   every rule is in scope.
+ */
+export function filterRulesByPaths(rules, paths) {
+  const scoped = paths && paths.length ? paths : null;
+  return rules.filter((r) => {
+    if (!r.scope) return true; // unscoped rules are project-wide
+    if (!scoped) return true;
+    const match = picomatch(r.scope);
+    return scoped.some((p) => match(p) || p === r.scope);
+  });
 }
 
 /** Move a rule between states. Human-only: reached from the CLI, never from MCP. */
