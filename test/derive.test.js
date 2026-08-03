@@ -149,6 +149,15 @@ test("co-change refuses a target it cannot resolve rather than answering broadly
   await assert.rejects(() => getCochange(PROJECT, "   "), /needs a file/);
 });
 
+test("an empty cluster list is distinguishable from never having derived", async () => {
+  // Different fixes: "nothing recurs here" needs no action, "never derived"
+  // needs a re-index, and an empty array alone cannot tell them apart.
+  const { derived, min_size } = await getBugClusters(PROJECT);
+  assert.ok(derived, "the watermark row proves a derivation ran");
+  assert.equal(derived.kind, "clusters");
+  assert.ok(min_size >= 1);
+});
+
 test("with embeddings off, clusters are keyword buckets and say so", async () => {
   const { clusters, method } = await getBugClusters(PROJECT);
   assert.equal(method, "terms", "never present a keyword bucket as a semantic cluster");

@@ -243,6 +243,12 @@ export async function getBugClusters(projectName, limit = 10) {
     // buckets from a run with embeddings off. Never present one as the other.
     method: clusters[0]?.method ?? null,
     threshold: config.bugClusterThreshold,
+    min_size: config.bugClusterMinSize,
+    // Same reason get_modules reports this: an empty list means "derived, and
+    // nothing recurs" far more often than "no fix commits", but without the
+    // watermark row it is indistinguishable from "never derived" -- and the two
+    // have completely different fixes (nothing, versus re-index).
+    derived: (await derivedState(project.id)).filter((r) => r.kind === "clusters")[0] ?? null,
     clusters,
   };
 }

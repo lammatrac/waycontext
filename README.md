@@ -927,6 +927,7 @@ Re-run index_project after committing changes.
 ## Notes & limits
 
 - Call resolution is name-based (exact + `Class::method` suffix), not type-inferred — dynamic calls (`$fn()`, `call_user_func`) stay as unresolved `dst_name` edges, which is still useful signal.
+- **Name-based resolution can invent a module dependency.** There is no scope analysis, so a call to a *parameter* resolves to whatever project function shares its name. In this repo every `log(...)` inside `src/knowledge` is calling an injected callback, but the only declared `log` is in `extension/extension.js` — so `get_module src/knowledge` reports a dependency on `extension` that does not exist. Harmless for `search_code`; misleading in the architecture graph, which is where it became visible. The fix is scope-aware resolution (a call matching a parameter of the calling symbol should stay unresolved), not a filter in the graph layer.
 - Symbol bodies are truncated at 6 KB for storage/embedding.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
