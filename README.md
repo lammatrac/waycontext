@@ -349,6 +349,10 @@ Usage tracking only covers calls made after upgrading to this version — run `w
 | `remember` | Record a gotcha, fix, convention or postmortem so it outlives the session. |
 | `recall` | Search engineering memory before re-debugging something already hit once. |
 | `review_context` | Rules + memories + recent fixes for the working-tree diff — "what should I know about what I'm about to commit?" |
+| `get_modules` | The architecture as modules, with churn, defect density and a risk score — "what are the parts, and which are hot?" |
+| `get_module` | One module in full: metrics, dependencies both ways, owners, largest files, recurring bugs. |
+| `get_cochange` | What historically changes *with* a file — coupling by commit history rather than by imports. |
+| `get_bug_clusters` | Recurring themes across fix commits — "what keeps breaking here?" |
 
 ## Database schema
 
@@ -506,6 +510,71 @@ embed-on-`NULL` healing pass and the embeddings-off degradation already built fo
 documents. Rules get neither chunks nor embeddings, because they are selected by scope
 match and never by similarity — a rule can't be pulled into context just for sounding
 relevant.
+
+### The derived plane
+
+`modules`, `module_members`, `module_deps`, `module_metrics`, `cochange`, `ownership`,
+`bug_clusters`, `bug_cluster_members`, plus a `derived_state` watermark row per kind.
+
+Everything here is a **fourth** layer, and the important thing about it is that it is
+disposable like the parse plane rather than durable like the knowledge plane:
+
+| Plane | Tables | Lifecycle |
+|---|---|---|
+| Parse | `files`, `symbols`, `edges` | rebuilt from source, ids churn |
+| Identity | `entities`, `symbol_aliases` | append + tombstone, ids never reused |
+| Knowledge | `commits`, `documents`, `rules`, `memories`, … | durable |
+| **Derived** | `modules`, `module_metrics`, `cochange`, … | recomputed from the three above |
+
+So **modules are deliberately not entities.** An entity id is a promise that durable
+knowledge can be attached to it forever; a module is a summary of whatever the tree looks
+like today, and if the module model changes every row is thrown away and rebuilt. Making
+modules entities would put a rebuildable id underneath a rule someone confirmed — the exact
+mistake the plane split exists to prevent.
+
+| Table | What it holds |
+|---|---|
+| `modules` | A directory at `MODULE_DEPTH` (default 2), so `src/knowledge` is a module. File count, LOC, symbol count. |
+| `module_deps` | `edges` lifted from file→file to module→module, self-edges dropped. |
+| `module_metrics` | Per-module commits, fix commits, authors, churn, defect density and risk over a trailing window. `window_days` is stored on the row, because churn over 90 days and churn over 365 are not the same number. |
+| `cochange` | Pairwise file coupling from commit history, with `confidence` and `lift`. Keyed on paths, not file ids, since a pair is most interesting when one side has been deleted. |
+| `ownership` | Recency-weighted module ownership, `share` summing to 1 per module. |
+| `bug_clusters` | Recurring fix-commit themes, with `method` recording whether the grouping was semantic or keyword-based. |
+
+**Modules are directories, not graph communities.** Louvain over `edges` finds tighter
+clusters, but a community id is not stable between runs — add one file and the partition
+shifts — and every metric here is only meaningful compared against the same module last
+week. `src/knowledge` is stable, and it is also what people say out loud.
+
+**Risk is the geometric mean of normalised churn and defect density**, which is the whole
+point of the formula: a module that changes constantly but never breaks is busy, not risky,
+and a module that breaks whenever it is touched but is touched twice a year is not urgent.
+Risk needs both, and a geometric mean says that where a weighted sum would let either carry
+the score alone. When a project has no recognisable fix commits at all, defect density is
+zero everywhere and the score would rank everything at 0 — reading as "nothing is risky"
+rather than "we cannot tell" — so it falls back to churn and reports
+`risk_basis: "churn_only"`.
+
+**Two caps, both reported rather than hidden.** Co-change skips commits touching more than
+`COCHANGE_MAX_FILES` (default 50) files, because a license-header sweep over 300 files
+contributes 45k pairs that say nothing about coupling and is simultaneously the largest
+cost and the largest noise source; the skipped count is logged. Metrics use a
+`METRICS_WINDOW_DAYS` window (default 90).
+
+**Bug clusters are built from fix commits, not from issues** — a deliberate deviation from
+the roadmap. `issues` rows do exist, but they are extracted from commit-message references
+(`#123`, `PROJ-45`) and carry only a tracker, a key and a URL: no title, no body, no
+labels, because nothing here talks to a tracker yet. There is no issue text to embed until
+a connector exists. Clustering is greedy cosine agglomeration (τ = `BUG_CLUSTER_THRESHOLD`,
+default 0.82) over `commits.message_embedding`, filled on the same embed-on-`NULL` terms as
+chunks, with no training step. With no embeddings it groups by (module, most-shared term)
+and stores `method: "terms"` so a keyword bucket is never presented as a semantic cluster.
+
+Derivation runs in-process at the end of `indexProject`, inside the advisory lock it already
+holds — no queue, no worker, no second service — and skips any kind whose watermark is
+unchanged. The watermark is deliberately shared by all five kinds rather than tracked per
+input: modules come from the parse plane and metrics from history, so per-input watermarks
+would let fresh modules end up with stale metrics, or a brand-new module with none at all.
 
 ## Rules & engineering memory
 
@@ -766,6 +835,37 @@ Re-run index_project after committing changes.
 - Files > 1 MB skipped (configurable via `MAX_FILE_SIZE`).
 
 ## Changes
+
+### 2026-08-03 — Phase 4: derived intelligence
+
+- **A fourth, disposable plane**: `modules`, `module_deps`, `module_metrics`, `cochange`,
+  `ownership` and `bug_clusters`, recomputed from the three planes below them and skipped
+  entirely when their inputs haven't moved. Modules are directories, not graph communities,
+  because a community id isn't stable between runs and every metric here is a comparison
+  against the same module last week. See [The derived plane](#the-derived-plane).
+- **Four new tools**: `get_modules`, `get_module`, `get_cochange`, `get_bug_clusters`
+  (CLI: `modules`, `module`, `cochange`, `bugs`).
+- **Derivation runs inside the index run's existing advisory lock** — no queue, no worker,
+  no second service — and after the `last_indexed_sha` update, since that sha *is* the
+  watermark. A failed derivation deliberately doesn't record its watermark, so the next run
+  retries it; the same rule `last_indexed_sha` already follows.
+- **Fixed `is_fix` counting `feat:` commits as defects.** The classifier matched "fix"
+  anywhere in the subject, so "feat: assemble review context from rules and past fixes" was
+  a defect — tolerable while it only filtered `get_history`, not tolerable once
+  `defect_density` divides by it. It now requires conventional-commit type position (however
+  the subject is prefixed) or the first word of the subject once a ticket id or `Name - `
+  prefix is stripped. Measured on this repo: 11 fix commits → 8, all genuine.
+  `0010_reclassify_fix_commits.sql` clears `last_history_sha` and `derived_state` so the
+  next index re-reads the log and recomputes both — one extra history pass per project, once.
+- **Fixed labelling picking the word a cluster is *not* about.** TF-IDF is maximised by a
+  term appearing in exactly one document, so for two commits both about idempotency, the
+  words unique to each outscored the word they shared. Labels now weight in-cluster share
+  against out-of-cluster share, and bucketing (embeddings off) deliberately uses the
+  opposite measure — the most-shared term — since choosing a bucket by rarity splits exactly
+  the commits that belong together.
+- **Clustering keys on whether vectors exist, not on whether the provider is switched on**,
+  so setting `EMBEDDING_PROVIDER=none` against an already-embedded database doesn't silently
+  drop to keyword buckets while semantic vectors sit unused.
 
 ### 2026-08-03 — indexing robustness
 

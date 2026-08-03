@@ -94,6 +94,16 @@ test("fix and revert are detected even behind a prefixed subject line", async ()
     ["Add fixture loading", false, false],          // nor "fixture"
     ["Revert \"feat: add caching\"", false, true],
     ["chore: bump deps", false, false],
+    // The regression Phase 4 surfaced: matching "fix" anywhere in the subject
+    // counted these as defects, and defect_density divides by them.
+    ["Trac Lam - feat: assemble review context from rules and past fixes", false, false],
+    ["refactor: fix naming in the parser", false, false],
+    ["Merge pull request #12 from fix/login", false, false],
+    ["revert the fix-up", false, true],
+    // ...while every shape a fix actually arrives in still counts.
+    ["hotfix: expired token", true, false],
+    ["[PROJ-9] fixed the redirect loop", true, false],
+    ["Fixing the cache stampede", true, false],
   ];
   for (const [subject, isFix, isRevert] of cases) {
     const [commit] = await parseGitLog(logRecord({ body: subject }));

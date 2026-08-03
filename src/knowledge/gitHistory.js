@@ -37,12 +37,36 @@ const BATCH_SIZE = 250;
 
 // --- message mining --------------------------------------------------------
 
-// Anchoring these at the start of the subject was wrong: plenty of teams
-// prefix conventional commits with something ("Trac Lam - fix: ...", a ticket
-// id, a scope), and "^fix" then never matches. Word-boundary matching anywhere
-// in the subject costs the odd false positive ("revert the fix-up") and is far
-// better than reporting that a repository has never fixed anything.
-const FIX_SUBJECT_RE = /\b(?:fix|fixes|fixed|fixing|bugfix|hotfix|regression)\b/i;
+// Anchoring these at the start of the subject was wrong: plenty of teams prefix
+// conventional commits with something ("Trac Lam - fix: ...", a ticket id, a
+// scope), and "^fix" then never matches. But matching the word ANYWHERE in the
+// subject -- the previous rule -- was too loose in a way that only showed up
+// once Phase 4 started dividing by it: "feat: assemble review context from
+// rules, memories and past fixes" was counted as a defect, and this repo's own
+// defect density was overstated by about a third.
+//
+// So: the keyword counts when it is in conventional-commit TYPE position (right
+// before the colon, with or without a scope, however the subject is prefixed),
+// or when it is the first word of the subject once a leading ticket id or
+// "Name - " prefix is stripped. "revert the fix-up" and "refactor: fix naming"
+// are both correctly excluded now.
+const FIX_TYPE_RE = /(?:^|[-–—:|/\\\]\s])\s*(?:fix|fixes|fixed|bugfix|hotfix)(?:\([^)]*\))?\s*:/i;
+const LEADING_NOISE_RE =
+  /^\s*(?:\[[^\]]*\]|\([^)]*\)|[A-Z][A-Z0-9]{1,9}-\d{1,7}|[^:]{1,40}\s[-–—]\s)\s*/;
+const FIX_LEADING_RE = /^\s*(?:fix|fixes|fixed|fixing|bugfix|hotfix|regression)\b/i;
+
+/**
+ * Is this commit a fix?
+ *
+ * Exported because it is the denominator of `defect_density` and the input to
+ * bug clustering, and a classifier nobody can test is a classifier nobody
+ * should divide by.
+ */
+export function classifyFix(subject) {
+  const s = String(subject ?? "");
+  if (FIX_TYPE_RE.test(s)) return true;
+  return FIX_LEADING_RE.test(s.replace(LEADING_NOISE_RE, ""));
+}
 const REVERT_SUBJECT_RE = /\brevert(?:s|ed|ing)?\b/i;
 const REVERT_BODY_RE = /^This reverts commit\b/im;
 const COAUTHOR_RE = /^\s*co-authored-by:\s*(.*?)\s*<([^>]+)>\s*$/gim;
@@ -170,7 +194,7 @@ export function parseCommitRecord(record) {
     subject,
     body: message,
     isMerge: parentList.length > 1,
-    isFix: FIX_SUBJECT_RE.test(subject),
+    isFix: classifyFix(subject),
     isRevert: REVERT_SUBJECT_RE.test(subject) || REVERT_BODY_RE.test(message),
     files,
     issues: extractIssueRefs(message),

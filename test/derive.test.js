@@ -159,6 +159,51 @@ test("with embeddings off, clusters are keyword buckets and say so", async () =>
   assert.equal(idem.examples.length, 2);
 });
 
+test("when vectors are present, clustering is semantic even with the provider off", async () => {
+  // Vectors written straight into the column rather than fetched: this asserts
+  // the semantic path without making an API call, and it is also the real case
+  // of a database embedded earlier and queried with EMBEDDING_PROVIDER=none.
+  const { writeBugClusters } = await import("../src/knowledge/clusters.js");
+  const { toVector, getProject } = await import("../src/db.js");
+  const project = await getProject(PROJECT);
+
+  const fixes = await pool.query(
+    `SELECT entity_id, subject FROM commits
+      WHERE project_id = $1 AND is_fix ORDER BY entity_id`,
+    [project.id]
+  );
+  assert.equal(fixes.rows.length, 2, "the fixture has two fix commits");
+
+  // Near-identical vectors for the two idempotency fixes, padded to the
+  // configured dimension.
+  const { config } = await import("../src/config.js");
+  const base = Array.from({ length: config.embeddingDim }, (_, i) => (i === 0 ? 1 : 0));
+  const near = [...base];
+  near[1] = 0.05;
+  for (const [i, row] of fixes.rows.entries()) {
+    await pool.query(`UPDATE commits SET message_embedding = $1 WHERE entity_id = $2`, [
+      toVector(i === 0 ? base : near), row.entity_id,
+    ]);
+  }
+
+  const result = await writeBugClusters(project);
+  assert.equal(result.method, "embedding");
+  assert.equal(result.clusters, 1);
+  assert.equal(result.embedded, 0, "no API call was made");
+
+  const { clusters } = await getBugClusters(PROJECT);
+  assert.equal(clusters[0].method, "embedding");
+  assert.equal(clusters[0].size, 2);
+  assert.ok(clusters[0].examples.every((e) => e.similarity != null),
+    "a semantic cluster records how close each member was");
+
+  // Put the fixture back the way the later tests expect it.
+  await pool.query(
+    `UPDATE commits SET message_embedding = NULL WHERE project_id = $1`, [project.id]
+  );
+  await writeBugClusters(project);
+});
+
 test("a second run with nothing changed skips every derivation", async () => {
   const again = await indexProject(PROJECT, repo);
   assert.deepEqual(again.derived.skipped.sort(),

@@ -304,7 +304,11 @@ export async function writeBugClusters(project, log = () => {}) {
     const haveAllVectors = vectors.every((v) => Array.isArray(v) && v.length);
     let method, groups;
 
-    if (embeddingsEnabled() && haveAllVectors) {
+    // Keyed on whether the vectors are actually there, not on whether the
+    // provider is currently switched on. Someone who sets EMBEDDING_PROVIDER=none
+    // on a database full of embeddings should not silently drop to keyword
+    // buckets while semantic vectors sit unused in the column.
+    if (haveAllVectors) {
       method = "embedding";
       groups = greedyCluster(vectors, config.bugClusterThreshold);
     } else {
