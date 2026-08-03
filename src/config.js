@@ -103,4 +103,14 @@ export const config = {
   // Ownership decays: someone who owned a file two years ago and hasn't
   // touched it since is not who you should ask about it today.
   ownershipHalfLifeDays: numeric("OWNERSHIP_HALF_LIFE_DAYS", 180),
+
+  // Docs / ADR ingestion (Phase 2). Docs ride the same incremental pipeline as
+  // code, so narrowing DOCS_GLOBS is about relevance, not cost -- an unchanged
+  // file is hash-skipped either way.
+  docsEnabled: setting("DOCS_ENABLED", "1") !== "0",
+  docsGlobs: setting("DOCS_GLOBS", "**/*.md,**/*.mdx")
+    .split(",")
+    .map((g) => g.trim())
+    .filter(Boolean),
+  docsChunkChars: numeric("DOCS_CHUNK_CHARS", 4800),
 };
