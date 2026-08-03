@@ -26,7 +26,7 @@ import { z } from "zod";
 import { listProjects } from "./db.js";
 import { indexProject } from "./indexer.js";
 import {
-  searchCode, getSymbol, getCallers, getCallees,
+  searchCode, searchKnowledge, getSymbol, getCallers, getCallees,
   getSubgraph, getFileOutline, getProjectOverview, findRelated,
 } from "./graph.js";
 import { getHistory, whoOwns } from "./knowledge/history.js";
@@ -81,6 +81,22 @@ export const operations = [
     },
     cli: { args: ["project", "query", "limit"], aliases: ["search"], label: (a) => `Searching "${a.query}"` },
     handler: (a) => searchCode(a.project, a.query, a.limit),
+  },
+  {
+    name: "search_knowledge",
+    description:
+      "Search code and project documentation together — symbols, READMEs, guides and ADRs — in one fused ranking. Use this for 'why is it this way' questions, where the answer is usually prose (a decision record, a guide) rather than a function body: each result is tagged `type: \"code\"` or `type: \"doc\"`, and doc hits carry the heading path they came from. Use `search_code` when you want the implementation itself.",
+    input: {
+      project,
+      query: z.string().describe("Natural-language question or description"),
+      limit,
+    },
+    cli: {
+      args: ["project", "query", "limit"],
+      aliases: ["knowledge"],
+      label: (a) => `Searching knowledge for "${a.query}"`,
+    },
+    handler: (a) => searchKnowledge(a.project, a.query, a.limit),
   },
   {
     name: "get_symbol",

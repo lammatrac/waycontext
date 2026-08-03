@@ -64,6 +64,101 @@ export async function searchCode(projectName, query, limit = 10) {
   }));
 }
 
+const CHUNK_COLUMNS = "c.id, c.heading_path, c.content, d.path, d.title, d.doc_type";
+
+async function chunkFtsCandidates(projectId, query, poolSize) {
+  const res = await pool.query(
+    `SELECT ${CHUNK_COLUMNS}
+     FROM chunks c JOIN documents d ON d.entity_id = c.entity_id
+     WHERE c.project_id = $1 AND c.fts_vector @@ plainto_tsquery('simple', $2)
+     ORDER BY ts_rank(c.fts_vector, plainto_tsquery('simple', $2)) DESC
+     LIMIT $3`,
+    [projectId, query, poolSize]
+  );
+  return res.rows;
+}
+
+async function chunkVectorCandidates(projectId, queryVector, poolSize) {
+  const res = await pool.query(
+    `SELECT ${CHUNK_COLUMNS}
+     FROM chunks c JOIN documents d ON d.entity_id = c.entity_id
+     WHERE c.project_id = $1 AND c.embedding IS NOT NULL
+     ORDER BY c.embedding <=> $2
+     LIMIT $3`,
+    [projectId, toVector(queryVector), poolSize]
+  );
+  return res.rows;
+}
+
+/**
+ * Hybrid search over code AND prose in one ranking.
+ *
+ * Four ranked lists -- symbol full-text, symbol vector, chunk full-text, chunk
+ * vector -- go through the same RRF as searchCode. Ids are namespaced
+ * ("sym:123", "chunk:456") because fuseRankedLists keys on opaque ids, so
+ * fusing two tables needs no change to src/rrf.js at all. With embeddings off
+ * only the two full-text lists exist, degrading the way symbol search already
+ * does.
+ *
+ * searchCode is deliberately left alone: it is the operation agents reach for
+ * by default and its quality is measured by eval/recall.js against real
+ * commits, so mixing prose into it would move a number that has to stay
+ * comparable across phases.
+ */
+export async function searchKnowledge(projectName, query, limit = 10) {
+  const project = await requireProject(projectName);
+  const poolSize = Math.max(limit * 5, 50);
+
+  const [symFts, chunkFts] = await Promise.all([
+    ftsCandidates(project.id, query, poolSize),
+    chunkFtsCandidates(project.id, query, poolSize),
+  ]);
+  const rankedLists = {
+    symbol_fts: symFts.map((r) => `sym:${r.id}`),
+    chunk_fts: chunkFts.map((r) => `chunk:${r.id}`),
+  };
+
+  let symVec = [];
+  let chunkVec = [];
+  if (embeddingsEnabled()) {
+    const qv = await embedQuery(query, project.id);
+    [symVec, chunkVec] = await Promise.all([
+      vectorCandidates(project.id, qv, poolSize),
+      chunkVectorCandidates(project.id, qv, poolSize),
+    ]);
+    rankedLists.symbol_vector = symVec.map((r) => `sym:${r.id}`);
+    rankedLists.chunk_vector = chunkVec.map((r) => `chunk:${r.id}`);
+  }
+
+  const byId = new Map();
+  for (const r of [...symFts, ...symVec]) {
+    byId.set(`sym:${r.id}`, {
+      type: "code",
+      path: r.path,
+      title: r.name,
+      heading_path: null,
+      snippet: r.signature || r.doc || null,
+      kind: r.kind,
+      start_line: r.start_line,
+      end_line: r.end_line,
+    });
+  }
+  for (const r of [...chunkFts, ...chunkVec]) {
+    byId.set(`chunk:${r.id}`, {
+      type: "doc",
+      path: r.path,
+      title: r.title,
+      heading_path: r.heading_path,
+      snippet: r.content.slice(0, 600),
+      doc_type: r.doc_type,
+    });
+  }
+
+  return fuseRankedLists(rankedLists, DEFAULT_K)
+    .slice(0, limit)
+    .map(({ id, score, sources }) => ({ ...byId.get(id), score, matched_via: sources }));
+}
+
 export async function getSymbol(projectName, name) {
   const project = await requireProject(projectName);
   const res = await pool.query(
