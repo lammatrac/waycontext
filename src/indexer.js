@@ -12,6 +12,7 @@ import { getChangedFiles, getHeadSha } from "./gitDiff.js";
 import { assignSymbolKeys, matchRenames } from "./identity.js";
 import { ingestGitHistory } from "./knowledge/gitHistory.js";
 import { parseDocument } from "./knowledge/docs.js";
+import { proposeRules } from "./knowledge/rules.js";
 
 const DEFAULT_IGNORES = [
   "node_modules/**", "vendor/**", ".git/**", "dist/**", "build/**",
@@ -443,6 +444,20 @@ async function runIndex(project, root, log) {
     }
   }
 
+  // Rule candidates from this run's docs and fix commits. Only ever writes
+  // state='candidate' -- promotion is a human action.
+  let rules = null;
+  if (config.rulesEnabled) {
+    try {
+      rules = await proposeRules(project, log);
+      if (rules.candidates) log(`Rule candidates: ${rules.candidates} pending review`);
+    } catch (e) {
+      // Extraction is additive knowledge. It must never fail a code index.
+      log(`Rule extraction skipped: ${e.message}`);
+      rules = { proposed: 0, candidates: 0, error: e.message };
+    }
+  }
+
   // embeddings
   if (embeddingsEnabled()) {
     // Heal symbols left without an embedding by an earlier crash or a failed
@@ -564,6 +579,7 @@ async function runIndex(project, root, log) {
     identity,
     history,
     docs: config.docsEnabled ? docStats : null,
+    rules,
   };
 }
 
