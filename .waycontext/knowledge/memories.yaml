@@ -1,0 +1,7 @@
+memories:
+  - key: mem:8367c29611b7
+    kind: gotcha
+    content: The advisory lock is keyed by project id, so two different projects still index in parallel.
+    scope: null
+    pinned: false
+    author: null

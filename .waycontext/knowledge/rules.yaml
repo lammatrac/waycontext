@@ -1,0 +1,9 @@
+rules:
+  - key: rule:d5606d857966
+    statement: To change it, add a new file — never edit an applied one
+    scope: null
+    severity: medium
+    origin: doc
+    origin_ref: CONTRIBUTING.md
+    confidence: 0.65
+    verified_by: trac

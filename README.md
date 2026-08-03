@@ -810,6 +810,11 @@ Re-run index_project after committing changes.
   `knowledge export` subcommand would have run a *search* for the word "export". The admin
   commands are flat (`knowledge-export`/`knowledge-import`), and a new test asserts no
   human-only command is resolvable as an operation.
+- **This repo now carries its own `.waycontext/knowledge/`** — one confirmed rule and one
+  memory, dogfooding the sharing mechanism. `candidates.yaml` is gitignored instead:
+  candidates are re-derived deterministically from the same docs and commits on every
+  index, so committing them shares no decision a re-index wouldn't reproduce, while
+  `rules.yaml` and `memories.yaml` hold human judgement that cannot be regenerated.
 
 ### 2026-08-03 — Phase 2: docs & ADR ingestion
 

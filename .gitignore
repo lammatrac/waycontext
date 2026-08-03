@@ -11,3 +11,4 @@ docs/superpowers
 .DS_Store
 /.idea/
 /.vscode/
+.waycontext/knowledge/candidates.yaml
