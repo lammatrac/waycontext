@@ -5,6 +5,8 @@ import { spawn } from "node:child_process";
 import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
 import { migrationStatus } from "./migrate.js";
 import { backfillProjectIdentity, identityBackfillStatus } from "./backfillIdentity.js";
+import { listCandidates, setRuleState } from "./knowledge/rules.js";
+import { exportKnowledge, importKnowledge } from "./knowledge/knowledgeFiles.js";
 import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
 import { config } from "./config.js";
@@ -110,6 +112,10 @@ function buildHelp() {
     "  hook uninstall [--global]             remove the search hook",
     "  hook refresh                          rebuild the hook's project cache from the database",
     "  uninstall                             remove the hook, the global CLAUDE.md section and the project cache",
+    "  rule candidates [project] [--json]    review extracted rule candidates (human-only, not an MCP tool)",
+    "  rule confirm|reject <id> [project]    activate or permanently discard a candidate",
+    "  knowledge-export [project]            write .waycontext/knowledge/*.yaml for team sharing",
+    "  knowledge-import [project]            read them back (additive: never deactivates a rule)",
     ...opLines,
     "  delete_project <project> [--yes]      delete a project and all its indexed data",
     "  stats                                 (alias for list_projects, table output)",
@@ -121,6 +127,22 @@ function buildHelp() {
 }
 
 const HELP = buildHelp();
+
+/**
+ * The project to act on when the argument was omitted.
+ *
+ * Only guesses when there is exactly one indexed project. With several, naming
+ * one for the user would be a coin flip that silently confirms a rule in the
+ * wrong place, so it lists them and stops instead.
+ */
+async function defaultProjectName() {
+  const projects = await listProjects();
+  if (projects.length === 1) return projects[0].name;
+  if (!projects.length) usageAndExit("No indexed projects yet. Run `waycontext index <name> <path>` first.");
+  usageAndExit(
+    `Several projects are indexed — name one: ${projects.map((p) => p.name).join(", ")}`
+  );
+}
 
 function priceFor(provider) {
   if (provider === "voyage") return config.voyage.pricePerMTokens;
@@ -219,6 +241,59 @@ async function main() {
           : `No pending migrations (${result.skipped} already applied).`
       );
       for (const w of result.warnings) console.warn(`Warning: ${w}`);
+      break;
+    }
+    case "rule": {
+      // Deliberately NOT an entry in src/operations.js. Confirming a rule is a
+      // human act: an agent that could promote its own extracted guesses into
+      // injected rules is exactly the failure this phase is built to prevent.
+      // Keeping it out of the registry makes it structurally absent from MCP
+      // rather than filtered out of it.
+      await initDb();
+      const [sub, ...restArgs] = args.filter((a) => !a.startsWith("--"));
+
+      if (sub === "candidates") {
+        const [maybeProject] = restArgs;
+        const rows = await listCandidates(maybeProject ?? (await defaultProjectName()));
+        if (args.includes("--json")) printJson(rows);
+        else if (!rows.length) console.log("No rule candidates pending review.");
+        else console.table(rows.map((r) => ({
+          id: r.id,
+          confidence: r.confidence,
+          scope: r.scope ?? "(project-wide)",
+          origin: r.origin,
+          statement: r.statement.length > 68 ? `${r.statement.slice(0, 65)}…` : r.statement,
+        })));
+        break;
+      }
+
+      if (sub === "confirm" || sub === "reject") {
+        const [idOrKey, maybeProject] = restArgs;
+        if (!idOrKey) usageAndExit("Usage: waycontext rule confirm|reject <id|key> [project]");
+        const who = process.env.USER || process.env.USERNAME || "cli";
+        printJson(await setRuleState(
+          maybeProject ?? (await defaultProjectName()),
+          idOrKey,
+          sub === "confirm" ? "active" : "rejected",
+          who
+        ));
+        break;
+      }
+
+      usageAndExit("Usage: waycontext rule candidates|confirm <id>|reject <id> [project]");
+      break;
+    }
+    // Flat names rather than `knowledge export`: `knowledge` is already the CLI
+    // alias of the search_knowledge operation, and operations are dispatched
+    // before this switch -- so `knowledge export` would have run a *search* for
+    // the word "export".
+    case "knowledge-export":
+    case "knowledge-import": {
+      await initDb();
+      const [maybeProject] = args.filter((a) => !a.startsWith("--"));
+      const target = maybeProject ?? (await defaultProjectName());
+      const sync = cmd === "knowledge-export" ? exportKnowledge : importKnowledge;
+      printJson(await sync(target));
       break;
     }
     case "backfill-identity": {

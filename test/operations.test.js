@@ -56,6 +56,22 @@ test("required positionals precede optional ones, so positional order is unambig
   }
 });
 
+// Confirming a rule is a human act, so these commands live in cli.js's switch
+// rather than the registry -- which also means an operation alias must never
+// shadow them, because operations are dispatched first. `knowledge export` was
+// briefly exactly that bug: `knowledge` is search_knowledge's alias, so it ran
+// a search for the word "export".
+test("human-only admin commands are not reachable as operations", () => {
+  for (const name of ["rule", "knowledge-export", "knowledge-import"]) {
+    assert.equal(findOperation(name), null, `"${name}" must stay off the MCP surface`);
+  }
+});
+
+test("no operation writes rules", () => {
+  const writers = operations.filter((op) => /^(confirm|reject|set_rule|activate)/.test(op.name));
+  assert.deepEqual(writers, [], "rule promotion must never be an operation");
+});
+
 test("findOperation resolves both canonical names and aliases", () => {
   assert.equal(findOperation("search_code").name, "search_code");
   assert.equal(findOperation("search").name, "search_code");

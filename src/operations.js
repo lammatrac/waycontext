@@ -30,6 +30,9 @@ import {
   getSubgraph, getFileOutline, getProjectOverview, findRelated,
 } from "./graph.js";
 import { getHistory, whoOwns } from "./knowledge/history.js";
+import { getRules } from "./knowledge/rules.js";
+import { remember, recall } from "./knowledge/memory.js";
+import { reviewContext } from "./knowledge/reviewContext.js";
 
 const project = z.string().describe("Indexed project name (see list_projects)");
 const limit = z.coerce.number().int().min(1).max(30).default(10);
@@ -182,6 +185,58 @@ export const operations = [
       label: (a) => (a.target ? `Finding owners of "${a.target}"` : "Ranking project contributors"),
     },
     handler: (a) => whoOwns(a.project, a.target, a.limit),
+  },
+  {
+    name: "get_rules",
+    description:
+      "Project rules that apply to a file, symbol or directory — the conventions and constraints a human has confirmed, most severe first. Only confirmed rules are returned: heuristically extracted candidates are not, so anything you get here is something a maintainer stood behind. Omit `target` for project-wide rules.",
+    input: {
+      project,
+      target: z.string().optional().describe("File path, symbol name or directory"),
+    },
+    cli: {
+      args: ["project", "target"],
+      aliases: ["rules"],
+      label: (a) => (a.target ? `Rules for "${a.target}"` : "Project rules"),
+    },
+    handler: (a) => getRules(a.project, a.target),
+  },
+  {
+    name: "remember",
+    description:
+      "Record something learned about this project so it outlives this session — a gotcha, a fix that worked, a convention, a postmortem note. Use it when you discover something non-obvious that the next reader would otherwise waste time rediscovering. Pass `supersedes` with an earlier memory's key when you learn that memory was wrong. This records an observation, not a rule: rules require human confirmation.",
+    input: {
+      project,
+      content: z.string().describe("What you learned, in a sentence or two"),
+      kind: z.enum(["fix", "gotcha", "convention", "postmortem"]).default("gotcha"),
+      scope: z.string().optional().describe("Glob or path this applies to, e.g. src/payments/**"),
+      supersedes: z.string().optional().describe("Key of the memory this corrects"),
+      pinned: z.coerce.boolean().default(false),
+    },
+    cli: {
+      args: ["project", "content", "kind", "scope", "supersedes", "pinned"],
+      label: () => "Recording memory",
+    },
+    handler: (a) => remember(a.project, a),
+  },
+  {
+    name: "recall",
+    description:
+      "Search this project's engineering memory — gotchas, fixes, conventions and postmortems recorded earlier. Ask before debugging something that smells like it has been hit before. Pinned memories always come first; memories that were later corrected are hidden.",
+    input: { project, query: z.string(), limit },
+    cli: { args: ["project", "query", "limit"], label: (a) => `Recalling "${a.query}"` },
+    handler: (a) => recall(a.project, a.query, a.limit),
+  },
+  {
+    name: "review_context",
+    description:
+      "Everything worth knowing before reviewing or continuing a change: the confirmed rules governing the changed paths, memories scoped to them, and what was last fixed there. Defaults to the working tree's uncommitted changes — including untracked files — so it answers 'what should I know about what I'm about to commit'. Pass `paths` (comma-separated) to ask about specific files instead.",
+    input: {
+      project,
+      paths: z.string().optional().describe("Comma-separated paths; omit for the working-tree diff"),
+    },
+    cli: { args: ["project", "paths"], aliases: ["review"], label: () => "Assembling review context" },
+    handler: (a) => reviewContext(a.project, a.paths),
   },
 ];
 
