@@ -13,6 +13,7 @@ import { assignSymbolKeys, matchRenames } from "./identity.js";
 import { ingestGitHistory } from "./knowledge/gitHistory.js";
 import { parseDocument } from "./knowledge/docs.js";
 import { proposeRules } from "./knowledge/rules.js";
+import { importKnowledge } from "./knowledge/knowledgeFiles.js";
 
 const DEFAULT_IGNORES = [
   "node_modules/**", "vendor/**", ".git/**", "dist/**", "build/**",
@@ -449,7 +450,17 @@ async function runIndex(project, root, log) {
   let rules = null;
   if (config.rulesEnabled) {
     try {
+      // Import first: a rule already confirmed in YAML must not be re-proposed
+      // as a candidate seconds later by the extractor.
+      const imported = await importKnowledge(project.name).catch((e) => {
+        log(`Knowledge import skipped: ${e.message}`);
+        return null;
+      });
+      if (imported?.rules || imported?.memories) {
+        log(`Knowledge import: ${imported.rules} rule(s), ${imported.memories} memory/ies`);
+      }
       rules = await proposeRules(project, log);
+      if (imported) rules.imported = imported;
       if (rules.candidates) log(`Rule candidates: ${rules.candidates} pending review`);
     } catch (e) {
       // Extraction is additive knowledge. It must never fail a code index.
