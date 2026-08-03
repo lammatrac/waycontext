@@ -21,11 +21,31 @@ const FENCE_BLOCK = /^[ \t]*(```|~~~)[\s\S]*?^[ \t]*\1[ \t]*$/gm;
 // prohibition is a rule far more often than a preference is. Anything subtler
 // than this wants a language model in the extraction path, which this phase
 // explicitly does not have.
+//
+// `positional: true` means the cue only counts at the start of a sentence or
+// clause. That distinction is what separates "never edit an applied migration"
+// from "the ids are never reused" -- English puts prohibitions up front and
+// descriptions after a subject, and without this rule a repository's own
+// documentation about never-ing things becomes dozens of fake rules. Measured
+// on this project's README: 75 candidates before, of which perhaps four were
+// real.
 const CUES = [
-  { re: /\b(never|must not|must never|shall not|do not ever)\b/i, confidence: 0.65 },
-  { re: /\b(must|always|required to|requires|don't|do not|no longer)\b/i, confidence: 0.6 },
-  { re: /\b(should not|should|avoid|prefer|instead of)\b/i, confidence: 0.5 },
+  { re: /\b(never|must not|must never|shall not|do not ever)\b/i, confidence: 0.65, positional: true },
+  { re: /\b(must|always|required to|requires|don't|do not)\b/i, confidence: 0.6, positional: false },
+  { re: /\b(should not|should|avoid|prefer)\b/i, confidence: 0.5, positional: false },
 ];
+
+// A sentence ending in a function word was cut off mid-clause -- by a hard line
+// wrap, a chunk boundary, or a list that continues below. Whatever it says, it
+// does not say it completely.
+const TRUNCATED_TAIL =
+  /\b(and|or|but|the|a|an|to|of|for|with|by|from|that|which|is|are|was|were|be|never|not|must|should)$/i;
+
+// A copula before a modal reads as description rather than instruction ("what it
+// means is required reading"). Kept to copulas only: "you must", "we must" and
+// "it must" are all genuine prescriptions, and the descriptive uses of the
+// never-family are already excluded by the positional rule above.
+const DESCRIPTIVE_LEAD = /\b(is|are|was|were|been|being|means|meant)\s*$/i;
 
 export function normalizeStatement(s) {
   return s.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.!?;:,]+$/, "");
@@ -58,26 +78,89 @@ export function extractNormativeSentences(text) {
   const prose = String(text).replace(FENCE_BLOCK, "\n");
   const out = [];
 
-  for (const rawLine of prose.split("\n")) {
-    const line = rawLine.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").trim();
-    if (!line || line.startsWith("#") || line.startsWith(">")) continue;
-
-    for (const raw of line.split(/(?<=[.!?])\s+/)) {
-      const sentence = raw.trim().replace(/^[`*_]+|[`*_]+$/g, "").trim();
+  for (const block of reflowParagraphs(prose)) {
+    for (const raw of block.split(/(?<=[.!?])\s+/)) {
+      const sentence = stripMarkdown(raw);
       if (!sentence || sentence.endsWith("?")) continue;
       if (sentence.length > 300) continue;
       if (sentence.split(/\s+/).length < 4) continue;
+      if (TRUNCATED_TAIL.test(sentence.replace(/[.!]+$/, ""))) continue;
 
-      const cue = CUES.find((c) => c.re.test(sentence));
-      if (!cue) continue;
+      const found = matchCue(sentence);
+      if (!found) continue;
       out.push({
         sentence: sentence.replace(/[.;,]+$/, ""),
-        confidence: cue.confidence,
-        cue: cue.re.exec(sentence)[1].toLowerCase(),
+        confidence: found.confidence,
+        cue: found.cue,
       });
     }
   }
   return out;
+}
+
+/**
+ * Join hard-wrapped lines back into paragraphs.
+ *
+ * Documentation is wrapped at 80-ish columns, so splitting on newlines cuts
+ * sentences in half and every half looks like a fragment. Headings, list items,
+ * quotes and table rows stay separate: they are their own units, and a table row
+ * is never a sentence.
+ */
+function reflowParagraphs(prose) {
+  const blocks = [];
+  let current = [];
+  const flush = () => {
+    if (current.length) blocks.push(current.join(" "));
+    current = [];
+  };
+
+  for (const rawLine of prose.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith(">") || line.startsWith("|")) {
+      flush();
+      continue;
+    }
+    const listItem = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if (listItem) {
+      flush();
+      current.push(listItem[1]);
+      continue;
+    }
+    current.push(line);
+  }
+  flush();
+  return blocks;
+}
+
+function stripMarkdown(s) {
+  return s
+    .replace(/\*\*|__|`/g, "")
+    .replace(/^[\s*_-]+/, "")
+    .replace(/[\s*_]+$/, "")
+    .trim();
+}
+
+/**
+ * The strongest cue in a sentence, or null when none of them is being used
+ * prescriptively.
+ */
+function matchCue(sentence) {
+  for (const cue of CUES) {
+    const m = cue.re.exec(sentence);
+    if (!m) continue;
+
+    if (cue.positional) {
+      const lead = sentence.slice(0, m.index);
+      // Start of the sentence, or of a clause opened by punctuation: "add a new
+      // migration file — never edit an applied one" is an instruction.
+      const clauseInitial = /(^|[—–:;(]|--)\s*$/.test(lead);
+      if (!clauseInitial) continue;
+    } else if (DESCRIPTIVE_LEAD.test(sentence.slice(0, m.index))) {
+      continue;
+    }
+    return { confidence: cue.confidence, cue: m[1].toLowerCase() };
+  }
+  return null;
 }
 
 /**
@@ -214,8 +297,15 @@ export async function proposeRules(project, log = () => {}) {
 
   for (const fix of fixes.rows) {
     const scope = inferScope(fix.paths ?? []);
-    const text = [fix.subject, fix.body].filter(Boolean).join("\n");
-    for (const found of extractNormativeSentences(text)) {
+    // commits.body is the whole message, subject line included, so joining the
+    // two repeats the subject inside a single statement. And the subject
+    // describes the change ("fix: don't advance the sha on failure"), not a rule
+    // -- measured on this repo, every subject-derived candidate was noise. The
+    // body is where a "always do X from now on" lesson actually gets written.
+    const body = (fix.body ?? "").startsWith(fix.subject ?? " ")
+      ? fix.body.slice(fix.subject.length)
+      : fix.body;
+    for (const found of extractNormativeSentences(body)) {
       proposals.push({
         statement: found.sentence, scope, origin: "fix_commit", originRef: fix.sha,
         confidence: Math.max(0.1, found.confidence - 0.1),

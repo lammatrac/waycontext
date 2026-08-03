@@ -85,6 +85,39 @@ test("a rejected rule is not resurrected by re-extraction", async () => {
   assert.equal(rules.some((r) => r.key === candidate.key), false, "and not active either");
 });
 
+test("a fix commit contributes its body, once, and not its subject", async () => {
+  const { createGitRepo, writeRepoFile, git, cleanupGitRepo } =
+    await import("./helpers/gitFixture.js");
+  const PROJECT2 = "rules_fix_commit_fixture";
+  await cleanupTestProject(PROJECT2);
+  const repo = createGitRepo();
+  try {
+    writeRepoFile(repo, "src/cache.js", "export function purge() {}\n");
+    git(repo, ["add", "-A"]);
+    git(repo, [
+      "commit", "-q", "-m",
+      "fix: purge the cache after a status update\n\nAlways purge the cache after updating a match status.",
+    ]);
+    await indexProject(PROJECT2, repo);
+
+    const candidates = await listCandidates(PROJECT2);
+    const fromBody = candidates.filter((c) => /purge the cache after updating/i.test(c.statement));
+    assert.equal(fromBody.length, 1, JSON.stringify(candidates.map((c) => c.statement), null, 1));
+    // commits.body holds the whole message, subject line included, so a naive
+    // join of subject + body repeated the subject inside one statement.
+    assert.equal(
+      (fromBody[0].statement.match(/purge the cache after a status update/gi) ?? []).length,
+      0,
+      "the subject line did not leak into the statement"
+    );
+    assert.equal(fromBody[0].origin, "fix_commit");
+    assert.equal(fromBody[0].scope, "src/cache.js");
+  } finally {
+    await cleanupTestProject(PROJECT2);
+    cleanupGitRepo(repo);
+  }
+});
+
 test("scope filters which rules apply to a target", async () => {
   await addScopedRule(PROJECT, "Never log full card numbers", "src/payments/**");
   await addScopedRule(PROJECT, "Always run the linter", null);

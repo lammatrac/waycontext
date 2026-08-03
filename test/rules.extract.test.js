@@ -33,6 +33,52 @@ test("fenced code contributes no rules", () => {
   assert.deepEqual(extractNormativeSentences("```js\n// never mutate props here at all\n```\n"), []);
 });
 
+// The three failure modes that showed up when this ran against a real repo's
+// README for the first time. All 75 candidates were technically cue-matched and
+// perhaps four were rules.
+test("hard-wrapped prose is reflowed before splitting, so sentences stay whole", () => {
+  const found = extractNormativeSentences(
+    "Never commit a secret to the repository, because history\nis public and rewriting it is worse.\n"
+  );
+  assert.equal(found.length, 1);
+  assert.match(found[0].sentence, /history is public/, "the wrapped line rejoined");
+});
+
+test("a sentence truncated mid-clause is not a rule", () => {
+  assert.deepEqual(extractNormativeSentences("It never deletes, never deactivates, and never"), []);
+  assert.deepEqual(extractNormativeSentences("The upsert refreshes provenance but never"), []);
+});
+
+test("descriptive uses of never are not prescriptions", () => {
+  assert.deepEqual(extractNormativeSentences("You never write this column directly."), []);
+  assert.deepEqual(extractNormativeSentences("NULL means never git-diff-indexed on this run."), []);
+  assert.deepEqual(extractNormativeSentences("The ids are never reused by this table."), []);
+  assert.deepEqual(extractNormativeSentences("It never fails an index when git is absent."), []);
+});
+
+test("prescriptions survive wherever the cue sits in the clause", () => {
+  assert.equal(extractNormativeSentences("Never edit an applied migration file.").length, 1);
+  assert.equal(
+    extractNormativeSentences("Add a new migration file — never edit an applied one.").length,
+    1,
+    "clause-initial after a dash still counts"
+  );
+  assert.equal(extractNormativeSentences("A fenced code block must never be split.").length, 1);
+  assert.equal(extractNormativeSentences("You should pin the migration version.").length, 1);
+});
+
+test("markdown table rows contribute no rules", () => {
+  assert.deepEqual(
+    extractNormativeSentences("| Identity | `entities` | append + tombstone, ids are never reused |\n"),
+    []
+  );
+});
+
+test("emphasis markers do not survive into the statement", () => {
+  const [found] = extractNormativeSentences("**Never** commit a secret to this repository.");
+  assert.equal(found.sentence, "Never commit a secret to this repository");
+});
+
 test("scope is the common directory of the paths", () => {
   assert.equal(inferScope(["src/payments/api.js", "src/payments/refund.js"]), "src/payments/**");
   assert.equal(inferScope(["src/payments/api.js"]), "src/payments/api.js");
