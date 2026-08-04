@@ -272,15 +272,33 @@ jobs:
           for f in README.md CHANGELOG.md LICENSE NOTICE SECURITY.md \
                    docs/installation.md docs/troubleshooting.md docs/api.md \
                    src/migrations/0001_baseline.sql; do
-            grep -q "^package/$f$" files.txt || {
+            if ! grep -q "^package/$f$" files.txt; then
               echo "::error::$f is missing from the package tarball"; exit 1
-            }
+            fi
           done
           # The images are deliberately excluded (3.5 MB); the docs reference them
           # by absolute URL so they still resolve.
-          ! grep -q '^package/src/images/' files.txt || {
+          if grep -q '^package/src/images/' files.txt; then
             echo "::error::src/images should be excluded from the tarball"; exit 1
-          }
+          fi
+
+      # The general form of the bug the check above cannot see: `files` in
+      # package.json OVERRIDES .gitignore for any path it lists, so adding
+      # `docs/` silently started shipping docs/superpowers/** -- ~300 kB of
+      # internal planning documents that are gitignored precisely because they
+      # aren't for distribution. Listing expected files can't catch that; only
+      # asking what ELSE is in there can.
+      - name: The tarball ships nothing that isn't tracked in git
+        run: |
+          tar tzf waycontext-*.tgz | sed 's|^package/||' | grep -v '/$' > shipped.txt
+          rc=0
+          while read -r f; do
+            if ! git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "::error::$f is in the tarball but not tracked in git"
+              rc=1
+            fi
+          done < shipped.txt
+          exit $rc
 
   shellcheck:
     runs-on: ubuntu-latest

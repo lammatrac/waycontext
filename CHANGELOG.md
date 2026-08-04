@@ -74,7 +74,11 @@ callers still returns `[]`, which is the distinction that matters.
   **history**", because `resolveTarget` is shared with the history queries.
 - `docs/` and `CHANGELOG.md` were missing from the npm tarball, while the README is
   essentially a table of links into them. Doc images now use absolute URLs, since
-  `src/images/` stays excluded (3.5 MB).
+  `src/images/` stays excluded (3.5 MB). Note that `files` **overrides**
+  `.gitignore` for any path it lists, so adding `docs/` also started shipping the
+  gitignored `docs/superpowers/**` planning documents — now excluded explicitly,
+  and CI asserts every file in the tarball is tracked in git, which is the only
+  form of that check that catches the next instance of it.
 - `update.sh` recognises a global npm install instead of erroring "re-clone
   instead", and its header comment no longer claims to touch `~/.claude`.
 - `.gitignore` had `.sql` and `.bk` with no `*`, matching nothing. SQL is scoped to

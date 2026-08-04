@@ -45,9 +45,11 @@
     "SECURITY.md",
     "LICENSE",
     "NOTICE",
+    "CODE_OF_CONDUCT.md",
     "TRADEMARK.md",
     ".env.example",
-    "!src/images/**"
+    "!src/images/**",
+    "!docs/superpowers/**"
   ],
   "keywords": [
     "mcp",
