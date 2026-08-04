@@ -4,7 +4,7 @@ How the pieces fit together, what every table holds, and why identity is a separ
 from the parse plane.
 
 
-![Architecture](../src/images/architecture.png)
+![Architecture](https://raw.githubusercontent.com/lammatrac/waycontext/main/src/images/architecture.png)
 
 - **One operation registry:** every capability is declared once in `src/operations.js` — name, description, zod input schema, handler, and how it maps onto a CLI invocation. `src/server.js` loops over that list to register MCP tools and `src/cli.js` loops over it to dispatch subcommands, so the two surfaces cannot drift apart on argument names, defaults, or valid ranges, and `waycontext help` is generated rather than hand-maintained. Adding a capability means adding one entry.
 - **Languages:** JavaScript, TypeScript, JSX/TSX, PHP, Python, Go (extendable in `src/parser.js`)

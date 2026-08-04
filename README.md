@@ -16,47 +16,112 @@ MCP server that scans and indexes an entire codebase — not just listing symbol
 - **Languages:** JavaScript, TypeScript, JSX/TSX, PHP, Python, Go.
 - **Every surface reads one registry.** MCP tools, CLI subcommands and HTTP routes are generated from the same operation list, so they cannot drift apart.
 
-## Quick start
+## What it looks like
 
-```bash
-npm install -g waycontext            # or run one-off with: npx waycontext <command>
-waycontext migrate                   # create the schema
-waycontext index_project myapp /path/to/myapp
+Ask in English, with none of the words the code uses:
+
+```console
+$ waycontext search_code waycontext "how does it avoid re-indexing files that did not change" 3
+[
+  { "name": "runIndex",       "path": "src/indexer.js", "matched_via": ["vector"] },
+  { "name": "indexProject",   "path": "src/indexer.js", "matched_via": ["vector"] },
+  { "name": "upsertFileRow",  "path": "src/indexer.js", "matched_via": ["vector"],
+    "doc": "Shared by the code and doc branches: `files.hash` is what makes the
+            incremental skip work…" }
+]
 ```
 
-This needs a PostgreSQL with pgvector. The fastest way to get one:
+Not one of those names contains "re-index", "change", or "avoid" — a grep for any of those
+words finds nothing useful. Then check the blast radius before touching something:
+
+```console
+$ waycontext get_callers waycontext embed
+[
+  { "caller": "embedFixCommits", "path": "src/knowledge/clusters.js", "relation": "CALLS", "line": 209 },
+  { "caller": "embedQuery",      "path": "src/embeddings.js",         "relation": "CALLS", "line": 125 }
+]
+```
+
+Both are real output from WayContext indexing its own repository. Every one of these is
+also an MCP tool, which is the point — your agent calls them itself instead of grepping.
+
+## Quick start
+
+**You need:** Node.js ≥ 18, and a PostgreSQL with the pgvector extension. Docker is the
+easiest way to get the latter. Budget a few hundred MB for the Postgres image and a couple of
+minutes for a first index; an embedding API key is optional (see the end of this section).
+
+**1. Start a database.** The `pgvector/pgvector:pg16` image already contains the extension, so
+nothing is compiled:
 
 ```bash
 DB_PASS=your-password docker compose -f docker/docker-compose.yml up -d
 ```
 
-Point WayContext at it through the environment or `~/.config/waycontext/config.json`:
+Already have a PostgreSQL with pgvector? Skip this and use its connection string below.
+
+**2. Install WayContext and point it at that database.**
+
+```bash
+npm install -g waycontext          # or run one-off with: npx waycontext <command>
+export DATABASE_URL=postgres://codectx:your-password@localhost:5432/codectx
+```
+
+To avoid setting the variable every time, put it in `~/.config/waycontext/config.json`
+instead:
 
 ```json
 {
-  "DATABASE_URL": "postgres://codectx:your-password@localhost:5432/codectx",
-  "EMBEDDING_PROVIDER": "voyage",
-  "VOYAGE_API_KEY": "..."
+  "DATABASE_URL": "postgres://codectx:your-password@localhost:5432/codectx"
 }
 ```
 
-Then register the MCP server with your client:
+**3. Create the schema, then index something.**
+
+```bash
+waycontext migrate
+waycontext index_project myapp /path/to/myapp
+```
+
+**4. Register the MCP server with your client.**
 
 ```bash
 claude mcp add --scope user waycontext -- waycontext-mcp
 ```
 
-Working from a clone instead? `./install.sh` does all of the above — installs PostgreSQL +
-pgvector if needed, runs `npm install`, seeds `.env`, initializes the schema, links the CLI
-and registers the MCP server at user scope. It's idempotent, so it's also the upgrade path
-(via `./update.sh`).
+For any other MCP client, the equivalent is `command: "waycontext-mcp"` with no arguments —
+see [Installation](docs/installation.md#4-register-with-claude-code).
 
-**Embeddings are optional.** With `EMBEDDING_PROVIDER=none` the graph tools and the full-text
-half of search work with no API key — you lose semantic matching and `find_related`. Note
-that natural-language queries degrade badly in that mode; see
-[Retrieval quality](docs/evaluation.md).
+**5. Tell the agent which project name to pass**, by running `waycontext init` in the repo.
+It writes a `## WayContext` section into that repo's `CLAUDE.md`.
+
+### Working from a clone instead
+
+`./install.sh` does all of the above in one step — provisions PostgreSQL + pgvector via
+Docker (or apt) if it isn't already reachable, runs `npm install`, seeds `.env` with a
+generated password, creates the schema, links the CLI and registers the MCP server at user
+scope. It's idempotent, so it's also the upgrade path (via `./update.sh`).
+
+```bash
+git clone https://github.com/lammatrac/waycontext && cd waycontext
+./install.sh
+```
+
+### Turning on semantic search
+
+WayContext ships with `EMBEDDING_PROVIDER=none`, so everything above works with no API key
+and no account: the graph tools and the full-text half of `search_code` are fully functional.
+
+Semantic matching and `find_related` need vector embeddings, which means an API key —
+WayContext doesn't run a local embedding model. Set `EMBEDDING_PROVIDER=voyage` (recommended,
+`voyage-code-3` is trained on code) or `openai`, plus the matching key. It's worth it if you
+want natural-language queries: measured recall@10 is **0.66** with embeddings against **0.00**
+without, on this repo's own commit-replay harness. Indexing this repo costs well under a cent.
+See [Retrieval quality](docs/evaluation.md) and
+[token usage & cost](docs/installation.md#tracking-token-usage--cost).
 
 Full setup, per-OS notes and configuration: [Installation & configuration](docs/installation.md).
+Something broken? [Troubleshooting](docs/troubleshooting.md) is organised by symptom.
 
 ## Documentation
 
@@ -71,6 +136,7 @@ Full setup, per-OS notes and configuration: [Installation & configuration](docs/
 | [Retrieval quality](docs/evaluation.md) | The `eval/` harness — replaying real commits as labelled data |
 | [Changelog](CHANGELOG.md) | Release history |
 | [Contributing](CONTRIBUTING.md) | Development setup and conventions |
+| [Security policy](SECURITY.md) | Reporting a vulnerability, and what's deliberately out of scope |
 
 ## Suggested agent workflow (e.g. in CLAUDE.md)
 

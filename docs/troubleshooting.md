@@ -18,6 +18,56 @@ Set `WAYCONTEXT_IGNORE_DOTENV=1` to skip the `.env` files entirely and configure
 the environment. If a value isn't taking effect, check for a `.env` in your current working
 directory shadowing the one you edited.
 
+> **Every command takes `--debug`** (or `WAYCONTEXT_DEBUG=1`), which prints the underlying
+> stack trace instead of the one-line explanation. Worth reaching for when a message here
+> doesn't match what you're seeing.
+
+## Database connection
+
+### `Can't reach the PostgreSQL database`
+
+Nothing is listening on the host and port WayContext tried. The message names both the URL it
+used and where that URL came from — check that first, because the most common cause is a
+`DATABASE_URL` you didn't realise was set (see [Where settings come from](#where-settings-come-from)),
+or the built-in default being used because nothing set it at all.
+
+If the URL is right, the database isn't running. Start one:
+
+```bash
+DB_PASS=your-password docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml ps      # confirm it's up
+```
+
+Note that `install.sh` picks the next free port (5433, 5434…) when 5432 is already taken, and
+writes that port into `.env` — so the URL may legitimately not be 5432.
+
+### `The database rejected these credentials`
+
+The host is reachable but the username/password pair isn't accepted. The subtlety worth
+knowing: **PostgreSQL only applies `POSTGRES_PASSWORD` when it first initialises its data
+directory.** If a `waycontext-pgdata` volume already exists from an earlier run, it keeps the
+password it was created with, and passing a new `DB_PASS` to `docker compose up` changes
+nothing. Either use the original password, or discard the volume and start fresh:
+
+```bash
+docker compose -f docker/docker-compose.yml down -v    # -v discards the indexed data
+```
+
+This is also what happens if you delete `.env` and re-run `install.sh`: the script generates a
+new random password, but the existing volume still wants the old one.
+
+### `The database is reachable but has no WayContext schema`
+
+Run `waycontext migrate`. This is expected on a database you provisioned by hand, or after
+pointing `DATABASE_URL` at a different server.
+
+### `This PostgreSQL doesn't have the pgvector extension available`
+
+`CREATE EXTENSION vector` failed because the server has no pgvector to install. Use the
+`pgvector/pgvector:pg16` image (which `docker/docker-compose.yml` does), or install the
+extension for your existing server — see
+[1. PostgreSQL + pgvector](installation.md#1-postgresql--pgvector).
+
 ## Install & build
 
 ### `build-essential` / `python3` errors while installing

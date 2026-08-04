@@ -7,13 +7,21 @@ For the 60-second version see the [README](../README.md); if something goes wron
 
 ## From npm
 
+The database comes first: everything after step 1 needs it, and `migrate` is the point where
+its absence would otherwise surface as a connection error.
+
+**1. A PostgreSQL with pgvector** — see [1. PostgreSQL + pgvector](#1-postgresql--pgvector)
+for the one-line Docker option and the apt alternative.
+
+**2. Install, and point WayContext at that database.**
+
 ```bash
 npm install -g waycontext            # or run one-off with: npx waycontext <command>
-waycontext migrate                   # create the schema
-waycontext index_project myapp /path/to/myapp
+export DATABASE_URL=postgres://codectx:your-password@localhost:5432/codectx
 ```
 
-This needs a PostgreSQL with pgvector — see [1. PostgreSQL + pgvector](#1-postgresql--pgvector) for a one-line Docker option. Point WayContext at it either through the environment or `~/.config/waycontext/config.json`:
+Rather than exporting it each time, put it in `~/.config/waycontext/config.json` (override the
+path with `$WAYCONTEXT_CONFIG`). Add the embedding keys here too, if you want semantic search:
 
 ```json
 {
@@ -23,11 +31,21 @@ This needs a PostgreSQL with pgvector — see [1. PostgreSQL + pgvector](#1-post
 }
 ```
 
-Then register the MCP server with your client:
+**3. Create the schema and index a project.**
+
+```bash
+waycontext migrate
+waycontext index_project myapp /path/to/myapp
+```
+
+**4. Register the MCP server with your client.**
 
 ```bash
 claude mcp add --scope user waycontext -- waycontext-mcp
 ```
+
+If any of this fails, [Troubleshooting](troubleshooting.md) is organised by symptom — and every
+CLI command takes `--debug` to show the underlying stack trace.
 
 ## From a clone
 
@@ -96,8 +114,8 @@ Then put the matching `DATABASE_URL` in `.env`.
 ```bash
 cd waycontext
 npm install
-cp .env.example .env    # fill in DATABASE_URL + embedding API key
-npm run init-db
+cp .env.example .env    # fill in DATABASE_URL, and an embedding API key if you want one
+waycontext migrate      # equivalently: npm run init-db
 ```
 
 ## 3. CLI
@@ -230,7 +248,9 @@ Semantic search — the vector-ANN half of `search_code` and all of `find_relate
 
 - **Voyage AI** (`voyage-code-3`) — the recommended default. It's trained specifically on code, so it tends to place semantically similar functions closer together than a general-purpose text embedding model would.
 - **OpenAI** (`text-embedding-3-small`) — a general-purpose alternative, useful if you already have OpenAI API access and would rather not manage a second provider's key.
-- **`EMBEDDING_PROVIDER=none`** — skip embeddings entirely. `index_project`, the graph tools (`get_graph`, `get_callers`, `get_callees`, `get_file_outline`, `project_overview`), and the full-text half of `search_code` all work with no API key. You only lose the semantic/ANN component of `search_code` (matches found by meaning, not just shared words) and `find_related` returns nothing.
+- **`EMBEDDING_PROVIDER=none`** — skip embeddings entirely, and **the shipped default** in `.env.example`. `index_project`, the graph tools (`get_graph`, `get_callers`, `get_callees`, `get_file_outline`, `project_overview`), and the full-text half of `search_code` all work with no API key. You only lose the semantic/ANN component of `search_code` (matches found by meaning, not just shared words) and `find_related` returns nothing. Measured cost of that trade-off: recall@10 drops to 0.00 from 0.66 — see [Retrieval quality](evaluation.md).
+
+Setting a provider **without** its key fails fast, before any indexing work happens, rather than part-way through a run with an API `401`.
 
 Either provider is a fine choice — pick whichever fits your budget or existing infra. Just make sure `EMBEDDING_DIM` matches the model you pick (see comments in `.env.example`); changing it later requires re-running `init-db` and reindexing.
 
@@ -255,7 +275,7 @@ Reference pricing, fetched directly from each provider's own docs on 2026-07-21 
 | Voyage AI | `voyage-4-lite` | $0.02 | [docs.voyageai.com/docs/pricing](https://docs.voyageai.com/docs/pricing) |
 | OpenAI | `text-embedding-3-small` (this project's default) | $0.02 standard / $0.01 batch | [developers.openai.com/api/docs/models/text-embedding-3-small](https://developers.openai.com/api/docs/models/text-embedding-3-small) |
 
-`VOYAGE_PRICE_PER_1M_TOKENS=0.18` and `OPENAI_PRICE_PER_1M_TOKENS=0.02` (the standard, non-batch rate) are already set in `.env` to match this project's configured models (`VOYAGE_MODEL`/`OPENAI_EMBEDDING_MODEL`) — update them if you switch models or a provider changes pricing.
+`VOYAGE_PRICE_PER_1M_TOKENS=0.18` and `OPENAI_PRICE_PER_1M_TOKENS=0.02` (the standard, non-batch rate) ship in `.env.example`, matching the default models (`VOYAGE_MODEL`/`OPENAI_EMBEDDING_MODEL`) — update them if you switch models or a provider changes pricing. Configuring by hand instead of via `.env`? Set them yourself, or `usage` shows token counts with no `est_cost_usd`.
 
 Usage tracking only covers calls made after upgrading to this version — run `waycontext init-db` once to create the `embedding_usage` table if it doesn't exist yet.
 
