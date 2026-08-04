@@ -2,6 +2,34 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-04 — v0.3.1: `install.sh` on a fresh clone
+
+v0.3.0 added a CI job that **executes** `install.sh` rather than only parsing it. On its
+first run it found two bugs that meant the fresh-clone path had never worked — invisible
+until then because the only way it had ever been exercised was a re-run on a machine that
+already had a `.env` and a cached Docker image.
+
+- **`sed` exits 2 when it cannot read its input.** `DB_PASS="$(sed -n … .env 2>/dev/null |
+  head -1)"` hid the *message* but not the *status*; `set -o pipefail` carried it past
+  `head` and `set -e` aborted. So with no `.env` — the definition of a fresh clone, and the
+  only case the script is really for — it died on that line before doing anything. Guarded
+  with `[ -f .env ]`; a re-run still reuses an existing password rather than regenerating.
+- **The database readiness check was a 60×1s `pg_isready` loop.** On a cold runner, pulling
+  a ~400 MB image and running `initdb` on slow disk routinely takes longer than that.
+  Replaced with `docker compose up -d --wait`, which uses the healthcheck the compose file
+  already defined, with a 300s budget and a fallback for compose versions predating
+  `--wait-timeout`.
+- **The timeout destroyed the only evidence of itself.** It printed "check: `docker compose
+  … logs`" and exited, which on a CI box that is then discarded is unfollowable advice. It
+  now dumps `ps` and `logs --tail=60` inline.
+- **That advice would not have worked anyway.** `DB_PASS` was scoped to the `up` command
+  alone, and the compose file declares `POSTGRES_PASSWORD: ${DB_PASS:?…}`, so `ps` and
+  `logs` both failed with `required variable DB_PASS is missing`. Now exported for the whole
+  section — which is also what makes the new diagnostics work.
+
+No changes outside `install.sh`. Nothing in the npm package's own code path is affected:
+`install.sh` is the clone workflow, and `npm install -g waycontext` never runs it.
+
 ## 2026-08-04 — v0.3.0: the first npm release
 
 First version published to npm, and a pass over everything a first-time user hits
