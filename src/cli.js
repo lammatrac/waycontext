@@ -9,6 +9,7 @@ import { listCandidates, setRuleState } from "./knowledge/rules.js";
 import { exportKnowledge, importKnowledge } from "./knowledge/knowledgeFiles.js";
 import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
+import { helpLines } from "./completion.js";
 import { config } from "./config.js";
 import { upsertSection, extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
 import { upsertHook, removeHook } from "./hookInit.js";
@@ -111,27 +112,9 @@ function buildHelp() {
   });
   return [
     "Commands:",
-    "  init-db",
-    "  migrate [--status]                    apply pending SQL migrations, or just report their state",
-    "  backfill-identity [project] [--status] [--json]",
-    "                                        give pre-existing symbols stable keys + entities (batched, resumable)",
-    "  init                                  interactively write/update the CLAUDE.md WayContext section",
-    "  hook install [--global] [--mode M]    install the opt-in search hook (M: advise|ask|deny, default advise)",
-    "  hook uninstall [--global]             remove the search hook",
-    "  hook refresh                          rebuild the hook's project cache from the database",
-    "  uninstall                             remove the hook, the global CLAUDE.md section and the project cache",
-    "  rule candidates [project] [--json]    review extracted rule candidates (human-only, not an MCP tool)",
-    "  rule confirm|reject <id> [project]    activate or permanently discard a candidate",
-    "  knowledge-export [project]            write .waycontext/knowledge/*.yaml for team sharing",
-    "  knowledge-import [project]            read them back (additive: never deactivates a rule)",
-    "  serve [--port=4747] [--host=…]        HTTP API + web knowledge graph on localhost (no auth)",
+    ...helpLines("before"),
     ...opLines,
-    "  delete_project <project> [--yes]      delete a project and all its indexed data",
-    "  stats                                 (alias for list_projects, table output)",
-    "  db                                    interactive psql session",
-    "  tables [table] [limit]                list tables, or browse rows of one table (default limit 20)",
-    "  usage [project]                       embedding token usage per provider/model, with est. cost if configured",
-    "  version                               print the installed version",
+    ...helpLines("after"),
   ].join("\n");
 }
 
