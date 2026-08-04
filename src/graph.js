@@ -10,6 +10,46 @@ async function requireProject(name) {
   return p;
 }
 
+/**
+ * Confirm a symbol name resolves before answering a question about it.
+ *
+ * `get_callers` on a name that doesn't exist used to return `[]`, which is
+ * indistinguishable from "nothing calls this" -- the difference between "safe to
+ * change" and "you typed the name wrong". That matters most for the agent
+ * consumers, which will happily act on an empty answer.
+ *
+ * The match here is deliberately the same rule every query below uses (exact
+ * name, or a `Class::method` suffix), so a name that would have been found is
+ * never rejected by the check.
+ */
+async function requireSymbol(project, name) {
+  const res = await pool.query(
+    `SELECT 1 FROM symbols
+      WHERE project_id = $1 AND (name = $2 OR name LIKE '%::' || $2) LIMIT 1`,
+    [project.id, name]
+  );
+  if (!res.rows.length) {
+    throw new Error(
+      `No symbol named "${name}" in project "${project.name}". ` +
+      `Pass an exact name or Class::method — search_code finds one from a description.`
+    );
+  }
+}
+
+/** Same reasoning as requireSymbol, for the path-addressed queries. */
+async function requireFile(project, filePath) {
+  const res = await pool.query(
+    `SELECT 1 FROM files WHERE project_id = $1 AND path = $2 LIMIT 1`,
+    [project.id, filePath]
+  );
+  if (!res.rows.length) {
+    throw new Error(
+      `No indexed file at "${filePath}" in project "${project.name}". ` +
+      `Pass a path relative to the project root, e.g. src/indexer.js.`
+    );
+  }
+}
+
 async function ftsCandidates(projectId, query, poolSize) {
   const res = await pool.query(
     `SELECT ${SYMBOL_COLUMNS}
@@ -180,11 +220,20 @@ export async function getSymbol(projectName, name) {
      ORDER BY s.name = $2 DESC LIMIT 5`,
     [project.id, name]
   );
+  // No requireSymbol call: this query IS the existence check, so a second one
+  // would only duplicate the round trip.
+  if (!res.rows.length) {
+    throw new Error(
+      `No symbol named "${name}" in project "${project.name}". ` +
+      `Pass an exact name or Class::method — search_code finds one from a description.`
+    );
+  }
   return res.rows.map(({ embedding, ...r }) => r);
 }
 
 export async function getCallers(projectName, name) {
   const project = await requireProject(projectName);
+  await requireSymbol(project, name);
   const res = await pool.query(
     `SELECT DISTINCT src_s.name AS caller, src_s.kind, f.path, e.relation, e.line
      FROM edges e
@@ -201,6 +250,7 @@ export async function getCallers(projectName, name) {
 
 export async function getCallees(projectName, name) {
   const project = await requireProject(projectName);
+  await requireSymbol(project, name);
   const res = await pool.query(
     `SELECT DISTINCT e.relation,
             COALESCE(dst_s.name, e.dst_name) AS target,
@@ -225,7 +275,12 @@ export async function getSubgraph(projectName, name, depth = 2, maxNodes = 60) {
      WHERE project_id = $1 AND (name = $2 OR name LIKE '%::' || $2) LIMIT 1`,
     [project.id, name]
   );
-  if (!seed.rows.length) throw new Error(`Symbol "${name}" not found`);
+  if (!seed.rows.length) {
+    throw new Error(
+      `No symbol named "${name}" in project "${project.name}". ` +
+      `Pass an exact name or Class::method — search_code finds one from a description.`
+    );
+  }
 
   const nodes = new Map([[seed.rows[0].id, seed.rows[0]]]);
   const edges = [];
@@ -275,6 +330,7 @@ export async function getSubgraph(projectName, name, depth = 2, maxNodes = 60) {
 
 export async function getFileOutline(projectName, filePath) {
   const project = await requireProject(projectName);
+  await requireFile(project, filePath);
   const res = await pool.query(
     `SELECT s.name, s.kind, s.signature, s.doc, s.start_line, s.end_line
      FROM symbols s JOIN files f ON f.id = s.file_id
@@ -329,6 +385,10 @@ export async function getProjectOverview(projectName) {
 /** Symbols semantically similar to a given symbol (feature clustering helper). */
 export async function findRelated(projectName, name, limit = 10) {
   const project = await requireProject(projectName);
+  // An empty result here is legitimate and documented -- it's what you get with
+  // embeddings disabled -- which is exactly why a misspelled name must not
+  // produce the same answer.
+  await requireSymbol(project, name);
   const res = await pool.query(
     `SELECT s2.name, s2.kind, f.path, 1 - (s2.embedding <=> s1.embedding) AS score
      FROM symbols s1

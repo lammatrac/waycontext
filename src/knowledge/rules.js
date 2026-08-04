@@ -360,7 +360,7 @@ export async function proposeRules(project, log = () => {}) {
 export async function getRules(projectName, target) {
   const project = await requireProject(projectName);
   const resolved = target
-    ? await resolveTarget(project, target)
+    ? await resolveTarget(project, target, "rules")
     : { kind: "project", value: null, paths: null };
 
   const res = await pool.query(

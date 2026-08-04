@@ -181,7 +181,9 @@ export async function getModule(projectName, modulePath) {
  */
 export async function getCochange(projectName, target, limit = 15) {
   const project = await requireProject(projectName);
-  const scope = await resolveTarget(project, target);
+  // No scope noun: get_cochange rejects an omitted target outright below, so the
+  // "omit the target for project-wide X" half of the message never applies here.
+  const scope = await resolveTarget(project, target, "co-change");
   if (!scope.paths || !scope.paths.length) {
     throw new Error("get_cochange needs a file, directory or symbol to compare against");
   }

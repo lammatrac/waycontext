@@ -119,6 +119,22 @@ async function runIndex(project, root, log) {
     const found = await fg(patterns, { cwd: root, dot: false, ignore: loadGlobIgnores(root) });
     filePaths = found.filter((p) => !ig.ignores(p));
     log(`Found ${filePaths.length} source files`);
+
+    // A first index that matched nothing is almost always a supported-language
+    // mismatch -- pointed at a Rust or Java repo, or at a directory above (or
+    // beside) the actual source. Reporting success with zero symbols looks like
+    // WayContext worked, and the failure only surfaces later as searches that
+    // return nothing. Only on a full scan: an incremental run legitimately finds
+    // no changed files, and that is the common case, not a problem.
+    if (!filePaths.length) {
+      log(
+        `No supported source files found under ${root}. ` +
+        // Listed from EXT_LANG rather than written out, so adding a grammar can't
+        // leave this message claiming the old set.
+        `WayContext indexes ${Object.keys(EXT_LANG).join(", ")}. ` +
+        `Check the path points at the source root, and that .gitignore isn't excluding it.`
+      );
+    }
   }
 
   // Existing hashes for incremental indexing

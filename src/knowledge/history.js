@@ -25,10 +25,16 @@ async function requireProject(name) {
  * its history from before it was moved into src/graph.js, not a truncated log
  * that starts at the move.
  *
+ * `scope` names what an omitted target means for the caller. This function is
+ * shared by history, rules and the architecture queries, and the not-found
+ * message ends by telling the user they may omit the target -- which read as
+ * "omit the target for project-wide history" even when they had asked for rules.
+ *
+ * @param {string} scope noun for the project-wide fallback, e.g. "history"
  * @returns {Promise<{kind:string, value:string|null, paths:string[]|null}>}
  *   paths === null means project-wide.
  */
-export async function resolveTarget(project, target) {
+export async function resolveTarget(project, target, scope = "history") {
   if (!target || !target.trim()) return { kind: "project", value: null, paths: null };
   const value = target.trim();
 
@@ -75,7 +81,7 @@ export async function resolveTarget(project, target) {
 
   throw new Error(
     `No file, symbol or directory named "${value}" in project "${project.name}". ` +
-    `Pass a path relative to the project root, a symbol name, or omit the target for project-wide history.`
+    `Pass a path relative to the project root, a symbol name, or omit the target for project-wide ${scope}.`
   );
 }
 
