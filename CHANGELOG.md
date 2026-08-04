@@ -2,6 +2,20 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-05 — v0.3.2: scope-aware call resolution
+
+Call/instantiation resolution was purely name-based, with no notion of scope: a bare
+identifier resolved to whatever project-wide symbol shared its name, even when that
+identifier was actually one of the calling function's own parameters.
+
+- **A call to a same-named parameter no longer invents a module dependency.**
+  `function derive(project, log = () => {}) { log(...) }` recorded a `CALLS` edge to
+  the unrelated top-level `log` elsewhere in the project — harmless for `search_code`,
+  but it fabricated a `depends_on` entry in `get_module`'s architecture graph. The
+  parser now tracks each function/method's own parameter names (including defaults,
+  destructuring, and rest/spread across JS/TS, PHP, Python and Go) and leaves a
+  matching bare-identifier call or `new` unresolved instead of guessing.
+
 ## 2026-08-04 — v0.3.1: `install.sh` on a fresh clone
 
 v0.3.0 added a CI job that **executes** `install.sh` rather than only parsing it. On its
