@@ -439,6 +439,91 @@ class Scoped {}
   assert.ok(names(r).includes("A\\Scoped"));
 });
 
+// --- scope-aware call resolution ----------------------------------------
+//
+// A bare-identifier call is only a reference to a project-wide symbol if
+// nothing more local already owns that name. Without checking the calling
+// function's own parameters, `function f(log) { log(); }` produced a CALLS
+// edge to whichever unrelated project symbol happened to be named "log" --
+// harmless for search, but it invented a module dependency in the
+// architecture graph. These pin down that a call to a parameter is left
+// unattributed rather than guessed.
+
+test("regression: a call to a same-named parameter is not attributed to a project symbol", () => {
+  const r = parseFile("js", `
+function log(x) { console.log(x); }
+function derive(project, log = () => {}) {
+  log("hello");
+}
+`);
+  assert.ok(!rels(r).includes("derive -CALLS-> log"),
+    "log is derive's own parameter, not the top-level log function");
+});
+
+test("regression: a destructured parameter is also recognized as local", () => {
+  const r = parseFile("js", `
+function log() {}
+function run({ log }) {
+  log("hi");
+}
+`);
+  assert.ok(!rels(r).includes("run -CALLS-> log"));
+});
+
+test("regression: new on a same-named parameter is not attributed either", () => {
+  const r = parseFile("js", `
+class Model {}
+function factory(Model) {
+  return new Model();
+}
+`);
+  assert.ok(!rels(r).includes("factory -INSTANTIATES-> Model"));
+});
+
+test("regression: a call still resolves when the name is not a parameter", () => {
+  const r = parseFile("js", `
+function log() {}
+function helper() {}
+function run(other) {
+  log("hi");
+  helper();
+}
+`);
+  assert.ok(rels(r).includes("run -CALLS-> log"),
+    "log is not one of run's parameters, so the edge is unaffected");
+  assert.ok(rels(r).includes("run -CALLS-> helper"));
+});
+
+test("regression: a member call through a param-named receiver is unaffected", () => {
+  const r = parseFile("js", `
+function run(log) {
+  this.log();
+}
+`);
+  assert.ok(rels(r).includes("run -CALLS-> this.log"),
+    "the guard only applies to bare identifiers, not member access");
+});
+
+test("python: a call to a default-valued parameter is not attributed to a project symbol", () => {
+  const r = parseFile("python", `
+def log(msg): pass
+
+def derive(project, log=None):
+    log("hello")
+`);
+  assert.ok(!rels(r).includes("derive -CALLS-> log"));
+});
+
+test("php: a call through a same-named parameter is not attributed to a project symbol", () => {
+  const r = parseFile("php", `<?php
+function log($msg) {}
+function derive($log) {
+  $log("hello");
+}
+`);
+  assert.ok(!rels(r).includes("derive -CALLS-> $log"));
+});
+
 // --- robustness --------------------------------------------------------
 
 test("empty and comment-only files produce nothing", () => {

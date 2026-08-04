@@ -82,6 +82,69 @@ export function parseFile(lang, source) {
     return s.replace(/^['"`]|['"`]$/g, "");
   }
 
+  /**
+   * Parameter names declared by a function-like node.
+   *
+   * Without this, `function f(log) { log(); }` records a CALLS edge to
+   * whatever project-wide symbol happens to be named "log" -- there is no
+   * scope analysis, just a name match. Knowing the enclosing symbol's own
+   * parameters lets `collectRefs` recognize a call to one of them as staying
+   * local rather than resolving to an unrelated same-named symbol elsewhere.
+   */
+  function paramNames(fnNode) {
+    const paramsNode = fnNode.childForFieldName("parameters");
+    const names = new Set();
+    if (!paramsNode) return names;
+
+    function fromPattern(node) {
+      switch (node.type) {
+        case "identifier":
+        case "variable_name": // PHP $foo
+        case "shorthand_property_identifier_pattern":
+          names.add(text(node));
+          return;
+        case "assignment_pattern": // JS default: (foo = def)
+        case "object_assignment_pattern": // JS destructured default: ({ foo = def })
+          fromPattern(node.childForFieldName("left") || node.namedChildren[0]);
+          return;
+        case "default_parameter": // Python (foo=def)
+        case "typed_default_parameter":
+          fromPattern(node.childForFieldName("name"));
+          return;
+        case "rest_pattern":
+        case "spread_element":
+        case "typed_parameter": // Python foo: int
+        case "list_splat_pattern": // Python *args
+        case "dictionary_splat_pattern": // Python **kwargs
+          if (node.namedChildren[0]) fromPattern(node.namedChildren[0]);
+          return;
+        case "object_pattern":
+        case "array_pattern":
+          for (const c of node.namedChildren) fromPattern(c);
+          return;
+        case "pair_pattern": // JS destructured rename: { foo: bar }
+          fromPattern(node.childForFieldName("value") || node.namedChildren.at(-1));
+          return;
+        default: {
+          // TS required_parameter/optional_parameter expose the bound name via
+          // a "pattern" field; Go's `a, b int` has no such field, so fall back
+          // to any identifier/variable_name children directly.
+          const pattern = node.childForFieldName("pattern");
+          if (pattern) {
+            fromPattern(pattern);
+          } else {
+            for (const c of node.namedChildren) {
+              if (c.type === "identifier" || c.type === "variable_name") names.add(text(c));
+            }
+          }
+        }
+      }
+    }
+
+    for (const p of paramsNode.namedChildren) fromPattern(p);
+    return names;
+  }
+
   function addSymbol(name, kind, node) {
     const body = text(node);
     symbols.push({
@@ -97,7 +160,14 @@ export function parseFile(lang, source) {
   }
 
   /** Collect calls / instantiations / hooks inside `node`, attributed to `owner`. */
-  function collectRefs(node, owner) {
+  function collectRefs(node, owner, params = new Set()) {
+    // A bare identifier matching one of `owner`'s own parameters is a call to
+    // that local/injected value, not to a same-named project symbol -- see
+    // `paramNames`. Member/scoped access (`this.log()`, `Class::log()`) is
+    // never a bare identifier, so it's unaffected.
+    const isLocalParam = (calleeNode, calleeText) =>
+      (calleeNode.type === "identifier" || calleeNode.type === "variable_name") && params.has(calleeText);
+
     const cursor = node.walk();
     const visit = (n) => {
       switch (n.type) {
@@ -106,14 +176,19 @@ export function parseFile(lang, source) {
           const fn = n.childForFieldName("function");
           if (fn) {
             const callee = text(fn).slice(0, 200);
-            relations.push({ srcName: owner, relation: "CALLS", dstName: callee, line: line(n) });
+            if (!isLocalParam(fn, callee)) {
+              relations.push({ srcName: owner, relation: "CALLS", dstName: callee, line: line(n) });
+            }
           }
           break;
         }
         case "new_expression": {
           const ctor = n.childForFieldName("constructor");
           if (ctor) {
-            relations.push({ srcName: owner, relation: "INSTANTIATES", dstName: text(ctor).slice(0, 200), line: line(n) });
+            const target = text(ctor).slice(0, 200);
+            if (!isLocalParam(ctor, target)) {
+              relations.push({ srcName: owner, relation: "INSTANTIATES", dstName: target, line: line(n) });
+            }
           }
           break;
         }
@@ -136,7 +211,7 @@ export function parseFile(lang, source) {
           } else if (WP_FIRE.has(callee) && args.length >= 1) {
             const hook = stripQuotes(text(args[0]));
             relations.push({ srcName: owner, relation: "FIRES_HOOK", dstName: `hook:${hook}`, line: line(n) });
-          } else {
+          } else if (!isLocalParam(fn, callee)) {
             relations.push({ srcName: owner, relation: "CALLS", dstName: callee.slice(0, 200), line: line(n) });
           }
           break;
@@ -152,7 +227,10 @@ export function parseFile(lang, source) {
         case "object_creation_expression": {
           const cls = n.namedChildren.find((c) => c.type.includes("name"));
           if (cls) {
-            relations.push({ srcName: owner, relation: "INSTANTIATES", dstName: text(cls).slice(0, 200), line: line(n) });
+            const target = text(cls).slice(0, 200);
+            if (!isLocalParam(cls, target)) {
+              relations.push({ srcName: owner, relation: "INSTANTIATES", dstName: target, line: line(n) });
+            }
           }
           break;
         }
@@ -162,7 +240,10 @@ export function parseFile(lang, source) {
         case "call": {
           const fn = n.childForFieldName("function");
           if (fn) {
-            relations.push({ srcName: owner, relation: "CALLS", dstName: text(fn).slice(0, 200), line: line(n) });
+            const callee = text(fn).slice(0, 200);
+            if (!isLocalParam(fn, callee)) {
+              relations.push({ srcName: owner, relation: "CALLS", dstName: callee, line: line(n) });
+            }
           }
           break;
         }
@@ -205,7 +286,7 @@ export function parseFile(lang, source) {
         if (!nameNode) continue;
         const full = `${className}::${text(nameNode)}`;
         addSymbol(full, "method", m);
-        collectRefs(m, full);
+        collectRefs(m, full, paramNames(m));
       }
     }
   }
@@ -282,7 +363,7 @@ export function parseFile(lang, source) {
           if (!nameNode) break;
           const name = ns + text(nameNode);
           addSymbol(name, "function", n);
-          collectRefs(n, name);
+          collectRefs(n, name, paramNames(n));
           break;
         }
         case "lexical_declaration":
@@ -295,7 +376,7 @@ export function parseFile(lang, source) {
             if (nameNode && value && ["arrow_function", "function_expression", "function"].includes(value.type)) {
               const name = ns + text(nameNode);
               addSymbol(name, "function", n);
-              collectRefs(value, name);
+              collectRefs(value, name, paramNames(value));
             }
           }
           break;
@@ -350,7 +431,7 @@ export function parseFile(lang, source) {
           const receiver = goReceiverType(n);
           const name = ns + (receiver ? `${receiver}::${text(nameNode)}` : text(nameNode));
           addSymbol(name, receiver ? "method" : "function", n);
-          collectRefs(n, name);
+          collectRefs(n, name, paramNames(n));
           break;
         }
         case "type_declaration": {
@@ -389,7 +470,7 @@ export function parseFile(lang, source) {
           if (!nameNode) break;
           const name = ns + text(nameNode);
           addSymbol(name, "function", n);
-          collectRefs(n, name);
+          collectRefs(n, name, paramNames(n));
           break;
         }
         case "trait_declaration": {
