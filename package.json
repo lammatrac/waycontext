@@ -19,7 +19,7 @@
     "serve": "node src/cli.js serve",
     "eval": "node eval/recall.js",
     "update": "bash update.sh",
-    "test": "node --test test/**/*.test.js"
+    "test": "node --test test/*.test.js"
   },
   "repository": {
     "type": "git",

@@ -933,6 +933,15 @@ Re-run index_project after committing changes.
 
 ## Changes
 
+### 2026-08-04 — CI test discovery
+
+- **`npm test` no longer depends on `globstar`.** npm runs scripts through `sh`, where `**` is
+  not recursive, so `test/**/*.test.js` degraded to `test/*/*.test.js`, matched nothing, and
+  the unexpanded pattern reached Node as a literal path — green locally (bash with `globstar`),
+  failing in CI. Now `test/*.test.js`, which matches all 42 files. Deliberately not
+  `node --test test/`: that also treats `test/helpers/*.js` as test files, and two of them open
+  a pg pool at import time.
+
 ### 2026-08-03 — Phases 5 & 6: context API, HTTP, web graph, VS Code
 
 - **`compose_context`** (CLI: `context`) — one call that assembles rules, code, docs, memory
