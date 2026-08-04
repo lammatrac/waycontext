@@ -62,7 +62,7 @@ Full setup, per-OS notes and configuration: [Installation & configuration](docs/
 
 | Document | What's in it |
 |---|---|
-| [Installation & configuration](docs/installation.md) | Database setup (Docker/apt), CLI, MCP registration, embedding providers, token usage & cost |
+| [Installation & configuration](docs/installation.md) | Database setup (Docker/apt), CLI, tab completion, MCP registration, embedding providers, token usage & cost |
 | [Troubleshooting](docs/troubleshooting.md) | Install, update, indexing, search and MCP problems, by symptom |
 | [Architecture & data model](docs/architecture.md) | How the pieces fit, every table explained, the four planes, stable symbol identity |
 | [Algorithms & concepts](docs/algorithms.md) | AST parsing, SHA-256 hashing, BFS, embeddings & cosine distance, HNSW, `tsvector`, RRF — and how `search_code` works |

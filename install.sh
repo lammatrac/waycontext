@@ -213,8 +213,21 @@ fi
 # greps of docs and config. Both are now opt-in, per project, and advisory by
 # default. If you had the old setup, `waycontext uninstall` removes it.
 
+# 9. Tab completion: refresh it if the user opted in, never create it unattended.
+# Opting in once keeps it current across upgrades (update.sh re-runs this file);
+# opting out stays opted out.
+COMPLETION_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/waycontext"
+if [ -f "$COMPLETION_FILE" ]; then
+  if node "$SCRIPT_DIR/src/cli.js" completion install >/dev/null 2>&1; then
+    log "Refreshed tab completion (already installed)"
+  else
+    warn "Could not refresh tab completion; run: waycontext completion install"
+  fi
+fi
+
 log "Setup complete. Edit .env with your embedding API key if you haven't already, then restart Claude Code."
 log ""
 log "Optional, per project:"
 log "  waycontext init          document the project name in ./CLAUDE.md"
 log "  waycontext hook install  nudge agents toward WayContext instead of grep"
+log "  waycontext completion install  tab-complete subcommands and project names"

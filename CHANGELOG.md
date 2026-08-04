@@ -2,6 +2,26 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-04 — tab completion for the CLI
+
+- **`waycontext completion install`** writes a bash completion script that completes
+  subcommands and aliases, sub-verbs, flags, and indexed project names. Opt-in, like
+  the search hook; `waycontext uninstall` removes it; `install.sh` refreshes it on
+  upgrade only if you already have it.
+- **No `.bashrc` edit.** The file goes in the XDG bash-completion directory, which
+  the completion loader searches by command name.
+- **No node process on the Tab hot path.** Spawning the CLI costs 0.10–0.14 s, which
+  is past the point where Tab stops feeling instant, so code-derived words are baked
+  into the script at generation time and project names are read from the cache the
+  search hook already maintains.
+- **The hand-written CLI commands now live in one table** (`src/completion.js`)
+  that `buildHelp()` also reads. They used to be literal strings inside `buildHelp()`,
+  separate from the switch implementing them; completion would have made that a third
+  copy. A test asserts every switch case has a completion entry.
+- Known gap: `rule` completes its sub-verbs and `--json` but not its project argument
+  — the slot differs by sub-verb (`candidates [project]` vs `confirm <id> [project]`).
+  zsh is not supported.
+
 ## 2026-08-04 — naming left over from the rename
 
 - **`waycontext help`** described `init` as writing "the CLAUDE.md Code Context MCP section".

@@ -141,6 +141,35 @@ waycontext usage <project-name>           # embedding token usage, one project
 
 Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`waycontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` runs the same spinner for its whole duration, pausing it around its own per-step `console.log` progress lines (`Found N source files`, `Resolving graph edges…`, …) so the two don't collide — this keeps the animation visible during the otherwise-silent file-by-file processing in between.
 
+## Tab completion (bash)
+
+```bash
+waycontext completion install     # write the script
+waycontext completion uninstall   # remove it
+waycontext completion bash        # or print it and place it yourself
+```
+
+Completes subcommands and their aliases, sub-verbs (`hook install|uninstall|refresh`),
+flags, and — for any argument that takes one — indexed project names:
+
+```
+$ waycontext search_code <TAB>
+waycontext  dating-local  sports-wc-2026
+```
+
+The file lands in `${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/`,
+which bash-completion loads on demand by command name, so **no `.bashrc` change is
+needed** — just open a new shell. `install.sh` regenerates it on upgrade if you have
+it installed, and leaves you alone if you don't.
+
+Project names come from the same `~/.cache/waycontext/projects.json` the search hook
+uses, so completion never touches the database. It inherits that cache's one caveat:
+if the cache was written against a different `DATABASE_URL`, run
+`waycontext hook refresh`. Without `jq` a slower fallback is used; without the cache
+you still get every subcommand.
+
+zsh is not supported yet.
+
 ## 4. Register with Claude Code
 
 `install.sh` does this automatically at **user scope** (available in every project):
