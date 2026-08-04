@@ -142,12 +142,38 @@ waycontext hook uninstall                 remove that hook
 waycontext uninstall                      undo everything written outside this repo
 waycontext migrate                        apply pending SQL migrations
 waycontext migrate --status               show each migration's state without applying anything
-waycontext index_project <project-name> /path/to/project/
-waycontext search_code <project-name> "purge cache after match update"
+
+# project + search
+waycontext index_project <project-name> /path/to/project/    # aliases: index, reindex
+waycontext list_projects
+waycontext project_overview <project-name>
+waycontext search_code <project-name> "purge cache after match update"    # alias: search
+waycontext search_knowledge <project-name> "why is X this way" [limit]    # alias: knowledge
+
+# symbol navigation
 waycontext get_symbol <project-name> <name>
 waycontext get_callers <project-name> <name>
+waycontext get_callees <project-name> <name>
 waycontext get_graph <project-name> <name> [depth]
-waycontext project_overview <project-name>
+waycontext get_file_outline <project-name> <path>
+waycontext find_related <project-name> <name> [limit]
+
+# history, ownership, rules, memory
+waycontext get_history <project-name> [target] [limit]     # alias: history
+waycontext who_owns <project-name> [target] [limit]        # alias: owners
+waycontext get_rules <project-name> [target]                # alias: rules
+waycontext remember <project-name> "<content>" [kind] [scope] [supersedes] [pinned]
+waycontext recall <project-name> "<query>" [limit]
+waycontext review_context <project-name> [paths]             # alias: review
+
+# architecture intelligence
+waycontext get_modules <project-name> [sort] [limit]        # alias: modules
+waycontext get_module <project-name> <module>                # alias: module
+waycontext get_cochange <project-name> <target> [limit]      # alias: cochange
+waycontext get_bug_clusters <project-name> [limit]           # alias: bugs
+waycontext compose_context <project-name> "<task>" [budget] [format]    # alias: context
+
+# admin
 waycontext tables                        # list tables + approx row counts
 waycontext tables symbols 50             # browse rows of one table (default limit 20)
 waycontext db                             # interactive psql session against DATABASE_URL
@@ -155,7 +181,7 @@ waycontext usage                          # embedding token usage, all projects
 waycontext usage <project-name>           # embedding token usage, one project
 ```
 
-`index`/`reindex` are kept as aliases for `index_project`, and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## WayContext` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section. `hook install` is the optional, stronger nudge — see [5. Optional: nudge agents toward the MCP](#5-optional-nudge-agents-toward-the-mcp) below.
+`index`/`reindex` are kept as aliases for `index_project` (and the other aliases noted inline above), and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## WayContext` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section. `hook install` is the optional, stronger nudge — see [5. Optional: nudge agents toward the MCP](#5-optional-nudge-agents-toward-the-mcp) below. See [docs/api.md](api.md) for the full argument/description reference for every operation above, and [docs/knowledge.md](knowledge.md) for `rule candidates|confirm|reject` and `knowledge-export`/`knowledge-import`, which are CLI-only and intentionally not exposed as MCP tools.
 
 Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`waycontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` runs the same spinner for its whole duration, pausing it around its own per-step `console.log` progress lines (`Found N source files`, `Resolving graph edges…`, …) so the two don't collide — this keeps the animation visible during the otherwise-silent file-by-file processing in between.
 

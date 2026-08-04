@@ -6,7 +6,7 @@ from the parse plane.
 
 ![Architecture](https://raw.githubusercontent.com/lammatrac/waycontext/main/src/images/architecture.png)
 
-- **One operation registry:** every capability is declared once in `src/operations.js` — name, description, zod input schema, handler, and how it maps onto a CLI invocation. `src/server.js` loops over that list to register MCP tools and `src/cli.js` loops over it to dispatch subcommands, so the two surfaces cannot drift apart on argument names, defaults, or valid ranges, and `waycontext help` is generated rather than hand-maintained. Adding a capability means adding one entry.
+- **One operation registry:** every capability is declared once in `src/operations.js` — name, description, zod input schema, handler, and how it maps onto a CLI invocation. `src/mcpServer.js` loops over that list to register MCP tools (used by both the stdio and HTTP transports) and `src/cli.js` loops over it to dispatch subcommands, so the surfaces cannot drift apart on argument names, defaults, or valid ranges, and `waycontext help` is generated rather than hand-maintained. Adding a capability means adding one entry.
 - **Languages:** JavaScript, TypeScript, JSX/TSX, PHP, Python, Go (extendable in `src/parser.js`)
 - **Graph relations:** `CALLS`, `INSTANTIATES`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, `REGISTERS_HOOK`, `FIRES_HOOK` (WordPress `add_action`/`do_action`/`apply_filters` aware)
 - **Incremental indexing:** SHA-256 per file; unchanged files are skipped, deleted files are pruned. When a project's root is inside a git repo and it's been indexed before, re-runs scope file discovery to `git diff` since the last indexed commit instead of a full filesystem scan

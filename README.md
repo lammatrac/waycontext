@@ -162,6 +162,14 @@ including the project name to pass to the tools. For a stronger push there's an 
 
 ## Changes
 
+- 2026-08-05: Fixed two documentation drifts found in a command-list consistency audit:
+  `docs/architecture.md` still credited `src/server.js` with the MCP tool-registration
+  loop that was extracted into `src/mcpServer.js` back in Phase 5; `docs/installation.md`'s
+  CLI section only showed 6 of the 22 registry operations. Every code-level surface
+  (CLI switch, completion table, MCP registration, HTTP routes, hook script, VS Code
+  extension) was already covered by parity tests and found consistent — only hand-written
+  markdown was out of sync.
+
 - 2026-08-05: Bumped `@modelcontextprotocol/sdk` to 1.30.0 and applied `npm audit fix`
   (including a major `@hono/node-server` bump to 2.1.0), resolving all 4 known
   vulnerabilities in transitive dependencies. Full test suite verified green.
