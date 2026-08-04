@@ -105,10 +105,10 @@ if [ "$LAST_NOTIFIED" = "$(today)" ]; then
   exit 0 # already notified today — stay quiet until tomorrow
 fi
 
-MSG="code-context-mcp: $BEHIND new commit(s) on origin — run ./update.sh in $SCRIPT_DIR"
+MSG="waycontext: $BEHIND new commit(s) on origin — run ./update.sh in $SCRIPT_DIR"
 echo "$(ts) $MSG" >> "$LOG_FILE"
 today > "$NOTIFIED_FILE"
 
 if command -v notify-send >/dev/null 2>&1; then
-  notify-send "code-context-mcp update available" "$MSG" || true
+  notify-send "waycontext update available" "$MSG" || true
 fi

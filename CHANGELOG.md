@@ -2,15 +2,23 @@
 
 Newest first. Dates are the day the change landed.
 
-## 2026-08-04 — CLI wording left over from the rename
+## 2026-08-04 — naming left over from the rename
 
 - **`waycontext help`** described `init` as writing "the CLAUDE.md Code Context MCP section".
   The section it actually writes has been `## WayContext` since the rename.
 - **`waycontext uninstall`** reported removing "the Code Context MCP Workflow section" even
   when it had removed one headed `## WayContext Workflow` — `GLOBAL_SECTION_RE` matches
   either name, but the message hardcoded the old one.
+- **`check-update.sh` notified as `code-context-mcp`**, in both the message body and the
+  `notify-send` title — the one stale name users actually saw on a regular schedule.
+- **This repo's own `CLAUDE.md`** still carried the pre-rename `## Code Context MCP` heading
+  and told agents to use "`code-context` tools", which stopped existing once the duplicate
+  MCP registration was removed. Now `## WayContext`, which `SECTION_RE` still matches, so
+  `waycontext init` continues to migrate it in place rather than appending a second section.
 
-Both are output strings only; no behaviour changed.
+Output strings and docs only; no behaviour changed. The remaining `code-context` references
+are deliberate: the `code-context-mcp` bin alias, the heading regexes that recognise both
+names, and `install.sh` removing the pre-v0.2.0 global link.
 
 ## 2026-08-04 — documentation split
 
