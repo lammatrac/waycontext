@@ -36,7 +36,17 @@ log "Node.js $(node -v) OK"
 # script never invalidates a working install. Only a genuinely fresh setup
 # generates one -- the password used to be the literal string "codectx",
 # committed in this file, which is a poor default even for a local database.
-DB_PASS="$(sed -n 's|^DATABASE_URL=postgres://[^:]*:\([^@]*\)@.*|\1|p' .env 2>/dev/null | head -1)"
+#
+# The `[ -f .env ]` guard is load-bearing, not defensive. `sed` exits 2 when it
+# cannot read its input; `2>/dev/null` hides the message but not the status,
+# `set -o pipefail` then propagates it past `head`, and `set -e` aborts. So on a
+# fresh clone -- the only case where there is no .env, and the only case this
+# script is really for -- install.sh died on this line before doing anything.
+# It went unnoticed because a re-run on a working install always has a .env.
+DB_PASS=""
+if [ -f .env ]; then
+  DB_PASS="$(sed -n 's|^DATABASE_URL=postgres://[^:]*:\([^@]*\)@.*|\1|p' .env | head -1)"
+fi
 GENERATED_PASS=false
 if [ -z "$DB_PASS" ]; then
   DB_PASS="$(node -e 'process.stdout.write(require("crypto").randomBytes(18).toString("base64url"))')"
