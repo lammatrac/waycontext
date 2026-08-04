@@ -6,13 +6,136 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   MANUAL_COMMANDS, helpLines, generateBash, completeWords, assertSafeForBash,
+  SECTIONS, OP_HELP, PAD,
 } from "../src/completion.js";
-import { operations } from "../src/operations.js";
+import { operations, usageLine } from "../src/operations.js";
 
 test("help output is byte-identical after moving manual commands into a table", () => {
   const expected = fs.readFileSync(new URL("./fixtures/help.txt", import.meta.url), "utf8");
   const actual = execFileSync("node", ["src/cli.js", "help"], { encoding: "utf8" });
   assert.equal(actual, expected);
+});
+
+// OP_HELP places each registry operation in a help section and gives it a terse
+// gloss. It's a hand-maintained table keyed off operations.js, so a new operation
+// would otherwise be added to the registry and silently vanish from `help`.
+
+test("every registry operation has a help section and gloss", () => {
+  const missing = operations.filter((op) => !OP_HELP[op.name]).map((op) => op.name);
+  assert.deepEqual(missing, [], `operations with no OP_HELP entry: ${missing.join(", ")}`);
+});
+
+test("OP_HELP has no entry for an operation that no longer exists", () => {
+  const names = new Set(operations.map((op) => op.name));
+  const stale = Object.keys(OP_HELP).filter((n) => !names.has(n));
+  assert.deepEqual(stale, [], `OP_HELP entries with no operation: ${stale.join(", ")}`);
+});
+
+test("every OP_HELP section is a real section", () => {
+  const keys = new Set(SECTIONS.map((s) => s.key));
+  const bad = Object.entries(OP_HELP)
+    .filter(([, v]) => !keys.has(v.section))
+    .map(([n, v]) => `${n} -> ${v.section}`);
+  assert.deepEqual(bad, []);
+});
+
+test("every section holds at least one command", () => {
+  // An empty section is skipped when rendering, so a typo'd key would silently
+  // drop a whole group from help rather than failing.
+  const populated = new Set([
+    ...Object.values(OP_HELP).map((v) => v.section),
+    ...MANUAL_COMMANDS.filter((c) => !c.hidden).map((c) => c.section),
+  ]);
+  const empty = SECTIONS.map((s) => s.key).filter((k) => !populated.has(k));
+  assert.deepEqual(empty, []);
+});
+
+test("every MANUAL_COMMANDS section is a real section", () => {
+  const keys = new Set(SECTIONS.map((s) => s.key));
+  const bad = MANUAL_COMMANDS.filter((c) => !keys.has(c.section)).map((c) => c.name);
+  assert.deepEqual(bad, []);
+});
+
+test("a gloss stays inside the description column", () => {
+  // The point of `short` is that it fits on one line next to the usage string.
+  // Anything approaching the column width belongs in the registry description.
+  const LIMIT = 48;
+  const tooLong = Object.entries(OP_HELP)
+    .filter(([, v]) => v.short.length > LIMIT)
+    .map(([n, v]) => `${n} (${v.short.length})`);
+  assert.deepEqual(tooLong, [], `glosses over ${LIMIT} chars: ${tooLong.join(", ")}`);
+});
+
+test("no help row runs its usage into its description", () => {
+  // The bug this replaces: `search_knowledge <project> <query> [limit](alias: …)`
+  // with no separating space, because the usage string overflowed PAD.
+  const rendered = execFileSync("node", ["src/cli.js", "help"], { encoding: "utf8" });
+  for (const line of rendered.split("\n")) {
+    if (!line.startsWith("  ")) continue;
+    assert.doesNotMatch(line, /\S\(alias:/, `usage collides with alias: ${line}`);
+  }
+});
+
+test("a usage line at or over the column width puts its help on the next line", () => {
+  const long = operations.filter((op) => usageLine(op).length >= PAD);
+  assert.ok(long.length > 0, "precondition: some operation overflows the column");
+  const rendered = execFileSync("node", ["src/cli.js", "help"], { encoding: "utf8" });
+  for (const op of long) {
+    const usage = usageLine(op);
+    assert.match(
+      rendered,
+      new RegExp(`^  ${usage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"),
+      `${op.name}'s usage should occupy its own line`,
+    );
+  }
+});
+
+test("help <command> prints the registry description in full", () => {
+  const out = execFileSync("node", ["src/cli.js", "help", "search_code"], { encoding: "utf8" });
+  assert.match(out, /^Usage: waycontext search_code <project> <query> \[limit\]/);
+  assert.match(out, /Aliases: search/);
+  // Wrapped, so compare on a distinctive phrase rather than the whole string.
+  assert.match(out.replace(/\s+/g, " "), /Reciprocal Rank Fusion/);
+});
+
+test("help <alias> resolves to the operation it aliases", () => {
+  const out = execFileSync("node", ["src/cli.js", "help", "search"], { encoding: "utf8" });
+  assert.match(out, /^Usage: waycontext search_code/);
+});
+
+test("help <manual command> prints its rows", () => {
+  const out = execFileSync("node", ["src/cli.js", "help", "hook"], { encoding: "utf8" });
+  assert.match(out, /hook install/);
+  assert.match(out, /hook refresh/);
+});
+
+test("help for an unknown command exits non-zero", () => {
+  const r = spawnSync("node", ["src/cli.js", "help", "nonsense"], { encoding: "utf8" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /No such command: nonsense/);
+});
+
+test("--help and -h are accepted and print the command list", () => {
+  for (const flag of ["--help", "-h"]) {
+    const r = spawnSync("node", ["src/cli.js", flag], { encoding: "utf8" });
+    assert.equal(r.status, 0, `${flag} should succeed`);
+    assert.doesNotMatch(r.stderr, /Unknown command/, `${flag} should not be an unknown command`);
+    assert.match(r.stdout, /Getting started:/);
+  }
+});
+
+test("help leads with indexing and searching, not with schema plumbing", () => {
+  // The actual complaint this section order answers: a newcomer's first four
+  // lines used to be init-db, migrate and backfill-identity.
+  const out = execFileSync("node", ["src/cli.js", "help"], { encoding: "utf8" });
+  assert.ok(
+    out.indexOf("index_project") < out.indexOf("init-db"),
+    "index_project should appear before init-db",
+  );
+  assert.ok(
+    out.indexOf("search_code") < out.indexOf("backfill-identity"),
+    "search_code should appear before backfill-identity",
+  );
 });
 
 /**
@@ -35,8 +158,11 @@ test("every hand-written switch case appears in MANUAL_COMMANDS or the registry"
   const source = fs.readFileSync(new URL("../src/cli.js", import.meta.url), "utf8");
   const cases = [...source.matchAll(/^\s*case "([^"]+)":/gm)].map((m) => m[1]);
 
-  // --version and -v are flag spellings of `version`, never typed as a subcommand.
-  const typed = cases.filter((c) => c !== "--version" && c !== "-v");
+  // Flag spellings of a command that is already in the table. They're accepted
+  // because they're what people type, but they are not subcommands and must not
+  // appear in completion or in help.
+  const FLAG_ALIASES = new Set(["--version", "-v", "--help", "-h"]);
+  const typed = cases.filter((c) => !FLAG_ALIASES.has(c));
 
   const known = knownCommandNames();
 

@@ -11,8 +11,10 @@ import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
 import {
   helpLines, generateBash, installCompletion, removeCompletion,
+  SECTIONS, OP_HELP, MANUAL_COMMANDS, PAD, rowsFor,
 } from "./completion.js";
 import { config } from "./config.js";
+import { reportError } from "./friendlyError.js";
 import { upsertSection, extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
 import { upsertHook, removeHook } from "./hookInit.js";
 import {
@@ -25,7 +27,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const [, , cmd, ...args] = process.argv;
+
+// --debug is global, not per-command, so it's stripped before the argv split --
+// otherwise it would be parsed as a positional argument by whichever operation
+// was being run.
+const DEBUG =
+  process.env.WAYCONTEXT_DEBUG === "1" || process.argv.includes("--debug");
+const argv = process.argv.filter((a) => a !== "--debug");
+const [, , cmd, ...args] = argv;
 
 function printJson(data) {
   // An operation that already returned text -- compose_context with
@@ -106,18 +115,79 @@ async function withSpinner(label, fn) {
 
 // The operation lines are generated from src/operations.js, so a new
 // capability shows up in `help` automatically and the usage strings can't
-// drift from what the parser actually accepts.
+// drift from what the parser actually accepts. Their placement and one-line
+// gloss come from OP_HELP in completion.js -- see the note there on why the
+// terse wording is separate from the registry description.
 function buildHelp() {
-  const opLines = operations.map((op) => {
-    const aliases = op.cli.aliases?.length ? `(alias: ${op.cli.aliases.join(", ")})` : "";
-    return `  ${usageLine(op).padEnd(38)}${aliases}`.trimEnd();
-  });
-  return [
-    "Commands:",
-    ...helpLines("before"),
-    ...opLines,
-    ...helpLines("after"),
-  ].join("\n");
+  const out = [
+    `${NAME} <command> [args...]`,
+    "",
+    `Run \`${NAME} help <command>\` for the full description of any command,`,
+    "or add --debug to any command to see the underlying stack trace on failure.",
+  ];
+
+  for (const { key, title } of SECTIONS) {
+    const rows = [
+      ...operationRows(key),
+      ...helpLines(key),
+    ];
+    if (!rows.length) continue;
+    out.push("", `${title}:`, ...rows);
+  }
+  return out.join("\n");
+}
+
+/** Rendered rows for the registry operations belonging to one section. */
+function operationRows(section) {
+  return operations
+    .filter((op) => OP_HELP[op.name]?.section === section)
+    .flatMap((op) => {
+      const { short } = OP_HELP[op.name];
+      const aliases = op.cli.aliases?.length ? ` (alias: ${op.cli.aliases.join(", ")})` : "";
+      const usage = usageLine(op);
+      const help = `${short}${aliases}`;
+      if (usage.length >= PAD) return [`  ${usage}`, `  ${"".padEnd(PAD)}${help}`];
+      return [`  ${usage.padEnd(PAD)}${help}`];
+    });
+}
+
+/** Greedy word wrap. The registry descriptions run to several hundred characters. */
+function wrap(text, width) {
+  const out = [];
+  let line = "";
+  for (const word of String(text).split(/\s+/)) {
+    if (line && line.length + 1 + word.length > width) {
+      out.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+/**
+ * Per-command help: the registry description in full, which is the text an MCP
+ * client sees. There was previously no way to read it from a terminal at all.
+ */
+function commandHelp(name) {
+  const op = findOperation(name);
+  if (op) {
+    const lines = [`Usage: ${NAME} ${usageLine(op)}`];
+    if (op.cli.aliases?.length) lines.push(`Aliases: ${op.cli.aliases.join(", ")}`);
+    lines.push("", ...wrap(op.description, 78));
+    return lines.join("\n");
+  }
+  const manual = MANUAL_COMMANDS.find(
+    (c) => c.name === name && !c.hidden,
+  );
+  if (manual) {
+    return rowsFor(manual)
+      .map((r) => `Usage: ${NAME} ${r.usage}${r.help ? `\n  ${r.help}` : ""}`)
+      .join("\n");
+  }
+  return null;
 }
 
 const HELP = buildHelp();
@@ -640,7 +710,20 @@ async function main() {
       break;
     }
     case "help":
+    case "--help":
+    case "-h":
     case undefined: {
+      const topic = args[0];
+      if (topic) {
+        const detail = commandHelp(topic);
+        if (!detail) {
+          console.error(`No such command: ${topic}\n`);
+          console.log(HELP);
+          process.exit(1);
+        }
+        console.log(detail);
+        break;
+      }
       console.log(HELP);
       break;
     }
@@ -652,7 +735,9 @@ async function main() {
   await pool.end();
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
+main().catch(async (e) => {
+  // Close the pool so the process can exit on its own if the handler ever stops
+  // calling process.exit -- an open pg pool keeps the event loop alive.
+  await pool.end().catch(() => {});
+  process.exit(reportError(e, { debug: DEBUG }));
 });

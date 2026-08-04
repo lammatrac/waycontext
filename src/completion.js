@@ -30,19 +30,80 @@ import { NAME, VERSION } from "./version.js";
  * `PAD` ever changes, these rows re-pad automatically along with every other
  * entry. When `lines` is absent, the entry's own top-level `usage`/`help`/
  * `helpOnOwnLine` stand in as its single row.
+ *
+ * `section` places the command in one of SECTIONS below.
  */
+
+/**
+ * How `help` is laid out: ordered sections, and a one-line gloss per operation.
+ *
+ * Sections exist because the flat list opened with `init-db`, `migrate` and
+ * `backfill-identity` -- three commands a new user will never need -- and buried
+ * `index_project` and `search_code` in the middle of forty lines.
+ */
+export const SECTIONS = [
+  { key: "start", title: "Getting started" },
+  { key: "search", title: "Search & navigate" },
+  { key: "arch", title: "Architecture & history" },
+  { key: "knowledge", title: "Rules & engineering memory" },
+  { key: "context", title: "Context for a task" },
+  { key: "admin", title: "Setup & administration" },
+];
+
+/**
+ * Section + one-line gloss for each registry operation, keyed by op name.
+ *
+ * `short` is deliberately a second, terser wording of the operation's registry
+ * `description`. Those descriptions are written for an LLM deciding which tool to
+ * call: several sentences, often saying when to prefer a sibling instead. None of
+ * that fits a terminal column, and truncating them mid-clause reads worse than a
+ * purpose-written phrase. The cost is two wordings to keep honest, which
+ * test/completion.test.js guards -- every operation must have an entry here, and
+ * every `short` must stay inside the column.
+ */
+export const OP_HELP = {
+  index_project: { section: "start", short: "index a project: symbols, graph, embeddings" },
+  project_overview: { section: "start", short: "orient in an unfamiliar codebase" },
+  search_code: { section: "start", short: "find code by describing what it does" },
+  list_projects: { section: "start", short: "what's indexed, with file/symbol counts" },
+
+  search_knowledge: { section: "search", short: "search code and docs together (the 'why')" },
+  get_symbol: { section: "search", short: "full source and signature of one symbol" },
+  get_file_outline: { section: "search", short: "every symbol defined in one file" },
+  get_callers: { section: "search", short: "what references this — the blast radius" },
+  get_callees: { section: "search", short: "what this depends on" },
+  get_graph: { section: "search", short: "dependency subgraph, both directions" },
+  find_related: { section: "search", short: "semantically similar symbols" },
+
+  get_modules: { section: "arch", short: "modules by risk: churn + defect density" },
+  get_module: { section: "arch", short: "one module: metrics, deps, owners" },
+  get_cochange: { section: "arch", short: "what historically changes alongside this" },
+  get_bug_clusters: { section: "arch", short: "what keeps breaking, grouped" },
+  get_history: { section: "arch", short: "commits that touched this, newest first" },
+  who_owns: { section: "arch", short: "who to ask, weighted by recency" },
+
+  get_rules: { section: "knowledge", short: "confirmed conventions covering this code" },
+  remember: { section: "knowledge", short: "record a gotcha so it outlives the session" },
+  recall: { section: "knowledge", short: "search what was recorded earlier" },
+
+  compose_context: { section: "context", short: "rules + code + docs + memory, in one call" },
+  review_context: { section: "context", short: "what to know before reviewing a change" },
+};
+
 export const MANUAL_COMMANDS = [
-  { name: "init-db", section: "before", usage: "init-db", help: "" },
-  { name: "migrate", section: "before", usage: "migrate [--status]",
+  { name: "init", section: "start", usage: "init",
+    help: "write the WayContext section into ./CLAUDE.md" },
+
+  { name: "init-db", section: "admin", usage: "init-db",
+    help: "create the schema (same as migrate)" },
+  { name: "migrate", section: "admin", usage: "migrate [--status]",
     flags: ["--status"],
     help: "apply pending SQL migrations, or just report their state" },
-  { name: "backfill-identity", section: "before",
+  { name: "backfill-identity", section: "admin",
     usage: "backfill-identity [project] [--status] [--json]",
-    args: ["project"], flags: ["--status", "--json"], helpOnOwnLine: true,
+    args: ["project"], flags: ["--status", "--json"],
     help: "give pre-existing symbols stable keys + entities (batched, resumable)" },
-  { name: "init", section: "before", usage: "init",
-    help: "interactively write/update the CLAUDE.md WayContext section" },
-  { name: "hook", section: "before", usage: "hook install [--global] [--mode M]",
+  { name: "hook", section: "admin", usage: "hook install [--global] [--mode M]",
     subVerbs: ["install", "uninstall", "refresh"],
     flags: ["--global", "--project", "--mode"],
     help: "install the opt-in search hook (M: advise|ask|deny, default advise)",
@@ -52,9 +113,9 @@ export const MANUAL_COMMANDS = [
       { usage: "hook uninstall [--global]", help: "remove the search hook" },
       { usage: "hook refresh", help: "rebuild the hook's project cache from the database" },
     ] },
-  { name: "uninstall", section: "before", usage: "uninstall",
+  { name: "uninstall", section: "admin", usage: "uninstall",
     help: "remove the hook, the global CLAUDE.md section and the project cache" },
-  { name: "rule", section: "before", usage: "rule candidates [project] [--json]",
+  { name: "rule", section: "knowledge", usage: "rule candidates [project] [--json]",
     subVerbs: ["candidates", "confirm", "reject"], flags: ["--json"],
     // No `args`: the project slot differs by sub-verb (`candidates [project]`
     // vs `confirm <id> [project]`), which the uniform slot model cannot express.
@@ -66,48 +127,59 @@ export const MANUAL_COMMANDS = [
       { usage: "rule confirm|reject <id> [project]",
         help: "activate or permanently discard a candidate" },
     ] },
-  { name: "knowledge-export", section: "before", usage: "knowledge-export [project]",
+  { name: "knowledge-export", section: "knowledge", usage: "knowledge-export [project]",
     args: ["project"], help: "write .waycontext/knowledge/*.yaml for team sharing" },
-  { name: "knowledge-import", section: "before", usage: "knowledge-import [project]",
+  { name: "knowledge-import", section: "knowledge", usage: "knowledge-import [project]",
     args: ["project"], help: "read them back (additive: never deactivates a rule)" },
-  { name: "serve", section: "before", usage: "serve [--port=4747] [--host=…]",
+  { name: "serve", section: "admin", usage: "serve [--port=4747] [--host=…]",
     flags: ["--port", "--host"],
     help: "HTTP API + web knowledge graph on localhost (no auth)" },
 
-  { name: "delete_project", section: "after", usage: "delete_project <project> [--yes]",
+  { name: "delete_project", section: "admin", usage: "delete_project <project> [--yes]",
     args: ["project"], flags: ["--yes"],
     help: "delete a project and all its indexed data" },
-  { name: "stats", section: "after", usage: "stats",
+  { name: "stats", section: "admin", usage: "stats",
     help: "(alias for list_projects, table output)" },
-  { name: "db", section: "after", usage: "db", help: "interactive psql session" },
-  { name: "tables", section: "after", usage: "tables [table] [limit]",
+  { name: "db", section: "admin", usage: "db", help: "interactive psql session" },
+  { name: "tables", section: "admin", usage: "tables [table] [limit]",
     args: ["table", "limit"],
     help: "list tables, or browse rows of one table (default limit 20)" },
-  { name: "usage", section: "after", usage: "usage [project]", args: ["project"],
+  { name: "usage", section: "admin", usage: "usage [project]", args: ["project"],
     help: "embedding token usage per provider/model, with est. cost if configured" },
-  { name: "completion", section: "after", usage: "completion bash|install|uninstall",
+  { name: "completion", section: "admin", usage: "completion bash|install|uninstall",
     subVerbs: ["bash", "install", "uninstall"],
     help: "print or install the bash tab-completion script" },
-  { name: "version", section: "after", usage: "version",
+  { name: "version", section: "admin", usage: "version",
     help: "print the installed version" },
-  { name: "help", section: "after", usage: "help", help: "", hidden: true },
+  { name: "help", section: "admin", usage: "help", help: "", hidden: true },
 ];
 
-const PAD = 38;
+export const PAD = 42;
 
 /** A command's rows: its own `lines` array, or its top-level fields as a single row. */
-function rowsFor(c) {
+export function rowsFor(c) {
   return c.lines ?? [{ usage: c.usage, help: c.help, helpOnOwnLine: c.helpOnOwnLine }];
 }
 
-/** One row rendered with the same padding buildHelp() has always used. */
+/**
+ * One row, as `usage` padded to PAD then its description.
+ *
+ * A usage string that reaches into the description column pushes its own help
+ * onto the next line rather than butting up against it. This used to be the
+ * explicit `helpOnOwnLine` flag, set by hand on the one entry that needed it,
+ * which meant `remember`'s six positional slots and three of the generated
+ * operation lines silently rendered as `…[limit](alias: knowledge)` with no
+ * separating space. Deriving it from the actual length can't fall out of date.
+ */
 function renderRow({ usage, help, helpOnOwnLine }) {
   if (!help) return [`  ${usage}`];
-  if (helpOnOwnLine) return [`  ${usage}`, `  ${"".padEnd(PAD)}${help}`];
+  if (helpOnOwnLine || usage.length >= PAD) {
+    return [`  ${usage}`, `  ${"".padEnd(PAD)}${help}`];
+  }
   return [`  ${usage.padEnd(PAD)}${help}`];
 }
 
-/** Help lines for one section, padded exactly as buildHelp() has always padded them. */
+/** Rendered rows for the hand-written commands in one section. */
 export function helpLines(section) {
   return MANUAL_COMMANDS
     .filter((c) => c.section === section && !c.hidden)

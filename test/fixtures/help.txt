@@ -1,44 +1,62 @@
-Commands:
-  init-db
-  migrate [--status]                    apply pending SQL migrations, or just report their state
-  backfill-identity [project] [--status] [--json]
-                                        give pre-existing symbols stable keys + entities (batched, resumable)
-  init                                  interactively write/update the CLAUDE.md WayContext section
-  hook install [--global] [--mode M]    install the opt-in search hook (M: advise|ask|deny, default advise)
-  hook uninstall [--global]             remove the search hook
-  hook refresh                          rebuild the hook's project cache from the database
-  uninstall                             remove the hook, the global CLAUDE.md section and the project cache
-  rule candidates [project] [--json]    review extracted rule candidates (human-only, not an MCP tool)
-  rule confirm|reject <id> [project]    activate or permanently discard a candidate
-  knowledge-export [project]            write .waycontext/knowledge/*.yaml for team sharing
-  knowledge-import [project]            read them back (additive: never deactivates a rule)
-  serve [--port=4747] [--host=…]        HTTP API + web knowledge graph on localhost (no auth)
-  index_project <project> <path>        (alias: index, reindex)
-  list_projects
-  project_overview <project>
-  search_code <project> <query> [limit] (alias: search)
-  search_knowledge <project> <query> [limit](alias: knowledge)
-  get_symbol <project> <name>
-  get_callers <project> <name>
-  get_callees <project> <name>
-  get_graph <project> <name> [depth]
-  get_file_outline <project> <path>
-  find_related <project> <name> [limit]
-  get_history <project> [target] [limit](alias: history)
-  who_owns <project> [target] [limit]   (alias: owners)
-  get_rules <project> [target]          (alias: rules)
+waycontext <command> [args...]
+
+Run `waycontext help <command>` for the full description of any command,
+or add --debug to any command to see the underlying stack trace on failure.
+
+Getting started:
+  index_project <project> <path>            index a project: symbols, graph, embeddings (alias: index, reindex)
+  list_projects                             what's indexed, with file/symbol counts
+  project_overview <project>                orient in an unfamiliar codebase
+  search_code <project> <query> [limit]     find code by describing what it does (alias: search)
+  init                                      write the WayContext section into ./CLAUDE.md
+
+Search & navigate:
+  search_knowledge <project> <query> [limit]
+                                            search code and docs together (the 'why') (alias: knowledge)
+  get_symbol <project> <name>               full source and signature of one symbol
+  get_callers <project> <name>              what references this — the blast radius
+  get_callees <project> <name>              what this depends on
+  get_graph <project> <name> [depth]        dependency subgraph, both directions
+  get_file_outline <project> <path>         every symbol defined in one file
+  find_related <project> <name> [limit]     semantically similar symbols
+
+Architecture & history:
+  get_history <project> [target] [limit]    commits that touched this, newest first (alias: history)
+  who_owns <project> [target] [limit]       who to ask, weighted by recency (alias: owners)
+  get_modules <project> [sort] [limit]      modules by risk: churn + defect density (alias: modules)
+  get_module <project> <module>             one module: metrics, deps, owners (alias: module)
+  get_cochange <project> <target> [limit]   what historically changes alongside this (alias: cochange)
+  get_bug_clusters <project> [limit]        what keeps breaking, grouped (alias: bugs)
+
+Rules & engineering memory:
+  get_rules <project> [target]              confirmed conventions covering this code (alias: rules)
   remember <project> <content> [kind] [scope] [supersedes] [pinned]
-  recall <project> <query> [limit]
-  review_context <project> [paths]      (alias: review)
-  get_modules <project> [sort] [limit]  (alias: modules)
-  get_module <project> <module>         (alias: module)
-  get_cochange <project> <target> [limit](alias: cochange)
-  get_bug_clusters <project> [limit]    (alias: bugs)
-  compose_context <project> <task> [budget] [format](alias: context)
-  delete_project <project> [--yes]      delete a project and all its indexed data
-  stats                                 (alias for list_projects, table output)
-  db                                    interactive psql session
-  tables [table] [limit]                list tables, or browse rows of one table (default limit 20)
-  usage [project]                       embedding token usage per provider/model, with est. cost if configured
-  completion bash|install|uninstall     print or install the bash tab-completion script
-  version                               print the installed version
+                                            record a gotcha so it outlives the session
+  recall <project> <query> [limit]          search what was recorded earlier
+  rule candidates [project] [--json]        review extracted rule candidates (human-only, not an MCP tool)
+  rule confirm|reject <id> [project]        activate or permanently discard a candidate
+  knowledge-export [project]                write .waycontext/knowledge/*.yaml for team sharing
+  knowledge-import [project]                read them back (additive: never deactivates a rule)
+
+Context for a task:
+  review_context <project> [paths]          what to know before reviewing a change (alias: review)
+  compose_context <project> <task> [budget] [format]
+                                            rules + code + docs + memory, in one call (alias: context)
+
+Setup & administration:
+  init-db                                   create the schema (same as migrate)
+  migrate [--status]                        apply pending SQL migrations, or just report their state
+  backfill-identity [project] [--status] [--json]
+                                            give pre-existing symbols stable keys + entities (batched, resumable)
+  hook install [--global] [--mode M]        install the opt-in search hook (M: advise|ask|deny, default advise)
+  hook uninstall [--global]                 remove the search hook
+  hook refresh                              rebuild the hook's project cache from the database
+  uninstall                                 remove the hook, the global CLAUDE.md section and the project cache
+  serve [--port=4747] [--host=…]            HTTP API + web knowledge graph on localhost (no auth)
+  delete_project <project> [--yes]          delete a project and all its indexed data
+  stats                                     (alias for list_projects, table output)
+  db                                        interactive psql session
+  tables [table] [limit]                    list tables, or browse rows of one table (default limit 20)
+  usage [project]                           embedding token usage per provider/model, with est. cost if configured
+  completion bash|install|uninstall         print or install the bash tab-completion script
+  version                                   print the installed version

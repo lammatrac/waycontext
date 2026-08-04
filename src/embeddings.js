@@ -49,6 +49,27 @@ export function embeddingsEnabled() {
 }
 
 /**
+ * Fail on a missing key before spending a request on it.
+ *
+ * Without this, a provider set with an empty key produces a `401` from the API
+ * partway through an index run -- a confusing way to be told about a
+ * configuration mistake, and it happens after the run has already done work.
+ */
+function assertProviderConfigured() {
+  const provider = config.embeddingProvider;
+  const key = provider === "voyage" ? config.voyage.apiKey : config.openai.apiKey;
+  if (provider !== "voyage" && provider !== "openai") {
+    throw new Error(
+      `EMBEDDING_PROVIDER=${provider} is not a known provider. Use "voyage", "openai" or "none".`,
+    );
+  }
+  if (!key) {
+    const envKey = provider === "voyage" ? "VOYAGE_API_KEY" : "OPENAI_API_KEY";
+    throw new Error(`EMBEDDING_PROVIDER=${provider} but ${envKey} is empty.`);
+  }
+}
+
+/**
  * Embed an array of texts. Returns array of vectors (or nulls if disabled).
  * @param {string[]} texts
  * @param {"document"|"query"} inputType
@@ -56,6 +77,7 @@ export function embeddingsEnabled() {
  */
 export async function embed(texts, inputType = "document", projectId = null) {
   if (!embeddingsEnabled()) return texts.map(() => null);
+  assertProviderConfigured();
   const out = [];
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
     const batch = texts.slice(i, i + BATCH_SIZE).map(

@@ -28,15 +28,33 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // configuration only from the environment (and the JSON file). Useful in
 // containers and CI, where a stray .env inherited from a bind-mounted source
 // tree would otherwise silently override the intended settings.
+// Which .env file each key came from, so an error can name it. dotenv folds
+// both files into process.env indistinguishably, and "check your environment"
+// is unhelpful advice when the value actually came from a .env two directories
+// away that the user forgot existed.
+const dotenvSources = {};
+
 if (process.env.WAYCONTEXT_IGNORE_DOTENV !== "1") {
-  dotenv.config({ path: path.join(process.cwd(), ".env") });
-  dotenv.config({ path: path.join(__dirname, "..", ".env") });
+  for (const file of [
+    path.join(process.cwd(), ".env"),
+    path.join(__dirname, "..", ".env"),
+  ]) {
+    const preexisting = new Set(Object.keys(process.env));
+    const { parsed } = dotenv.config({ path: file });
+    if (!parsed) continue;
+    // dotenv never overwrites, so a key absent beforehand is one this file set.
+    for (const key of Object.keys(parsed)) {
+      if (!preexisting.has(key)) dotenvSources[key] = file;
+    }
+  }
 }
 
+const configFilePath =
+  process.env.WAYCONTEXT_CONFIG ||
+  path.join(os.homedir(), ".config", "waycontext", "config.json");
+
 function loadConfigFile() {
-  const file =
-    process.env.WAYCONTEXT_CONFIG ||
-    path.join(os.homedir(), ".config", "waycontext", "config.json");
+  const file = configFilePath;
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     return typeof parsed === "object" && parsed !== null ? parsed : {};
@@ -52,13 +70,37 @@ function loadConfigFile() {
 
 const fileConfig = loadConfigFile();
 
+/**
+ * Where each setting's value came from, keyed by env var name.
+ *
+ * Populated as a side effect of resolving `config` below. A first-run failure is
+ * almost always "the value it used isn't the one you think it set", so the CLI's
+ * error messages quote this -- see `describeSource`.
+ */
+export const sources = {};
+
 /** process.env wins, then the JSON config file, then the built-in default. */
 function setting(envKey, fallback) {
   const fromEnv = process.env[envKey];
-  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+  if (fromEnv !== undefined && fromEnv !== "") {
+    sources[envKey] = dotenvSources[envKey] ?? "environment";
+    return fromEnv;
+  }
   const fromFile = fileConfig[envKey];
-  if (fromFile !== undefined && fromFile !== null) return String(fromFile);
+  if (fromFile !== undefined && fromFile !== null) {
+    sources[envKey] = configFilePath;
+    return String(fromFile);
+  }
+  sources[envKey] = "built-in default";
   return fallback;
+}
+
+/** Human-readable phrase for where a setting came from. */
+export function describeSource(envKey) {
+  const src = sources[envKey];
+  if (!src) return "unknown";
+  if (src === "environment" || src === "built-in default") return src;
+  return src.replace(os.homedir(), "~");
 }
 
 function numeric(envKey, fallback) {
