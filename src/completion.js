@@ -12,16 +12,18 @@
  * rule maps a slot to a completion kind. For a command with subVerbs, slot 1 is
  * the sub-verb and `args` describes slots 2..n.
  *
- * `extraLines`, where present, is verbatim raw help lines (already indented and
- * padded exactly as buildHelp() has always emitted them) for sub-verbs of the
- * same command that have never had their own MANUAL_COMMANDS entry -- `hook`
- * and `rule` each show one line per sub-verb in `help`, but completion only
- * needs one row per switch-case name (`subVerbs` already lists every verb for
- * that). Splitting them into separate table entries would give "hook install"
- * and "hook uninstall" distinct `name`s with no matching switch case, which
- * breaks the orphaned-entry drift test below. `extraLines` keeps the 1:1
- * name-to-case mapping while still reproducing the pre-existing help text
- * byte-for-byte.
+ * `lines`, where present, is the ordered list of `{ usage, help, helpOnOwnLine? }`
+ * rows a command renders in `help` -- `hook` and `rule` each show one row per
+ * sub-verb, but completion only needs one MANUAL_COMMANDS entry per switch-case
+ * name (`subVerbs` already lists every verb for that; see the drift tests in
+ * test/completion.test.js, which depend on exactly one entry per `case` label).
+ * Splitting them into separate table entries would give "hook install" and
+ * "hook uninstall" distinct `name`s with no matching switch case and break that
+ * invariant. Every row -- including these -- is rendered by the same padding
+ * logic in `helpLines()` below, so nothing here is pre-padded raw text; if
+ * `PAD` ever changes, these rows re-pad automatically along with every other
+ * entry. When `lines` is absent, the entry's own top-level `usage`/`help`/
+ * `helpOnOwnLine` stand in as its single row.
  */
 export const MANUAL_COMMANDS = [
   { name: "init-db", section: "before", usage: "init-db", help: "" },
@@ -38,9 +40,11 @@ export const MANUAL_COMMANDS = [
     subVerbs: ["install", "uninstall", "refresh"],
     flags: ["--global", "--project", "--mode"],
     help: "install the opt-in search hook (M: advise|ask|deny, default advise)",
-    extraLines: [
-      "  hook uninstall [--global]             remove the search hook",
-      "  hook refresh                          rebuild the hook's project cache from the database",
+    lines: [
+      { usage: "hook install [--global] [--mode M]",
+        help: "install the opt-in search hook (M: advise|ask|deny, default advise)" },
+      { usage: "hook uninstall [--global]", help: "remove the search hook" },
+      { usage: "hook refresh", help: "rebuild the hook's project cache from the database" },
     ] },
   { name: "uninstall", section: "before", usage: "uninstall",
     help: "remove the hook, the global CLAUDE.md section and the project cache" },
@@ -50,8 +54,11 @@ export const MANUAL_COMMANDS = [
     // vs `confirm <id> [project]`), which the uniform slot model cannot express.
     // Sub-verbs and --json still complete; the project argument does not.
     help: "review extracted rule candidates (human-only, not an MCP tool)",
-    extraLines: [
-      "  rule confirm|reject <id> [project]    activate or permanently discard a candidate",
+    lines: [
+      { usage: "rule candidates [project] [--json]",
+        help: "review extracted rule candidates (human-only, not an MCP tool)" },
+      { usage: "rule confirm|reject <id> [project]",
+        help: "activate or permanently discard a candidate" },
     ] },
   { name: "knowledge-export", section: "before", usage: "knowledge-export [project]",
     args: ["project"], help: "write .waycontext/knowledge/*.yaml for team sharing" },
@@ -79,14 +86,21 @@ export const MANUAL_COMMANDS = [
 
 const PAD = 38;
 
+/** A command's rows: its own `lines` array, or its top-level fields as a single row. */
+function rowsFor(c) {
+  return c.lines ?? [{ usage: c.usage, help: c.help, helpOnOwnLine: c.helpOnOwnLine }];
+}
+
+/** One row rendered with the same padding buildHelp() has always used. */
+function renderRow({ usage, help, helpOnOwnLine }) {
+  if (!help) return [`  ${usage}`];
+  if (helpOnOwnLine) return [`  ${usage}`, `  ${"".padEnd(PAD)}${help}`];
+  return [`  ${usage.padEnd(PAD)}${help}`];
+}
+
 /** Help lines for one section, padded exactly as buildHelp() has always padded them. */
 export function helpLines(section) {
   return MANUAL_COMMANDS
     .filter((c) => c.section === section && !c.hidden)
-    .flatMap((c) => {
-      const lines = !c.help ? [`  ${c.usage}`]
-        : c.helpOnOwnLine ? [`  ${c.usage}`, `  ${"".padEnd(PAD)}${c.help}`]
-        : [`  ${c.usage.padEnd(PAD)}${c.help}`];
-      return c.extraLines ? [...lines, ...c.extraLines] : lines;
-    });
+    .flatMap((c) => rowsFor(c).flatMap(renderRow));
 }
