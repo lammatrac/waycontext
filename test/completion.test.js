@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
-import { MANUAL_COMMANDS, helpLines } from "../src/completion.js";
+import { execFileSync, spawnSync } from "node:child_process";
+import { MANUAL_COMMANDS, helpLines, generateBash, completeWords } from "../src/completion.js";
 import { operations } from "../src/operations.js";
 
 test("help output is byte-identical after moving manual commands into a table", () => {
@@ -39,4 +39,53 @@ test("every MANUAL_COMMANDS entry has a switch case implementing it", () => {
 
   const orphaned = MANUAL_COMMANDS.map((c) => c.name).filter((n) => !cases.has(n));
   assert.deepEqual(orphaned, [], `table entries with no switch case: ${orphaned.join(", ")}`);
+});
+
+/** Source the generated script in a clean bash and return what Tab would offer. */
+function complete(words, cword, env = {}) {
+  const script = generateBash();
+  const driver = [
+    script,
+    `COMP_WORDS=(${words.map((w) => `'${w}'`).join(" ")})`,
+    `COMP_CWORD=${cword}`,
+    "_waycontext",
+    'printf "%s\\n" "${COMPREPLY[@]:-}"',
+  ].join("\n");
+  const r = spawnSync("bash", ["--norc", "--noprofile", "-c", driver], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+  return {
+    words: r.stdout.split("\n").map((s) => s.trim()).filter(Boolean),
+    stderr: r.stderr,
+    status: r.status,
+  };
+}
+
+test("the generated script is valid bash", () => {
+  const r = spawnSync("bash", ["-n"], { input: generateBash(), encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("the generated script names every command, alias and manual entry", () => {
+  const script = generateBash();
+  for (const word of completeWords()) {
+    assert.ok(script.includes(word), `generated script is missing "${word}"`);
+  }
+});
+
+test("a bare prefix completes to the matching subcommand", () => {
+  const { words, stderr, status } = complete(["waycontext", "us"], 1);
+  assert.equal(status, 0);
+  assert.equal(stderr, "");
+  assert.deepEqual(words, ["usage"]);
+});
+
+test("an ambiguous prefix offers every match", () => {
+  const { words } = complete(["waycontext", "search"], 1);
+  assert.deepEqual(words.sort(), ["search", "search_code", "search_knowledge"]);
+});
+
+test("both installed bin names are registered", () => {
+  assert.match(generateBash(), /complete -F _waycontext waycontext codecontext/);
 });
