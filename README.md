@@ -162,6 +162,10 @@ including the project name to pass to the tools. For a stronger push there's an 
 
 ## Changes
 
+- 2026-08-05: Bumped `@modelcontextprotocol/sdk` to 1.30.0 and applied `npm audit fix`
+  (including a major `@hono/node-server` bump to 2.1.0), resolving all 4 known
+  vulnerabilities in transitive dependencies. Full test suite verified green.
+
 - 2026-08-04: Call resolution is now scope-aware. A bare-identifier call/`new` matching one
   of the enclosing function's own parameters (e.g. `function derive(project, log = () => {})`
   calling `log(...)`) is no longer treated as a call to a same-named project symbol elsewhere
