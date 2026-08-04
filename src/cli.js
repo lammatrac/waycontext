@@ -115,7 +115,7 @@ function buildHelp() {
     "  migrate [--status]                    apply pending SQL migrations, or just report their state",
     "  backfill-identity [project] [--status] [--json]",
     "                                        give pre-existing symbols stable keys + entities (batched, resumable)",
-    "  init                                  interactively write/update the CLAUDE.md Code Context MCP section",
+    "  init                                  interactively write/update the CLAUDE.md WayContext section",
     "  hook install [--global] [--mode M]    install the opt-in search hook (M: advise|ask|deny, default advise)",
     "  hook uninstall [--global]             remove the search hook",
     "  hook refresh                          rebuild the hook's project cache from the database",
@@ -497,7 +497,7 @@ async function main() {
         const after = removeGlobalSection(before);
         if (after !== before) {
           fs.writeFileSync(globalClaudeMd, after);
-          console.log(`Removed the Code Context MCP Workflow section from ${globalClaudeMd}.`);
+          console.log(`Removed the WayContext Workflow section from ${globalClaudeMd}.`);
         }
       }
 

@@ -2,6 +2,16 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-04 — CLI wording left over from the rename
+
+- **`waycontext help`** described `init` as writing "the CLAUDE.md Code Context MCP section".
+  The section it actually writes has been `## WayContext` since the rename.
+- **`waycontext uninstall`** reported removing "the Code Context MCP Workflow section" even
+  when it had removed one headed `## WayContext Workflow` — `GLOBAL_SECTION_RE` matches
+  either name, but the message hardcoded the old one.
+
+Both are output strings only; no behaviour changed.
+
 ## 2026-08-04 — documentation split
 
 - **README reduced from 1210 lines to ~100.** It had grown to cover everything from apt
