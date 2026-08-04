@@ -15,6 +15,23 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$1"; }
 err()  { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; }
 
+# 1. Node.js
+#
+# Checked first, before anything else needs a working toolchain. This block used
+# to sit below the password generation, which called `node` -- so on a machine
+# without Node the script died at that line with bash's own "node: command not
+# found" and this message, written for exactly that audience, never printed.
+if ! command -v node >/dev/null 2>&1; then
+  err "Node.js not found. Install Node.js >= 18 first: https://nodejs.org/en/download"
+  exit 1
+fi
+NODE_MAJOR="$(node -v | sed 's/^v//' | cut -d. -f1)"
+if [ "$NODE_MAJOR" -lt 18 ]; then
+  err "Node.js >= 18 required, found $(node -v)."
+  exit 1
+fi
+log "Node.js $(node -v) OK"
+
 # Database password: reuse whatever .env already holds, so re-running this
 # script never invalidates a working install. Only a genuinely fresh setup
 # generates one -- the password used to be the literal string "codectx",
@@ -25,18 +42,6 @@ if [ -z "$DB_PASS" ]; then
   DB_PASS="$(node -e 'process.stdout.write(require("crypto").randomBytes(18).toString("base64url"))')"
   GENERATED_PASS=true
 fi
-
-# 1. Node.js
-if ! command -v node >/dev/null 2>&1; then
-  err "Node.js not found. Install Node.js >= 18 first."
-  exit 1
-fi
-NODE_MAJOR="$(node -v | sed 's/^v//' | cut -d. -f1)"
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  err "Node.js >= 18 required, found $(node -v)."
-  exit 1
-fi
-log "Node.js $(node -v) OK"
 
 # 2. PostgreSQL + pgvector.
 #
@@ -113,8 +118,17 @@ elif command -v apt >/dev/null 2>&1; then
     || sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
   sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;"
 else
-  warn "'$DB_NAME' isn't reachable and neither Docker nor apt is available."
-  warn "Install Docker, or set up PostgreSQL + pgvector manually (see README), then re-run this script."
+  # Stopping here rather than falling through. Everything past this point
+  # assumes a database: step 5 runs init-db, which would crash with a raw
+  # connection error several steps after the real problem was already known.
+  err "'$DB_NAME' isn't reachable, and neither Docker nor apt is available to provision it."
+  echo "" >&2
+  echo "Install Docker (the easiest path, no sudo needed):" >&2
+  echo "  https://docs.docker.com/get-started/get-docker/" >&2
+  echo "" >&2
+  echo "or set up PostgreSQL + pgvector by hand -- see docs/installation.md -- and put" >&2
+  echo "the connection string in .env as DATABASE_URL. Then re-run this script." >&2
+  exit 1
 fi
 
 # 3. npm install
@@ -149,13 +163,21 @@ log "Installing npm dependencies..."
 npm install
 
 # 4. .env
+#
+# The rewrite goes through a temp file rather than `sed -i`. GNU sed treats -i's
+# argument as optional; BSD sed (macOS) requires one and reads the next argument
+# as a backup suffix, so `sed -i "s|...|"` fails there -- and with `set -e` that
+# aborted the whole install on the fresh-install path, which is precisely the one
+# a first-time macOS user takes.
 if [ -f .env ]; then
   log ".env already exists, skipping"
 else
   cp .env.example .env
   DB_URL="postgres://$DB_USER:$DB_PASS@localhost:$DB_PORT/$DB_NAME"
   if grep -q '^DATABASE_URL=' .env; then
-    sed -i "s|^DATABASE_URL=.*|DATABASE_URL=$DB_URL|" .env
+    tmp="$(mktemp)"
+    sed "s|^DATABASE_URL=.*|DATABASE_URL=$DB_URL|" .env > "$tmp"
+    mv "$tmp" .env
   else
     printf '\nDATABASE_URL=%s\n' "$DB_URL" >> .env
   fi
@@ -182,27 +204,43 @@ if command -v waycontext >/dev/null 2>&1; then
   log "'waycontext' CLI already linked, skipping"
 else
   log "Linking 'waycontext' CLI globally..."
-  if ! npm link 2>/tmp/waycontext-npm-link-err.log; then
+  link_err="$(mktemp)"
+  if ! npm link 2>"$link_err"; then
     warn "npm link failed (may need sudo). Run manually: cd $SCRIPT_DIR && npm link"
-    cat /tmp/waycontext-npm-link-err.log >&2 || true
+    cat "$link_err" >&2 || true
   fi
+  rm -f "$link_err"
 fi
 
-# 7. Register the MCP server with Claude Code at user scope
+# 7. Register the MCP server with Claude Code at user scope.
+#
+# A missing `claude` is not an install failure. WayContext speaks MCP over stdio
+# to any client -- Cursor, Windsurf, Zed, a plain .mcp.json -- and by this point
+# every step that actually matters has already succeeded. Exiting 1 here told
+# those users their install had failed when it hadn't, and skipped the completion
+# message and the optional next steps below.
 if ! command -v claude >/dev/null 2>&1; then
-  err "Claude Code CLI ('claude') not found in PATH. Install it, then run:"
-  echo "  claude mcp add --scope user $MCP_NAME -- node $SCRIPT_DIR/src/server.js"
-  exit 1
-fi
-
-if claude mcp add --scope user "$MCP_NAME" -- node "$SCRIPT_DIR/src/server.js" 2>/tmp/waycontext-mcp-add-err.log; then
-  log "Registered MCP server '$MCP_NAME' with Claude Code (user scope)"
-elif grep -qi "already exists" /tmp/waycontext-mcp-add-err.log; then
-  warn "MCP '$MCP_NAME' is already registered at user scope, skipping"
+  warn "Claude Code CLI ('claude') not found in PATH — skipping automatic MCP registration."
+  echo "" >&2
+  echo "  For Claude Code, once it's installed:" >&2
+  echo "    claude mcp add --scope user $MCP_NAME -- node $SCRIPT_DIR/src/server.js" >&2
+  echo "" >&2
+  echo "  For any other MCP client, add this to its config:" >&2
+  echo "    {\"mcpServers\": {\"$MCP_NAME\": {\"command\": \"node\", \"args\": [\"$SCRIPT_DIR/src/server.js\"]}}}" >&2
+  echo "" >&2
 else
-  err "Failed to register MCP server:"
-  cat /tmp/waycontext-mcp-add-err.log >&2
-  exit 1
+  mcp_err="$(mktemp)"
+  if claude mcp add --scope user "$MCP_NAME" -- node "$SCRIPT_DIR/src/server.js" 2>"$mcp_err"; then
+    log "Registered MCP server '$MCP_NAME' with Claude Code (user scope)"
+  elif grep -qi "already exists" "$mcp_err"; then
+    warn "MCP '$MCP_NAME' is already registered at user scope, skipping"
+  else
+    err "Failed to register MCP server:"
+    cat "$mcp_err" >&2
+    rm -f "$mcp_err"
+    exit 1
+  fi
+  rm -f "$mcp_err"
 fi
 
 # 8. Nothing outside this repo and the MCP registration is touched, except a
