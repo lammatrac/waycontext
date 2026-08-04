@@ -170,6 +170,14 @@ including the project name to pass to the tools. For a stronger push there's an 
   extension) was already covered by parity tests and found consistent — only hand-written
   markdown was out of sync.
 
+- 2026-08-05: Dropped Node 18 support (`engines.node` now `>=20`; CI matrix now 20/22).
+  The `@hono/node-server` 2.1.0 bump below turned out to require Node >=20 across its
+  entire 2.x line — there is no version that both patches its CVE and runs on Node 18 —
+  and under real Node 18 its Node→Fetch request bridging (now used by
+  `@modelcontextprotocol/sdk`'s HTTP transport) throws `ReferenceError: crypto is not
+  defined`, which surfaced as 3 failing MCP-over-HTTP tests on CI's Node 18 leg only.
+  Node 18 reached EOL in April 2025.
+
 - 2026-08-05: Bumped `@modelcontextprotocol/sdk` to 1.30.0 and applied `npm audit fix`
   (including a major `@hono/node-server` bump to 2.1.0), resolving all 4 known
   vulnerabilities in transitive dependencies. Full test suite verified green.
