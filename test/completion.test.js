@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   MANUAL_COMMANDS, helpLines, generateBash, completeWords, assertSafeForBash,
@@ -43,6 +45,13 @@ test("every MANUAL_COMMANDS entry has a switch case implementing it", () => {
   assert.deepEqual(orphaned, [], `table entries with no switch case: ${orphaned.join(", ")}`);
 });
 
+// Resolved once, by absolute path: tests override PATH (e.g. to hide jq from
+// the generated script's own `command -v` check), and a bare "bash" command
+// name would otherwise have to be found via that same overridden PATH,
+// failing to spawn at all. An absolute path sidesteps PATH lookup for the
+// spawn itself while still letting the script see the caller's PATH override.
+const BASH = spawnSync("which", ["bash"], { encoding: "utf8" }).stdout.trim() || "/bin/bash";
+
 /** Source the generated script in a clean bash and return what Tab would offer. */
 function complete(words, cword, env = {}) {
   const script = generateBash();
@@ -53,7 +62,7 @@ function complete(words, cword, env = {}) {
     "_waycontext",
     'printf "%s\\n" "${COMPREPLY[@]:-}"',
   ].join("\n");
-  const r = spawnSync("bash", ["--norc", "--noprofile", "-c", driver], {
+  const r = spawnSync(BASH, ["--norc", "--noprofile", "-c", driver], {
     encoding: "utf8",
     env: { ...process.env, ...env },
   });
@@ -115,4 +124,84 @@ test("an ambiguous prefix offers every match", () => {
 
 test("both installed bin names are registered", () => {
   assert.match(generateBash(), /complete -F _waycontext waycontext codecontext/);
+});
+
+/** A temp XDG_CACHE_HOME holding a projects.json fixture. */
+function cacheWith(names) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wc-completion-"));
+  fs.mkdirSync(path.join(dir, "waycontext"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "waycontext", "projects.json"),
+    JSON.stringify({ version: 1, mcpName: "waycontext", mode: "advise",
+      projects: names.map((n) => ({ name: n, root_path: `/tmp/${n}` })) })
+  );
+  return dir;
+}
+
+test("a project slot completes from the cache", () => {
+  const XDG_CACHE_HOME = cacheWith(["alpha", "beta", "waycontext"]);
+  const { words, stderr } = complete(["waycontext", "search_code", ""], 2, { XDG_CACHE_HOME });
+  assert.equal(stderr, "");
+  assert.deepEqual(words.sort(), ["alpha", "beta", "waycontext"]);
+});
+
+test("a project slot filters on the typed prefix", () => {
+  const XDG_CACHE_HOME = cacheWith(["alpha", "beta"]);
+  const { words } = complete(["waycontext", "get_symbol", "al"], 2, { XDG_CACHE_HOME });
+  assert.deepEqual(words, ["alpha"]);
+});
+
+test("project completion works without jq, via the grep fallback", () => {
+  const XDG_CACHE_HOME = cacheWith(["alpha", "beta"]);
+  // A PATH with no jq on it, but still a usable coreutils.
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), "wc-nojq-"));
+  for (const bin of ["grep", "sed", "cat", "compgen"]) {
+    const found = spawnSync("which", [bin], { encoding: "utf8" }).stdout.trim();
+    if (found) fs.symlinkSync(found, path.join(bare, bin));
+  }
+  const { words, stderr } = complete(["waycontext", "search_code", ""], 2,
+    { XDG_CACHE_HOME, PATH: bare });
+  assert.equal(stderr, "");
+  assert.deepEqual(words.sort(), ["alpha", "beta"]);
+});
+
+test("sub-verbs complete in slot 1 of a command that declares them", () => {
+  const { words } = complete(["waycontext", "hook", ""], 2);
+  assert.deepEqual(words.sort(), ["install", "refresh", "uninstall"]);
+});
+
+test("flags complete wherever a dash is typed", () => {
+  const { words } = complete(["waycontext", "migrate", "--"], 2);
+  assert.deepEqual(words, ["--status"]);
+});
+
+test("a path slot hands back to filename completion without speaking", () => {
+  const { words, stderr, status } = complete(["waycontext", "index_project", "proj", ""], 3);
+  assert.equal(status, 0);
+  assert.equal(stderr, "");   // compopt outside a real completion must stay silent
+  assert.deepEqual(words, []);
+});
+
+test("completion is silent with no cache at all", () => {
+  const XDG_CACHE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "wc-empty-"));
+  const { words, stderr, status } = complete(["waycontext", "search_code", ""], 2, { XDG_CACHE_HOME });
+  assert.equal(status, 0);
+  assert.equal(stderr, "");
+  assert.deepEqual(words, []);
+});
+
+test("completion is silent on malformed cache JSON", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wc-bad-"));
+  fs.mkdirSync(path.join(dir, "waycontext"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "waycontext", "projects.json"), "{ not json");
+  const { stderr, status } = complete(["waycontext", "search_code", ""], 2, { XDG_CACHE_HOME: dir });
+  assert.equal(status, 0);
+  assert.equal(stderr, "");
+});
+
+test("an unknown command offers nothing and says nothing", () => {
+  const { words, stderr, status } = complete(["waycontext", "nonsense", ""], 2);
+  assert.equal(status, 0);
+  assert.equal(stderr, "");
+  assert.deepEqual(words, []);
 });
