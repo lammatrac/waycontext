@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { operations } from "./operations.js";
 import { NAME, VERSION } from "./version.js";
 
@@ -82,6 +85,9 @@ export const MANUAL_COMMANDS = [
     help: "list tables, or browse rows of one table (default limit 20)" },
   { name: "usage", section: "after", usage: "usage [project]", args: ["project"],
     help: "embedding token usage per provider/model, with est. cost if configured" },
+  { name: "completion", section: "after", usage: "completion bash|install|uninstall",
+    subVerbs: ["bash", "install", "uninstall"],
+    help: "print or install the bash tab-completion script" },
   { name: "version", section: "after", usage: "version",
     help: "print the installed version" },
   { name: "help", section: "after", usage: "help", help: "", hidden: true },
@@ -270,4 +276,29 @@ _waycontext() {
 
 complete -F _waycontext waycontext codecontext
 `;
+}
+
+/**
+ * bash-completion 2.8+ auto-loads by command name from this directory, so
+ * installing needs no .bashrc edit -- verified against bash-completion 2.11,
+ * whose dynamic loader searches ${XDG_DATA_HOME:-$HOME/.local/share}.
+ */
+export function completionPath() {
+  const dataHome = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+  return path.join(dataHome, "bash-completion", "completions", "waycontext");
+}
+
+export function installCompletion() {
+  const target = completionPath();
+  const created = !fs.existsSync(target);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, generateBash());
+  return { path: target, created };
+}
+
+export function removeCompletion() {
+  const target = completionPath();
+  if (!fs.existsSync(target)) return { path: target, removed: false };
+  fs.rmSync(target, { force: true });
+  return { path: target, removed: true };
 }

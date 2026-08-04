@@ -40,4 +40,5 @@ Commands:
   db                                    interactive psql session
   tables [table] [limit]                list tables, or browse rows of one table (default limit 20)
   usage [project]                       embedding token usage per provider/model, with est. cost if configured
+  completion bash|install|uninstall     print or install the bash tab-completion script
   version                               print the installed version

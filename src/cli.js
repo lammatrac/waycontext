@@ -9,7 +9,9 @@ import { listCandidates, setRuleState } from "./knowledge/rules.js";
 import { exportKnowledge, importKnowledge } from "./knowledge/knowledgeFiles.js";
 import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
-import { helpLines } from "./completion.js";
+import {
+  helpLines, generateBash, installCompletion, removeCompletion, completionPath,
+} from "./completion.js";
 import { config } from "./config.js";
 import { upsertSection, extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
 import { upsertHook, removeHook } from "./hookInit.js";
@@ -458,6 +460,33 @@ async function main() {
       }
       break;
     }
+    case "completion": {
+      // Opt-in, like the search hook. install.sh only prints a hint -- this repo
+      // walked back one unattended global install already.
+      const [sub] = args;
+
+      if (sub === "bash") {
+        console.log(generateBash());
+        break;
+      }
+      if (sub === "install") {
+        const { path: target, created } = installCompletion();
+        console.log(`${created ? "Wrote" : "Updated"} ${target}`);
+        console.log("Open a new shell (or: exec bash) to use it.");
+        break;
+      }
+      if (sub === "uninstall") {
+        const { path: target, removed } = removeCompletion();
+        console.log(removed ? `Removed ${target}` : `No completion script at ${target}.`);
+        break;
+      }
+      usageAndExit(
+        "Usage: completion bash|install|uninstall\n" +
+        "       bash       print the script to stdout\n" +
+        "       install    write it to the bash-completion directory\n" +
+        "       uninstall  remove it"
+      );
+    }
     case "uninstall": {
       // Reverse everything WayContext put outside its own directory. Cheap to
       // provide, and a product that can't be cleanly removed doesn't get installed.
@@ -489,6 +518,9 @@ async function main() {
         fs.rmSync(cache, { force: true });
         console.log(`Removed ${cache}.`);
       }
+
+      const completion = removeCompletion();
+      if (completion.removed) console.log(`Removed ${completion.path}.`);
 
       console.log("\nStill installed (remove by hand if you want them gone):");
       console.log("  claude mcp remove --scope user waycontext");

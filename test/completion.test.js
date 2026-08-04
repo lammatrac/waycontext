@@ -205,3 +205,57 @@ test("an unknown command offers nothing and says nothing", () => {
   assert.equal(stderr, "");
   assert.deepEqual(words, []);
 });
+
+import { completionPath, installCompletion, removeCompletion } from "../src/completion.js";
+
+function withDataHome(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wc-xdg-"));
+  const prev = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = dir;
+  try { return fn(dir); } finally {
+    if (prev === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prev;
+  }
+}
+
+test("completionPath honours XDG_DATA_HOME", () => {
+  withDataHome((dir) => {
+    assert.equal(completionPath(),
+      path.join(dir, "bash-completion", "completions", "waycontext"));
+  });
+});
+
+test("installCompletion writes the script and is idempotent", () => {
+  withDataHome(() => {
+    const first = installCompletion();
+    assert.equal(first.created, true);
+    assert.match(fs.readFileSync(first.path, "utf8"), /complete -F _waycontext/);
+
+    const second = installCompletion();
+    assert.equal(second.created, false, "re-running should overwrite, not report a new file");
+    assert.equal(second.path, first.path);
+  });
+});
+
+test("removeCompletion deletes the file and reports a second call as a no-op", () => {
+  withDataHome(() => {
+    installCompletion();
+    assert.equal(removeCompletion().removed, true);
+    assert.equal(removeCompletion().removed, false);
+    assert.equal(fs.existsSync(completionPath()), false);
+  });
+});
+
+test("completion bash prints the script to stdout without writing anything", () => {
+  withDataHome(() => {
+    const out = execFileSync("node", ["src/cli.js", "completion", "bash"], { encoding: "utf8" });
+    assert.match(out, /complete -F _waycontext waycontext codecontext/);
+    assert.equal(fs.existsSync(completionPath()), false);
+  });
+});
+
+test("completion with no sub-verb exits non-zero with usage", () => {
+  const r = spawnSync("node", ["src/cli.js", "completion"], { encoding: "utf8" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /completion bash\|install\|uninstall/);
+});
