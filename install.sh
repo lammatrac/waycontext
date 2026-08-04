@@ -91,26 +91,57 @@ elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 \
     done
   fi
 
-  log "Starting PostgreSQL + pgvector via Docker on port $DB_PORT..."
-  DB_USER="$DB_USER" DB_PASS="$DB_PASS" DB_NAME="$DB_NAME" DB_PORT="$DB_PORT" \
-    docker compose -f "$COMPOSE_FILE" up -d
+  # Exported for EVERY compose invocation, not just `up`. The compose file
+  # declares POSTGRES_PASSWORD as ${DB_PASS:?...}, so any command that has to
+  # interpolate the service definition -- `ps`, `logs`, and the diagnostics
+  # below -- fails with "DB_PASS must be set" without it. That is also why the
+  # old failure message, which told you to run `docker compose ... logs`, did
+  # not work when followed literally.
+  export DB_USER DB_PASS DB_NAME DB_PORT
 
-  log "Waiting for the database to accept connections..."
-  ready=false
-  for _ in $(seq 1 60); do
-    if docker compose -f "$COMPOSE_FILE" exec -T postgres \
-         pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
-      ready=true
-      break
+  # Dump the container's own account of itself. Reaching the timeout used to
+  # print "check: docker compose logs" and exit, which meant the one run that
+  # knew what went wrong -- often the only run, on a CI box that is then
+  # destroyed -- threw that information away.
+  db_diagnostics() {
+    err "The database container never became healthy. Its own account:"
+    docker compose -f "$COMPOSE_FILE" ps || true
+    docker compose -f "$COMPOSE_FILE" logs --tail=60 postgres 2>&1 | sed 's/^/    /' || true
+  }
+
+  log "Starting PostgreSQL + pgvector via Docker on port $DB_PORT..."
+  log "Waiting for the database to accept connections (first run pulls the image)..."
+
+  # The compose file already defines a healthcheck, so let compose do the
+  # waiting: --wait blocks until the service reports healthy and fails if it
+  # never does. This replaces a hand-rolled 60x1s `exec pg_isready` loop that
+  # could not tell "still initialising" from "crash-looping", and whose budget
+  # a cold CI runner exhausted -- pulling a ~400 MB image and running initdb on
+  # a slow disk is routinely more than a minute.
+  if docker compose up --help 2>&1 | grep -q -- '--wait-timeout'; then
+    if ! docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout 300; then
+      db_diagnostics
+      exit 1
     fi
-    sleep 1
-  done
-  if [ "$ready" = true ]; then
-    log "Database ready"
   else
-    err "Database did not become ready in 60s. Check: docker compose -f $COMPOSE_FILE logs"
-    exit 1
+    # Older compose: no --wait. Poll the healthcheck ourselves, with a budget
+    # that accounts for the image pull.
+    docker compose -f "$COMPOSE_FILE" up -d
+    ready=false
+    for _ in $(seq 1 300); do
+      if docker compose -f "$COMPOSE_FILE" exec -T postgres \
+           pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+        ready=true
+        break
+      fi
+      sleep 1
+    done
+    if [ "$ready" != true ]; then
+      db_diagnostics
+      exit 1
+    fi
   fi
+  log "Database ready"
 elif command -v apt >/dev/null 2>&1; then
   log "Setting up PostgreSQL + pgvector (requires sudo)..."
   sudo apt update
