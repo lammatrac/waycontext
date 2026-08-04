@@ -205,7 +205,9 @@ else
   exit 1
 fi
 
-# 8. Nothing outside this repo and the MCP registration is touched.
+# 8. Nothing outside this repo and the MCP registration is touched, except a
+# tab-completion script the user already installed, which is refreshed in
+# place (see step 9).
 #
 # Earlier versions also rewrote ~/.claude/CLAUDE.md and installed a PreToolUse
 # hook that DENIED grep in every indexed project, machine-wide and unattended.

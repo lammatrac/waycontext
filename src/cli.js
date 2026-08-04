@@ -10,7 +10,7 @@ import { exportKnowledge, importKnowledge } from "./knowledge/knowledgeFiles.js"
 import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
 import {
-  helpLines, generateBash, installCompletion, removeCompletion, completionPath,
+  helpLines, generateBash, installCompletion, removeCompletion,
 } from "./completion.js";
 import { config } from "./config.js";
 import { upsertSection, extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
@@ -486,6 +486,7 @@ async function main() {
         "       install    write it to the bash-completion directory\n" +
         "       uninstall  remove it"
       );
+      break;
     }
     case "uninstall": {
       // Reverse everything WayContext put outside its own directory. Cheap to

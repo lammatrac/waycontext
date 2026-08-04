@@ -15,6 +15,20 @@ test("help output is byte-identical after moving manual commands into a table", 
   assert.equal(actual, expected);
 });
 
+/**
+ * Every name/alias a switch case or op could match, built directly from
+ * MANUAL_COMMANDS and operations.js -- independent of completeWords(), so a
+ * bug inside completeWords() itself (e.g. dropping op.cli.aliases) can't hide
+ * behind a test that only ever compares completeWords() against itself.
+ */
+function knownCommandNames() {
+  return new Set([
+    ...MANUAL_COMMANDS.map((c) => c.name),
+    ...operations.map((op) => op.name),
+    ...operations.flatMap((op) => op.cli?.aliases ?? []),
+  ]);
+}
+
 test("every hand-written switch case appears in MANUAL_COMMANDS or the registry", () => {
   // cli.js's switch and the completion word list are edited separately and
   // drift silently -- a subcommand that exists but never completes.
@@ -24,11 +38,7 @@ test("every hand-written switch case appears in MANUAL_COMMANDS or the registry"
   // --version and -v are flag spellings of `version`, never typed as a subcommand.
   const typed = cases.filter((c) => c !== "--version" && c !== "-v");
 
-  const known = new Set([
-    ...MANUAL_COMMANDS.map((c) => c.name),
-    ...operations.map((op) => op.name),
-    ...operations.flatMap((op) => op.cli?.aliases ?? []),
-  ]);
+  const known = knownCommandNames();
 
   const missing = typed.filter((c) => !known.has(c));
   assert.deepEqual(missing, [], `switch cases with no completion entry: ${missing.join(", ")}`);
@@ -79,14 +89,18 @@ test("the generated script is valid bash", () => {
 });
 
 test("the generated script names every command, alias and manual entry", () => {
-  // A substring match against completeWords() would pass even if a word went
+  // A substring match against the expected set would pass even if a word went
   // missing entirely, as long as it happens to be a substring of a word that
   // is still present (e.g. dropping the alias "search" would go unnoticed
   // since "search_code" still contains it). Parse out exactly what
-  // _WC_COMMANDS holds and compare the two sets directly instead.
+  // _WC_COMMANDS holds and compare against the independently-built set
+  // instead. Comparing against completeWords() itself would be circular --
+  // both _WC_COMMANDS and that call are derived from completeWords(), so a
+  // bug inside completeWords() (e.g. it stopped including op.cli.aliases)
+  // would never surface.
   const script = generateBash();
   const listed = script.match(/_WC_COMMANDS='([^']*)'/)[1].split(" ");
-  assert.deepEqual(listed.sort(), completeWords().sort());
+  assert.deepEqual(listed.sort(), [...knownCommandNames()].sort());
 });
 
 test("assertSafeForBash passes conservative names through unchanged", () => {
@@ -258,4 +272,36 @@ test("completion with no sub-verb exits non-zero with usage", () => {
   const r = spawnSync("node", ["src/cli.js", "completion"], { encoding: "utf8" });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /completion bash\|install\|uninstall/);
+});
+
+test("waycontext uninstall removes the completion file end-to-end", () => {
+  // Only removeCompletion() itself was tested elsewhere -- this covers the
+  // integration point: does the top-level `uninstall` subcommand actually
+  // reach it. `case "uninstall"` never calls initDb(), and pool.end() on an
+  // unconnected pool is a safe no-op, so this needs no database at all --
+  // only filesystem env vars pointed at temp directories.
+  const cliPath = path.resolve("src/cli.js");
+  const dataHome = fs.mkdtempSync(path.join(os.tmpdir(), "wc-uninstall-data-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wc-uninstall-home-"));
+  const cacheHome = fs.mkdtempSync(path.join(os.tmpdir(), "wc-uninstall-cache-"));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "wc-uninstall-cwd-"));
+
+  let target;
+  const prev = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = dataHome;
+  try {
+    target = installCompletion().path;
+  } finally {
+    if (prev === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prev;
+  }
+  assert.equal(fs.existsSync(target), true, "precondition: completion file exists before uninstall");
+
+  const r = spawnSync("node", [cliPath, "uninstall"], {
+    encoding: "utf8",
+    cwd,
+    env: { ...process.env, HOME: home, XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.existsSync(target), false, "completion file should be gone after uninstall");
 });
