@@ -2,6 +2,93 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-04 — v0.3.0: the first npm release
+
+First version published to npm, and a pass over everything a first-time user hits
+before they get to the interesting parts.
+
+**The install path actually worked end to end for the first time.** `install.sh`
+had three bugs that only a fresh machine would find, because a re-run on a working
+install takes none of those branches:
+
+- It called `node` five lines **above** the check for whether Node exists, so a
+  machine without Node died on bash's own `node: command not found` and the
+  friendly "Node.js >= 18 required" message could never print for the one audience
+  it was written for.
+- `sed -i` is a GNU spelling. BSD `sed` (macOS) reads the next argument as a backup
+  suffix, so writing `DATABASE_URL` into a new `.env` failed and `set -e` aborted
+  the whole install — on the fresh-install path only, which is exactly the one a
+  first-time macOS user takes. The docs had claimed macOS support since Docker
+  became the preferred database path.
+- A missing `claude` binary was treated as a fatal error, after every step that
+  mattered had already succeeded. Cursor, Windsurf, Zed and plain-`.mcp.json`
+  users were told their install had failed when it hadn't. It's now a warning that
+  prints both the `claude mcp add` line and an `.mcp.json` snippet.
+
+It also no longer falls through to `init-db` after warning that no database could
+be provisioned, and CI now **executes** `install.sh` rather than only parsing it —
+including a re-run, to prove the idempotency claim it makes about itself.
+
+**Errors explain themselves.** The CLI was `main().catch(e => console.error(e))`,
+so the most common first-run situation there is — no database yet — printed a
+`pg-pool` stack trace, and exited **0**. Expected failures now map to one line and
+a remedy (`src/friendlyError.js`), exit non-zero, and keep frames behind
+`--debug`/`WAYCONTEXT_DEBUG=1`. Covered: connection refused, bad credentials
+(including the `waycontext-pgdata` volume keeping its original password), missing
+database, missing schema, absent pgvector, and a rejected embedding key. The
+connection-refused message names the URL it tried **and where that URL came from**
+— environment, which `.env`, the config file, or the built-in default — because the
+usual cause is a value the user didn't know was set. Passwords are redacted.
+
+**`--help` and `-h` work.** They printed `Unknown command: --help` and exited
+non-zero, while `--version` and `-v` had always been accepted.
+
+**`help` is grouped, and describes what things do.** A newcomer's first four lines
+used to be `init-db`, `migrate` and `backfill-identity`. It now opens with
+`index_project` and `search_code` under six ordered sections, each registry
+operation carries a one-line gloss, and `waycontext help <command>` prints the full
+description an MCP client sees — previously unreachable from a terminal. Fixed a
+padding overflow that rendered `search_knowledge <project> <query> [limit](alias:
+knowledge)` with no separating space; the threshold is now derived from the actual
+string length instead of a hand-set flag.
+
+**`EMBEDDING_PROVIDER` ships as `none`.** `.env.example` set `voyage` with an empty
+`VOYAGE_API_KEY`, and `install.sh` copied it verbatim — the one combination that
+fails, and it failed part-way through a first index with an API `401`. The default
+now works with no key and no account, and a provider set without its key fails
+immediately with a configuration message rather than a provider error.
+
+**A name that doesn't resolve says so.** `get_callers` on a misspelled symbol
+returned `[]`, indistinguishable from "nothing calls this" — the difference between
+"safe to change" and "you typed it wrong", and the agent consumers will act on
+either. `get_symbol`, `get_callers`, `get_callees`, `get_graph`, `find_related` and
+`get_file_outline` now share one contract and one message. A real symbol with no
+callers still returns `[]`, which is the distinction that matters.
+
+**Smaller fixes.**
+
+- Indexing a repo of unsupported languages logged `Found 0 source files` and
+  reported success; it now says so and lists the extensions it does parse, derived
+  from the parser's own table.
+- `get_rules <project> <bad-target>` ended with "omit the target for project-wide
+  **history**", because `resolveTarget` is shared with the history queries.
+- `docs/` and `CHANGELOG.md` were missing from the npm tarball, while the README is
+  essentially a table of links into them. Doc images now use absolute URLs, since
+  `src/images/` stays excluded (3.5 MB).
+- `update.sh` recognises a global npm install instead of erroring "re-clone
+  instead", and its header comment no longer claims to touch `~/.claude`.
+- `.gitignore` had `.sql` and `.bk` with no `*`, matching nothing. SQL is scoped to
+  the repo root: a bare `*.sql` would silently ignore every new migration.
+- Added `SECURITY.md` (with what's deliberately out of scope), `CODE_OF_CONDUCT.md`,
+  issue and PR templates, and an `author` field — `CONTRIBUTING.md` had pointed at
+  a maintainer that `package.json` didn't list, and promised a CLA bot that didn't
+  exist.
+- Two drift guards for the gaps CI didn't cover: the search hook's five hardcoded
+  tool names are now checked against the registry, and `test/http.test.js`'s
+  "lists the same tools as the registry" test now actually calls `tools/list` and
+  compares — it previously only ran `initialize` and grepped for `"serverInfo"`.
+- Stale `codecontext` naming in `CONTRIBUTING.md` and `.env.example`.
+
 ## 2026-08-04 — tab completion for the CLI
 
 - **`waycontext completion install`** writes a bash completion script that completes

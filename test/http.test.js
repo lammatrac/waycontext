@@ -4,6 +4,7 @@ process.env.EMBEDDING_PROVIDER = "none";
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { operations } from "../src/operations.js";
 
 const { pool, initDb } = await import("../src/db.js");
 const { indexProject } = await import("../src/indexer.js");
@@ -138,24 +139,84 @@ test("a malformed body is rejected without crashing the server", async () => {
   assert.equal((await get("/health")).status, 200, "still alive");
 });
 
-test("MCP over HTTP lists the same tools as the registry", async () => {
-  // The distribution channel: `claude mcp add --transport http` is a one-liner.
+/** One JSON-RPC call over the /mcp route, returning the parsed result. */
+async function rpc(body, sessionId) {
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  if (sessionId) headers["mcp-session-id"] = sessionId;
   const res = await fetch(`${base}/mcp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-    body: JSON.stringify({
-      jsonrpc: "2.0", id: 1, method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "test", version: "0" },
-      },
-    }),
+    method: "POST", headers, body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  // StreamableHTTP may answer as SSE: `event: message\ndata: {...}`.
+  const payload = text.startsWith("event:") || text.includes("\ndata: ")
+    ? text.split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).join("")
+    : text;
+  return {
+    status: res.status,
+    sessionId: res.headers.get("mcp-session-id"),
+    body: payload ? JSON.parse(payload) : null,
+    raw: text,
+  };
+}
+
+test("MCP over HTTP completes the handshake", async () => {
+  // The distribution channel: `claude mcp add --transport http` is a one-liner.
+  const res = await rpc({
+    jsonrpc: "2.0", id: 1, method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "test", version: "0" },
+    },
   });
   assert.equal(res.status, 200);
-  const text = await res.text();
-  assert.match(text, /"serverInfo"/, text.slice(0, 300));
-  assert.match(text, /waycontext/i);
+  assert.ok(res.body.result?.serverInfo, res.raw.slice(0, 300));
+  assert.match(res.body.result.serverInfo.name, /waycontext/i);
+});
+
+test("MCP over HTTP lists exactly the registry's tools", async () => {
+  // This test used to only run `initialize` and grep the response for
+  // "serverInfo" -- it never called tools/list, so despite its name it could not
+  // have caught the registry and the MCP surface diverging.
+  const init = await rpc({
+    jsonrpc: "2.0", id: 1, method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "test", version: "0" },
+    },
+  });
+  const sessionId = init.sessionId;
+
+  if (sessionId) {
+    await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "mcp-session-id": sessionId,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    });
+  }
+
+  const listed = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" }, sessionId);
+  assert.equal(listed.status, 200, listed.raw.slice(0, 300));
+  const names = listed.body.result.tools.map((t) => t.name).sort();
+  assert.deepEqual(names, operations.map((op) => op.name).sort());
+});
+
+test("every tool exposed over MCP carries a description an LLM can route on", async () => {
+  const init = await rpc({
+    jsonrpc: "2.0", id: 1, method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } },
+  });
+  const listed = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" }, init.sessionId);
+  const thin = listed.body.result.tools.filter((t) => !t.description || t.description.length < 20);
+  assert.deepEqual(thin.map((t) => t.name), []);
 });
 
 test("unknown routes list the ones that exist", async () => {

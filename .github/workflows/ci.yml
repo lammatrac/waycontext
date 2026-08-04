@@ -124,6 +124,133 @@ jobs:
             echo "::error::CLI accepted an out-of-range limit"; exit 1
           fi
 
+      - name: CLI help and error surface
+        run: |
+          # `x && { exit 1; }` is avoided throughout this step: it reads as an
+          # assertion but evaluates to the *grep's* status, so as a step's last
+          # line the passing case fails the job. `if ! ...; then` does not.
+          #
+          # The first thing a new user types. It used to print "Unknown command".
+          for flag in --help -h help; do
+            if ! out=$(node src/cli.js "$flag"); then
+              echo "::error::$flag exited non-zero"; exit 1
+            fi
+            if ! echo "$out" | grep -q "Getting started:"; then
+              echo "::error::$flag did not print the grouped command list"; exit 1
+            fi
+            if echo "$out" | grep -qi "unknown command"; then
+              echo "::error::$flag was treated as an unknown command"; exit 1
+            fi
+          done
+          # Per-command help wraps at 78 columns, so the phrase being matched can
+          # straddle a newline -- flatten before grepping.
+          node src/cli.js help search_code | tr '\n' ' ' \
+            | grep -q "Reciprocal Rank Fusion"
+          node src/cli.js help search_code | grep -q "^Usage: waycontext search_code"
+
+          # A domain error must be one readable line, with no stack frames, and
+          # must exit non-zero. Both were wrong before: frames, and exit 0.
+          set +e
+          err=$(node src/cli.js get_symbol no_such_project Foo 2>&1)
+          status=$?
+          set -e
+          echo "$err"
+          test "$status" -ne 0 || { echo "::error::a failed command exited 0"; exit 1; }
+          if ! echo "$err" | grep -q "Run index_project first"; then
+            echo "::error::domain error lost its message"; exit 1
+          fi
+          if echo "$err" | grep -qE '^[[:space:]]+at '; then
+            echo "::error::a stack trace leaked into a domain error"; exit 1
+          fi
+
+          # An unreachable database must explain itself rather than printing a
+          # pg-pool trace, and must name the URL it tried without its password.
+          set +e
+          err=$(WAYCONTEXT_IGNORE_DOTENV=1 \
+                DATABASE_URL=postgres://u:sup3rs3cret@127.0.0.1:59999/nope \
+                node src/cli.js list_projects 2>&1)
+          status=$?
+          set -e
+          echo "$err"
+          test "$status" -ne 0
+          echo "$err" | grep -q "Can't reach the PostgreSQL database"
+          echo "$err" | grep -q "docker compose"
+          if echo "$err" | grep -q "sup3rs3cret"; then
+            echo "::error::the database password was printed in an error"; exit 1
+          fi
+          # --debug must still give a maintainer the frames. Captured rather than
+          # piped: the command exits non-zero by design, which under `pipefail`
+          # would fail the pipeline no matter what grep found.
+          set +e
+          dbg=$(WAYCONTEXT_IGNORE_DOTENV=1 \
+                DATABASE_URL=postgres://u:p@127.0.0.1:59999/nope \
+                node src/cli.js list_projects --debug 2>&1)
+          set -e
+          if ! echo "$dbg" | grep -qE '^[[:space:]]+at '; then
+            echo "$dbg"
+            echo "::error::--debug did not print a stack trace"; exit 1
+          fi
+
+      - name: Indexing an unsupported language says so
+        run: |
+          mkdir -p /tmp/rustish && echo 'fn main() {}' > /tmp/rustish/main.rs
+          node src/cli.js index_project ci_unsupported /tmp/rustish 2>&1 | tee unsup.log
+          grep -q "No supported source files found" unsup.log || {
+            echo "::error::a repo of unsupported files reported plain success"; exit 1
+          }
+          node src/cli.js delete_project ci_unsupported --yes
+
+  # install.sh was previously only parsed with `bash -n`, never executed -- which
+  # made the very first thing a new user runs the least-tested code in the repo.
+  # It provisions its own database via Docker here, so this job takes no service
+  # container: the point is to exercise the path a fresh clone actually takes.
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fresh-clone install
+        run: |
+          test ! -f .env    # precondition: this must be the fresh path
+          ./install.sh
+
+      - name: install.sh produced a working configuration
+        run: |
+          test -f .env
+          grep -q '^DATABASE_URL=postgres://' .env
+          # 600, because it holds a generated credential.
+          test "$(stat -c '%a' .env)" = "600"
+          # The schema must exist and be fully applied.
+          node src/cli.js migrate | grep -q "No pending migrations"
+          node src/cli.js list_projects
+
+      - name: Re-running is idempotent
+        run: |
+          before="$(grep '^DATABASE_URL=' .env)"
+          ./install.sh
+          after="$(grep '^DATABASE_URL=' .env)"
+          test "$before" = "$after" || {
+            echo "::error::install.sh rewrote DATABASE_URL on a re-run"; exit 1
+          }
+          node src/cli.js list_projects
+
+      # A missing `claude` binary must not fail the install: WayContext speaks MCP
+      # to any client, and every step that matters has already succeeded by then.
+      # There is no `claude` on the runner, so this is the case being exercised
+      # above -- assert it explicitly rather than relying on that staying true.
+      - name: A missing Claude Code CLI is a warning, not a failure
+        run: |
+          if command -v claude >/dev/null 2>&1; then
+            echo "::notice::claude is on PATH; this job no longer covers its absence"
+            exit 0
+          fi
+          ./install.sh 2>&1 | tee out.log
+          grep -qi "skipping automatic MCP registration" out.log
+          grep -q "mcpServers" out.log    # prints the config for other clients
+
   package:
     runs-on: ubuntu-latest
     steps:
@@ -136,15 +263,37 @@ jobs:
       - name: Verify the package tarball builds
         run: npm pack --dry-run
 
+      # The README's documentation table is a list of links into docs/. Shipping
+      # the README without them gives npm users a page of dead links.
+      - name: The tarball contains the docs the README links to
+        run: |
+          npm pack >/dev/null 2>&1
+          tar tzf waycontext-*.tgz > files.txt
+          for f in README.md CHANGELOG.md LICENSE NOTICE SECURITY.md \
+                   docs/installation.md docs/troubleshooting.md docs/api.md \
+                   src/migrations/0001_baseline.sql; do
+            grep -q "^package/$f$" files.txt || {
+              echo "::error::$f is missing from the package tarball"; exit 1
+            }
+          done
+          # The images are deliberately excluded (3.5 MB); the docs reference them
+          # by absolute URL so they still resolve.
+          ! grep -q '^package/src/images/' files.txt || {
+            echo "::error::src/images should be excluded from the tarball"; exit 1
+          }
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check shell scripts parse
         run: for f in ./*.sh hooks/*.sh; do bash -n "$f"; done
-      # Advisory for now: the existing scripts have never been linted, so this
-      # reports findings without failing the build. Flip to blocking once the
-      # first run's output has been triaged.
+      # Still advisory: the scripts have never been linted, so the first run's
+      # findings need triaging before this can block. The `install` job above now
+      # actually executes install.sh end to end, which covers the failure modes
+      # that mattered most (they were runtime bugs -- a GNU-only `sed -i`, a
+      # `node` call above the Node check -- not lint findings). Flip `severity` to
+      # blocking once the backlog here is at zero.
       - uses: ludeeus/action-shellcheck@master
         continue-on-error: true
         with:

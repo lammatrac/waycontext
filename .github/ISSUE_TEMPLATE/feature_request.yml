@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a capability WayContext doesn't have
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you're planning to implement this yourself, open the issue first —
+        the roadmap has opinions about ordering, and it's a shame to write code
+        that conflicts with work already underway.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do that you can't today?
+      description: The task or question, not the proposed solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: If it's a new MCP tool or CLI subcommand, sketch the call and the shape of the answer.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: >
+        Existing tools that nearly work are useful signal — `compose_context`,
+        `search_knowledge` and `review_context` each fuse several channels already.

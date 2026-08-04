@@ -6,8 +6,17 @@ pgvector/
 docs/superpowers
 .claude/
 /tasks/
-.sql
-.bk
+
+# Scratch dumps and backups. These were `.sql` and `.bk` with no `*`, so they
+# only ever matched files literally named ".sql" and ".bk" and did nothing.
+#
+# SQL is scoped to the repo root on purpose: a bare `*.sql` would also match
+# src/migrations/*.sql, and while the ten existing ones stay tracked, every NEW
+# migration would be silently ignored -- a schema change that works locally and
+# is missing from the commit.
+/*.sql
+*.bk
+
 .DS_Store
 /.idea/
 /.vscode/

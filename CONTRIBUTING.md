@@ -5,9 +5,12 @@ get set up, what the code expects, and the one legal formality.
 
 ## Contributor License Agreement
 
-Before your first pull request can be merged, you'll be asked to sign the
-Contributor License Agreement. A bot comments on the PR with a link; signing
-takes about a minute and covers all your future contributions.
+Before your first pull request can be merged, you'll be asked to agree to the
+Contributor License Agreement. Right now this is manual: the maintainer will ask
+on the PR, and a comment saying **"I have read the CLA Document and I hereby
+sign the CLA"** is enough. It covers all your future contributions, so you're
+only asked once. (A bot may automate this later; until it exists, nothing will
+comment on your PR by itself.)
 
 Why: the CLA includes a relicensing grant, which keeps the project's licensing
 options open. WayContext is Apache-2.0 today and there is no plan to change
@@ -26,7 +29,7 @@ cd waycontext
 
 `install.sh` is idempotent. It writes nothing into `~/.claude` beyond
 registering the MCP server; the search hook is opt-in
-(`codecontext hook install`) and `codecontext uninstall` reverses everything.
+(`waycontext hook install`) and `waycontext uninstall` reverses everything.
 
 Then put an embedding API key in `.env` if you want vector search — everything
 degrades to full-text search without one, and the test suite skips the
@@ -60,7 +63,7 @@ file — never edit an applied one. Migrations are forward-only.
   the first line, and keep the file to a single statement.
 - `${EMBEDDING_DIM}` is substituted from config before execution.
 
-Check your work with `codecontext migrate --status`.
+Check your work with `waycontext migrate --status`.
 
 ## Code style
 
@@ -87,11 +90,12 @@ There's no linter yet, so match the surrounding code:
 ## Reporting bugs
 
 Include: what you ran, what happened, what you expected, and the output of
-`codecontext migrate --status` and `codecontext stats`. If it's an indexing
+`waycontext migrate --status` and `waycontext stats`. If it's an indexing
 bug, the smallest source file that reproduces it is worth more than a long
 description.
 
 ## Security
 
-Please don't open a public issue for a security problem. Email the maintainer
-listed in `package.json` instead.
+Please don't open a public issue for a security problem. See
+[SECURITY.md](SECURITY.md) for how to report one privately, and for the list of
+things that are deliberately out of scope (`serve` having no auth, for instance).

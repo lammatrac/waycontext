@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/lammatrac/waycontext/security/advisories/new
+    about: Report privately via a draft advisory — please don't open a public issue.
+  - name: Troubleshooting guide
+    url: https://github.com/lammatrac/waycontext/blob/main/docs/troubleshooting.md
+    about: Install, update, indexing, search and MCP problems, organised by symptom.

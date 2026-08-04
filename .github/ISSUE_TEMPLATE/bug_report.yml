@@ -1,0 +1,52 @@
+name: Bug report
+description: Something doesn't work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: [Troubleshooting](../blob/main/docs/troubleshooting.md) is
+        organised by symptom and covers most install, indexing and search problems.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What did you run, and what happened?
+      description: The exact command and its output. Re-run with `--debug` to include the stack trace.
+      placeholder: |
+        $ waycontext search_code myapp "purge cache"
+        Error: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `waycontext version`, `waycontext migrate --status` and `waycontext stats`.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Node version
+      placeholder: "Ubuntu 24.04 (WSL2), Node 20.11.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest reproduction
+      description: >
+        For an indexing or parsing bug, the smallest source file that reproduces it
+        is worth more than a long description.
