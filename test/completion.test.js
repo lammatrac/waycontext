@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
-import { MANUAL_COMMANDS, helpLines, generateBash, completeWords } from "../src/completion.js";
+import {
+  MANUAL_COMMANDS, helpLines, generateBash, completeWords, assertSafeForBash,
+} from "../src/completion.js";
 import { operations } from "../src/operations.js";
 
 test("help output is byte-identical after moving manual commands into a table", () => {
@@ -68,10 +70,35 @@ test("the generated script is valid bash", () => {
 });
 
 test("the generated script names every command, alias and manual entry", () => {
+  // A substring match against completeWords() would pass even if a word went
+  // missing entirely, as long as it happens to be a substring of a word that
+  // is still present (e.g. dropping the alias "search" would go unnoticed
+  // since "search_code" still contains it). Parse out exactly what
+  // _WC_COMMANDS holds and compare the two sets directly instead.
   const script = generateBash();
-  for (const word of completeWords()) {
-    assert.ok(script.includes(word), `generated script is missing "${word}"`);
-  }
+  const listed = script.match(/_WC_COMMANDS='([^']*)'/)[1].split(" ");
+  assert.deepEqual(listed.sort(), completeWords().sort());
+});
+
+test("assertSafeForBash passes conservative names through unchanged", () => {
+  const words = ["search_code", "knowledge-export", "init-db"];
+  assert.deepEqual(assertSafeForBash(words), words);
+});
+
+test("assertSafeForBash throws, naming the offending word, on anything else", () => {
+  assert.throws(
+    () => assertSafeForBash(["fine", "it's a trap"]),
+    /it's a trap/,
+  );
+  assert.throws(() => assertSafeForBash(["*"]), /\*/);
+  assert.throws(() => assertSafeForBash(["has space"]), /has space/);
+});
+
+test("generateBash never emits a word that fails the bash-safety guard", () => {
+  // Documents *why* generateBash() is safe today rather than just asserting
+  // it once: every word completeWords() can currently produce satisfies the
+  // same guard Task 3's flags and sub-verbs must also flow through.
+  assert.doesNotThrow(() => assertSafeForBash(completeWords()));
 });
 
 test("a bare prefix completes to the matching subcommand", () => {
