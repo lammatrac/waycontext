@@ -162,6 +162,11 @@ including the project name to pass to the tools. For a stronger push there's an 
 
 ## Changes
 
+- 2026-08-05: Added a new "Support WayContext" section before License, including
+  donation messaging, PayPal support options, and a clarification that Team Edition
+  remains free for individuals/startups while Enterprise Edition provides advanced
+  features and commercial support.
+
 - 2026-08-05: Added reasoning/decision graphs. `create_reasoning_graph` and
   `update_reasoning_graph` write a git-trackable `graph.json` plus a self-contained
   `reasoning.html` (questions, alternatives with pros/cons, a selected answer, risk,
@@ -197,6 +202,25 @@ including the project name to pass to the tools. For a stronger push there's an 
   of the enclosing function's own parameters (e.g. `function derive(project, log = () => {})`
   calling `log(...)`) is no longer treated as a call to a same-named project symbol elsewhere
   — it previously invented phantom module dependencies in `get_module`'s architecture graph.
+
+## ❤️ Support WayContext
+
+WayContext is free for individuals and startups, and we are committed to keeping it that way.
+
+If WayContext has helped you or your team, consider supporting its continued development. Your contribution helps fund new features, bug fixes, documentation, infrastructure, and long-term maintenance.
+
+### Donate with PayPal
+
+[![Donate $5](https://img.shields.io/badge/☕-$5-blue?style=for-the-badge)](https://paypal.me/lammatrac/5)
+[![Donate $10](https://img.shields.io/badge/🚀-$10-green?style=for-the-badge)](https://paypal.me/lammatrac/10)
+[![Donate $15](https://img.shields.io/badge/💙-$15-purple?style=for-the-badge)](https://paypal.me/lammatrac/15)
+[![Custom Amount](https://img.shields.io/badge/Donate-Custom-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/lammatrac)
+
+Every contribution, no matter the size, is greatly appreciated.
+
+**WayContext Team Edition** will always be free for individuals and startups.
+
+For organizations that require advanced capabilities, dedicated support, and commercial licensing, **WayContext Enterprise Edition** is available.
 
 ## License
 
