@@ -37,6 +37,7 @@ import {
   getModules, getModule, getCochange, getBugClusters,
 } from "./knowledge/architecture.js";
 import { composeContext } from "./context/compose.js";
+import { createReasoningGraph, updateReasoningGraph } from "./reasoning/store.js";
 
 const project = z.string().describe("Indexed project name (see list_projects)");
 const limit = z.coerce.number().int().min(1).max(30).default(10);
@@ -319,6 +320,38 @@ export const operations = [
     },
     handler: (a) =>
       composeContext(a.project, a.task, { budget: a.budget, format: a.format }),
+  },
+  {
+    name: "create_reasoning_graph",
+    description:
+      "Start a new reasoning/decision graph for a feature: a self-contained HTML page plus its JSON source of truth, written into the target project at docs/waycontext/<slug>/ (configurable via REASONING_DIR). Use this once, at the start of working out a feature's requirements/edge-cases/design decisions with the developer; call update_reasoning_graph afterward to add questions, alternatives and decisions as they come up. Errors if the slug already exists -- pass an explicit `slug` to disambiguate. Returns the absolute paths to both files, and the slug to pass to update_reasoning_graph.",
+    input: {
+      project,
+      feature: z.string().describe("Feature name/title, e.g. 'Forgot password'"),
+      slug: z.string().optional().describe("URL/path-safe id; derived from `feature` if omitted"),
+    },
+    cli: {
+      args: ["project", "feature", "slug"],
+      aliases: ["reasoning-init"],
+      label: (a) => `Creating reasoning graph for "${a.feature}"`,
+    },
+    handler: (a) => createReasoningGraph(a.project, { feature: a.feature, slug: a.slug }),
+  },
+  {
+    name: "update_reasoning_graph",
+    description:
+      "Apply one or more updates to an existing reasoning graph (add a question node, add an alternative with pros/cons, select an answer, mark a node resolved/open, set risk or affected_files, reparent or remove a node) and re-render its HTML. `patch` is a JSON array of patch operations, e.g. '[{\"op\":\"add_node\",\"parent\":\"n1\",\"type\":\"question\",\"title\":\"...\"}]'. Applied atomically: if any operation is invalid, nothing is written. Re-reads graph.json from disk each call, so hand-edits between calls are respected.",
+    input: {
+      project,
+      slug: z.string().describe("Feature slug, as returned by create_reasoning_graph"),
+      patch: z.string().describe("JSON array of patch operations"),
+    },
+    cli: {
+      args: ["project", "slug", "patch"],
+      aliases: ["reasoning-update"],
+      label: (a) => `Updating reasoning graph "${a.slug}"`,
+    },
+    handler: (a) => updateReasoningGraph(a.project, { slug: a.slug, patch: a.patch }),
   },
 ];
 

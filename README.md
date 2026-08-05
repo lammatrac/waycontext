@@ -47,7 +47,7 @@ also an MCP tool, which is the point — your agent calls them itself instead of
 
 ## Quick start
 
-**You need:** Node.js ≥ 18, and a PostgreSQL with the pgvector extension. Docker is the
+**You need:** Node.js ≥ 20, and a PostgreSQL with the pgvector extension. Docker is the
 easiest way to get the latter. Budget a few hundred MB for the Postgres image and a couple of
 minutes for a first index; an embedding API key is optional (see the end of this section).
 
@@ -161,6 +161,17 @@ including the project name to pass to the tools. For a stronger push there's an 
 - `waycontext serve` has **no authentication** and binds to `127.0.0.1` only. Auth, rate limiting and multi-tenancy are deliberately absent rather than half-present.
 
 ## Changes
+
+- 2026-08-05: Added reasoning/decision graphs. `create_reasoning_graph` and
+  `update_reasoning_graph` write a git-trackable `graph.json` plus a self-contained
+  `reasoning.html` (questions, alternatives with pros/cons, a selected answer, risk,
+  affected files) into a target project's own `docs/waycontext/<slug>/`, so a feature's
+  requirements and edge-case discovery survive past the chat that produced them.
+  `graph.json` is the source of truth — every `update_reasoning_graph` call re-reads it
+  from disk and re-renders the HTML, so a hand-edit between calls is respected rather
+  than overwritten. `waycontext init`'s injected `CLAUDE.md` section now also tells
+  Claude to render a reasoning graph before presenting a spec or implementation plan for
+  review, instead of asking the developer to read it as markdown.
 
 - 2026-08-05: Fixed two documentation drifts found in a command-list consistency audit:
   `docs/architecture.md` still credited `src/server.js` with the MCP tool-registration

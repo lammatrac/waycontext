@@ -88,6 +88,8 @@ export const OP_HELP = {
 
   compose_context: { section: "context", short: "rules + code + docs + memory, in one call" },
   review_context: { section: "context", short: "what to know before reviewing a change" },
+  create_reasoning_graph: { section: "context", short: "start a decision graph for a feature" },
+  update_reasoning_graph: { section: "context", short: "patch a decision graph, re-render HTML" },
 };
 
 export const MANUAL_COMMANDS = [

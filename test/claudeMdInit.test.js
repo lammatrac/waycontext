@@ -34,6 +34,17 @@ test("buildSection embeds the project name in the expected format", () => {
   assert.match(section, /use\/target project `my-app`/);
 });
 
+test("buildSection instructs Claude to render a reasoning graph before a spec/plan review", () => {
+  const section = buildSection("my-app");
+  assert.match(section, /create_reasoning_graph/);
+  assert.match(section, /update_reasoning_graph/);
+  assert.match(section, /docs\/waycontext/);
+  assert.match(section, /before (?:presenting|a) .*(?:spec|plan)/i);
+  // Claude has no tool to open a browser/IDE panel automatically -- the
+  // convention must say so, or a future session will falsely claim it did.
+  assert.match(section, /no tool to (?:auto-open|automatically open)/i);
+});
+
 test("extractExistingName returns null when there is no section", () => {
   assert.equal(extractExistingName(""), null);
   assert.equal(extractExistingName("# Some Doc\n\nJust text.\n"), null);

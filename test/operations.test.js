@@ -84,6 +84,13 @@ test("findOperation resolves both canonical names and aliases", () => {
   assert.equal(findOperation("nope"), null);
 });
 
+test("reasoning graph operations are reachable by name and alias, unlike knowledge-export", () => {
+  assert.equal(findOperation("create_reasoning_graph").name, "create_reasoning_graph");
+  assert.equal(findOperation("reasoning-init").name, "create_reasoning_graph");
+  assert.equal(findOperation("update_reasoning_graph").name, "update_reasoning_graph");
+  assert.equal(findOperation("reasoning-update").name, "update_reasoning_graph");
+});
+
 test("usage lines are generated from the schema, marking optionals with brackets", () => {
   assert.equal(usageLine(findOperation("search_code")), "search_code <project> <query> [limit]");
   assert.equal(usageLine(findOperation("get_graph")), "get_graph <project> <name> [depth]");

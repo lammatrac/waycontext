@@ -29,6 +29,8 @@ the HTTP routes below cannot drift apart.
 | `get_cochange` | What historically changes *with* a file — coupling by commit history rather than by imports. |
 | `get_bug_clusters` | Recurring themes across fix commits — "what keeps breaking here?" |
 | `compose_context` | **All of the above, fused into one answer for one task** — rules, code, docs, memory and past fixes, cited and packed into a token budget. |
+| `create_reasoning_graph` | Start a new decision graph for a feature — JSON + self-contained HTML, written into the target project. |
+| `update_reasoning_graph` | Patch an existing decision graph (add questions/alternatives, resolve, set risk/affected files) and re-render its HTML. |
 
 ## The context API
 
@@ -75,6 +77,31 @@ is what makes a privacy tier possible later, so the path is exercised now via
 
 Every channel that misses its deadline or errors is named in `meta.degraded_channels`.
 Returning less context without saying so is worse than either failure.
+
+## The reasoning graph
+
+Requirements, edge cases and design tradeoffs discovered mid-conversation tend to evaporate the
+moment the terminal scrolls past them. `create_reasoning_graph` and `update_reasoning_graph` turn
+that dialogue into a durable, git-diffable artifact instead: a decision tree — the feature at the
+root, questions as branches, alternatives with pros/cons at each question, a selected answer,
+affected files and a risk level — written straight into the project being worked on.
+
+Two files per feature, under `docs/waycontext/<slug>/` (configurable via `REASONING_DIR`):
+`graph.json`, the source of truth, and `reasoning.html`, a self-contained rendering of it (no
+CDN, no framework, no build step — open it directly in a browser or an editor's HTML preview).
+Every `update_reasoning_graph` call re-reads `graph.json` from disk, applies a batch of patch
+operations atomically, and re-renders the HTML — so a developer who hand-edits the JSON between
+turns has that edit picked up on the next call rather than clobbered.
+
+```bash
+waycontext reasoning-init myproject "Forgot password"
+waycontext reasoning-update myproject forgot-password \
+  '[{"op":"add_node","parent":"n1","type":"question","title":"Should email existence be exposed?"}]'
+```
+
+**The tools don't analyze code.** `affected_files` and risk are filled in by whoever is driving the
+conversation, using `search_code`, `get_graph`, `get_modules` and the rest of the registry first —
+`create_reasoning_graph`/`update_reasoning_graph` only persist and render what they're told.
 
 ## `waycontext serve` — HTTP, MCP-over-HTTP, and the web graph
 

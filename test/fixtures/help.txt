@@ -42,6 +42,10 @@ Context for a task:
   review_context <project> [paths]          what to know before reviewing a change (alias: review)
   compose_context <project> <task> [budget] [format]
                                             rules + code + docs + memory, in one call (alias: context)
+  create_reasoning_graph <project> <feature> [slug]
+                                            start a decision graph for a feature (alias: reasoning-init)
+  update_reasoning_graph <project> <slug> <patch>
+                                            patch a decision graph, re-render HTML (alias: reasoning-update)
 
 Setup & administration:
   init-db                                   create the schema (same as migrate)

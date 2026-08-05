@@ -163,6 +163,11 @@ export const config = {
   ruleCandidateMinConfidence: numeric("RULE_CANDIDATE_MIN_CONFIDENCE", 0.4),
   knowledgeDir: setting("KNOWLEDGE_DIR", ".waycontext/knowledge"),
 
+  // Reasoning graphs: a Claude-authored decision tree per feature, written into
+  // the target project as git-trackable JSON + a self-contained HTML viewer.
+  // One dir per feature: <reasoningDir>/<slug>/{graph.json,reasoning.html}.
+  reasoningDir: setting("REASONING_DIR", "docs/waycontext"),
+
   // Derived intelligence (Phase 4). Everything here is recomputed from the
   // planes below it and skipped entirely when its inputs haven't moved, so the
   // cost of leaving it on is a watermark comparison per index run.
