@@ -2,6 +2,26 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-05 — v0.4.0: reasoning and decision graphs
+
+AI-assisted development skips the "quiet QA" that used to happen naturally when a human sat
+down and wrote code slowly — the moment-by-moment discovery of missing requirements, edge
+cases and contradictory assumptions. Two new tools turn that discovery into a durable,
+git-diffable artifact instead of a chat transcript that scrolls away.
+
+- **`create_reasoning_graph` / `update_reasoning_graph`.** Write a decision tree — the
+  feature at the root, questions as branches, alternatives with pros/cons, a selected
+  answer, risk and affected files — as `graph.json` (source of truth) plus a
+  self-contained `reasoning.html` (no CDN, no framework, no build step) into the target
+  project's own `docs/waycontext/<slug>/` (configurable via `REASONING_DIR`). Patches are
+  applied atomically against a fresh read of `graph.json`, so a hand-edit between calls is
+  respected rather than clobbered, and an invalid patch never partially writes.
+- **`waycontext init`'s injected `CLAUDE.md` section** now tells Claude to render a
+  reasoning graph before presenting a spec or implementation plan for review — using
+  `search_code`, `get_graph` and `get_modules` to fill in affected files and risk —
+  instead of asking the developer to read it as markdown. Re-running `init` on an
+  already-configured project picks up the new convention.
+
 ## 2026-08-05 — v0.3.2: scope-aware call resolution
 
 Call/instantiation resolution was purely name-based, with no notion of scope: a bare
