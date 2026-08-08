@@ -11,11 +11,16 @@ const alternative = z.object({
   cons: z.array(z.string()).default([]),
 });
 
+const reviewStatus = z.enum(["verified", "assumed", "inferred", "conflict", "unknown"]);
+
 const node = z.object({
   id: z.string(),
   type: z.enum(["feature", "question", "decision"]),
   title: z.string(),
   status: z.enum(["open", "resolved"]).default("open"),
+  review: reviewStatus.default("unknown"),
+  confidence: z.number().int().min(0).max(100).nullable().default(null),
+  evidence: z.array(z.string()).default([]),
   alternatives: z.array(alternative).default([]),
   selected: z.string().nullable().default(null),
   affected_files: z.array(z.string()).default([]),
@@ -56,12 +61,16 @@ export function newGraph({ feature, slug, now = new Date().toISOString() }) {
 
 const nodeType = z.enum(["question", "decision"]);
 const risk = z.enum(["low", "medium", "high"]).nullable();
+const confidence = z.number().int().min(0).max(100).nullable();
 
 export const patchOpSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("add_node"), parent: z.string(), type: nodeType, title: z.string(), id: z.string().optional() }),
   z.object({ op: z.literal("add_alternative"), node: z.string(), label: z.string(), pros: z.array(z.string()).default([]), cons: z.array(z.string()).default([]), id: z.string().optional() }),
   z.object({ op: z.literal("select_answer"), node: z.string(), alternative: z.string() }),
   z.object({ op: z.literal("set_status"), node: z.string(), status: z.enum(["open", "resolved"]) }),
+  z.object({ op: z.literal("set_review"), node: z.string(), review: reviewStatus }),
+  z.object({ op: z.literal("set_confidence"), node: z.string(), confidence }),
+  z.object({ op: z.literal("set_evidence"), node: z.string(), evidence: z.array(z.string()) }),
   z.object({ op: z.literal("set_risk"), node: z.string(), risk }),
   z.object({ op: z.literal("set_affected_files"), node: z.string(), files: z.array(z.string()) }),
   z.object({ op: z.literal("set_notes"), node: z.string(), notes: z.string().nullable() }),

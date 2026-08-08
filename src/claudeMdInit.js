@@ -39,8 +39,9 @@ export function buildSection(name) {
     `\`create_reasoning_graph\` for a new feature or \`update_reasoning_graph\` for an\n` +
     `existing one, using \`search_code\`, \`get_graph\` and \`get_modules\` to fill in\n` +
     `\`affected_files\` and risk. Tell the developer the path to the generated\n` +
-    `\`reasoning.html\` under \`docs/waycontext/<slug>/\` instead of asking them to read the\n` +
+    `\`waycontext-review.html\` under \`docs/waycontext/<slug>/\` instead of asking them to read the\n` +
     `plan as markdown. There is no tool to auto-open a browser or IDE panel, so suggest\n` +
+    `opening it manually when needed (local CLI runs auto-open by default; set \`REASONING_AUTO_OPEN=0\` to disable),\n` +
     `opening it once via VS Code's Simple Browser (Command Palette -> "Simple Browser:\n` +
     `Show") or a live-preview extension -- refreshing after each update shows the latest\n` +
     `state.`

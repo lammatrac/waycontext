@@ -62,6 +62,7 @@ const handlers = {
     if (nodes[id]) throw new Error(`add_node: node "${id}" already exists`);
     nodes[id] = {
       id, type: op.type, title: op.title, status: "open",
+      review: "unknown", confidence: null, evidence: [],
       alternatives: [], selected: null, affected_files: [], risk: null, notes: null, children: [],
     };
     parent.children.push(id);
@@ -83,6 +84,15 @@ const handlers = {
   },
   set_status(nodes, op) {
     requireNode(nodes, op.node, "set_status").status = op.status;
+  },
+  set_review(nodes, op) {
+    requireNode(nodes, op.node, "set_review").review = op.review;
+  },
+  set_confidence(nodes, op) {
+    requireNode(nodes, op.node, "set_confidence").confidence = op.confidence;
+  },
+  set_evidence(nodes, op) {
+    requireNode(nodes, op.node, "set_evidence").evidence = op.evidence;
   },
   set_risk(nodes, op) {
     requireNode(nodes, op.node, "set_risk").risk = op.risk;

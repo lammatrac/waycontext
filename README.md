@@ -203,6 +203,18 @@ Claude Code only, three escalating modes. See
 
 ## Changes
 
+- 2026-08-08: Upgraded reasoning graphs into a reviewer-first Decision Review UI
+  and made review auto-open default-on. `create_reasoning_graph` /
+  `update_reasoning_graph` now render an executive-summary layout (decision graph,
+  impact map, risks/conflicts, evidence, approval panel) from `graph.json` into
+  `waycontext-review.html` (while still mirroring `reasoning.html` for backward
+  compatibility). Nodes gained explicit review semantics (`verified`, `assumed`,
+  `inferred`, `conflict`, `unknown`), confidence scores, and evidence lines,
+  with corresponding patch ops (`set_review`, `set_confidence`, `set_evidence`).
+  Auto-open now defaults to enabled whenever `REASONING_AUTO_OPEN` is unset,
+  including first-run and MCP-triggered flows; set `REASONING_AUTO_OPEN=0` to
+  disable.
+
 - 2026-08-08: The CLI now works out which project you mean instead of making you
   retype it. Every command whose first argument is `<project>` can omit it inside a
   repo that has been through `waycontext init`: the name is read back out of the
@@ -248,7 +260,7 @@ Claude Code only, three escalating modes. See
 
 - 2026-08-05: Added reasoning/decision graphs. `create_reasoning_graph` and
   `update_reasoning_graph` write a git-trackable `graph.json` plus a self-contained
-  `reasoning.html` (questions, alternatives with pros/cons, a selected answer, risk,
+  `waycontext-review.html` (questions, alternatives with pros/cons, a selected answer, risk,
   affected files) into a target project's own `docs/waycontext/<slug>/`, so a feature's
   requirements and edge-case discovery survive past the chat that produced them.
   `graph.json` is the source of truth — every `update_reasoning_graph` call re-reads it

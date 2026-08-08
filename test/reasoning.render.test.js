@@ -7,6 +7,9 @@ import { renderHtml } from "../src/reasoning/render.js";
 function graphWithQuestion(title = "Should email existence be exposed?") {
   let graph = newGraph({ feature: "Forgot password", slug: "forgot-password", now: "2026-08-05T12:00:00.000Z" });
   graph = applyPatch(graph, [{ op: "add_node", parent: "n1", type: "question", title }]);
+  graph = applyPatch(graph, [{ op: "set_review", node: "n2", review: "verified" }]);
+  graph = applyPatch(graph, [{ op: "set_confidence", node: "n2", confidence: 92 }]);
+  graph = applyPatch(graph, [{ op: "set_evidence", node: "n2", evidence: ["search_code hit in src/auth/forgotPassword.js"] }]);
   graph = applyPatch(graph, [{ op: "add_alternative", node: "n2", label: "Generic message", pros: ["safe"], cons: ["worse UX"] }]);
   graph = applyPatch(graph, [{ op: "select_answer", node: "n2", alternative: "a1" }]);
   graph = applyPatch(graph, [{ op: "set_affected_files", node: "n2", files: ["src/auth/forgotPassword.js"] }]);
@@ -37,6 +40,15 @@ test("renderHtml includes the feature title and each node's title as visible tex
   const html = renderHtml(graph);
   assert.match(html, /Forgot password/);
   assert.match(html, /Should email existence be exposed\?/);
+});
+
+test("renderHtml includes Decision Review panels and review-state labels", () => {
+  const html = renderHtml(graphWithQuestion());
+  for (const label of ["Decision Review", "Decision Graph", "Change Map", "Risks &amp; Conflicts", "Evidence", "Decisions Required"]) {
+    assert.match(html, new RegExp(label));
+  }
+  assert.match(html, /review-verified/);
+  assert.match(html, /Confidence/);
 });
 
 test("renderHtml HTML-escapes node titles in the tree so markup can't break out", () => {

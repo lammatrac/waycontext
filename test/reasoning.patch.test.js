@@ -52,16 +52,22 @@ test("select_answer with an alternative id the node doesn't have throws", () => 
   assert.throws(() => applyPatch(graph, [{ op: "select_answer", node: "n2", alternative: "not-a-real-alt" }]));
 });
 
-test("set_status, set_risk, set_affected_files, set_notes, set_title mutate the named node", () => {
+test("set_status, set_review, set_confidence, set_evidence, set_risk, set_affected_files, set_notes, set_title mutate the named node", () => {
   let graph = applyPatch(baseGraph(), [{ op: "add_node", parent: "n1", type: "question", title: "Q" }]);
   graph = applyPatch(graph, [
     { op: "set_status", node: "n2", status: "resolved" },
+    { op: "set_review", node: "n2", review: "verified" },
+    { op: "set_confidence", node: "n2", confidence: 91 },
+    { op: "set_evidence", node: "n2", evidence: ["search_code: src/auth/forgotPassword.js"] },
     { op: "set_risk", node: "n2", risk: "high" },
     { op: "set_affected_files", node: "n2", files: ["src/a.js"] },
     { op: "set_notes", node: "n2", notes: "because reasons" },
     { op: "set_title", node: "n2", title: "Renamed" },
   ]);
   assert.equal(graph.nodes.n2.status, "resolved");
+  assert.equal(graph.nodes.n2.review, "verified");
+  assert.equal(graph.nodes.n2.confidence, 91);
+  assert.deepEqual(graph.nodes.n2.evidence, ["search_code: src/auth/forgotPassword.js"]);
   assert.equal(graph.nodes.n2.risk, "high");
   assert.deepEqual(graph.nodes.n2.affected_files, ["src/a.js"]);
   assert.equal(graph.nodes.n2.notes, "because reasons");

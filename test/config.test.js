@@ -64,11 +64,13 @@ test("built-in defaults apply when nothing else sets a value", async () => {
     EMBEDDING_PROVIDER: undefined,
     EMBEDDING_DIM: undefined,
     MAX_FILE_SIZE: undefined,
+    REASONING_AUTO_OPEN: undefined,
   });
   assert.equal(cfg.orgSlug, "default");
   assert.equal(cfg.embeddingProvider, "none");
   assert.equal(cfg.embeddingDim, 1024);
   assert.equal(cfg.maxFileSize, 1048576);
+  assert.equal(cfg.reasoningAutoOpen, true);
 });
 
 test("an empty environment variable falls through instead of blanking a default", async () => {

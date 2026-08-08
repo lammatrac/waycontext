@@ -70,6 +70,8 @@ test("buildSection instructs Claude to render a reasoning graph before a spec/pl
   assert.match(section, /create_reasoning_graph/);
   assert.match(section, /update_reasoning_graph/);
   assert.match(section, /docs\/waycontext/);
+  assert.match(section, /waycontext-review\.html/);
+  assert.match(section, /REASONING_AUTO_OPEN=0/);
   assert.match(section, /before (?:presenting|a) .*(?:spec|plan)/i);
   // Claude has no tool to open a browser/IDE panel automatically -- the
   // convention must say so, or a future session will falsely claim it did.

@@ -49,7 +49,7 @@ git-diffable artifact instead of a chat transcript that scrolls away.
 - **`create_reasoning_graph` / `update_reasoning_graph`.** Write a decision tree — the
   feature at the root, questions as branches, alternatives with pros/cons, a selected
   answer, risk and affected files — as `graph.json` (source of truth) plus a
-  self-contained `reasoning.html` (no CDN, no framework, no build step) into the target
+  self-contained `waycontext-review.html` (no CDN, no framework, no build step) into the target
   project's own `docs/waycontext/<slug>/` (configurable via `REASONING_DIR`). Patches are
   applied atomically against a fresh read of `graph.json`, so a hand-edit between calls is
   respected rather than clobbered, and an invalid patch never partially writes.

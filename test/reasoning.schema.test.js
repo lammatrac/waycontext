@@ -18,6 +18,9 @@ test("validateGraph accepts a minimal valid graph and fills in defaults", () => 
   const graph = validateGraph(MINIMAL);
   assert.equal(graph.feature, "Forgot password");
   assert.deepEqual(graph.nodes.n1.children, []);
+  assert.equal(graph.nodes.n1.review, "unknown");
+  assert.equal(graph.nodes.n1.confidence, null);
+  assert.deepEqual(graph.nodes.n1.evidence, []);
   assert.equal(graph.nodes.n1.risk, null);
 });
 

@@ -29,8 +29,8 @@ the HTTP routes below cannot drift apart.
 | `get_cochange` | What historically changes *with* a file — coupling by commit history rather than by imports. |
 | `get_bug_clusters` | Recurring themes across fix commits — "what keeps breaking here?" |
 | `compose_context` | **All of the above, fused into one answer for one task** — rules, code, docs, memory and past fixes, cited and packed into a token budget. |
-| `create_reasoning_graph` | Start a new decision graph for a feature — JSON + self-contained HTML, written into the target project. |
-| `update_reasoning_graph` | Patch an existing decision graph (add questions/alternatives, resolve, set risk/affected files) and re-render its HTML. |
+| `create_reasoning_graph` | Start a new decision graph for a feature — JSON + self-contained Decision Review HTML, written into the target project. |
+| `update_reasoning_graph` | Patch an existing decision graph (add questions/alternatives, resolve, set review/evidence/confidence, set risk/affected files) and re-render its HTML. |
 
 All of these are annotated `readOnlyHint: true` except `index_project`, `remember`, and the two reasoning-graph tools, which write. Clients use the hint to decide what to auto-approve, so an unannotated read-only tool ends up behind a permission prompt that the agent's own built-in search is not.
 
@@ -93,11 +93,22 @@ root, questions as branches, alternatives with pros/cons at each question, a sel
 affected files and a risk level — written straight into the project being worked on.
 
 Two files per feature, under `docs/waycontext/<slug>/` (configurable via `REASONING_DIR`):
-`graph.json`, the source of truth, and `reasoning.html`, a self-contained rendering of it (no
-CDN, no framework, no build step — open it directly in a browser or an editor's HTML preview).
+`graph.json`, the source of truth, and `waycontext-review.html`, a self-contained rendering of it
+(no CDN, no framework, no build step — open it directly in a browser or an editor's HTML preview).
 Every `update_reasoning_graph` call re-reads `graph.json` from disk, applies a batch of patch
 operations atomically, and re-renders the HTML — so a developer who hand-edits the JSON between
 turns has that edit picked up on the next call rather than clobbered.
+
+For local CLI workflows, `waycontext-review.html` auto-opens by default after
+`create_reasoning_graph` and `update_reasoning_graph`. Set `REASONING_AUTO_OPEN=0` to disable it.
+For compatibility with older references,
+the same HTML is also written to `reasoning.html` in the same folder.
+
+The review UI is intentionally reviewer-first instead of document-first: an executive summary,
+decision graph, codebase impact map, risks/conflicts, evidence traceability, and pending approval
+choices. Nodes now also support review semantics (`verified`, `assumed`, `inferred`, `conflict`,
+`unknown`), optional confidence scores, and explicit evidence lines so "why this is true" can be
+reviewed without reading full markdown plans first.
 
 ```bash
 waycontext reasoning-init myproject "Forgot password"

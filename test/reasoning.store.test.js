@@ -25,17 +25,26 @@ after(async () => {
   await pool.end();
 });
 
-test("createReasoningGraph writes graph.json and reasoning.html under the configured dir", async () => {
-  const result = await createReasoningGraph(PROJECT, { feature: "Forgot password" });
-  assert.equal(result.slug, "forgot-password");
+test("createReasoningGraph writes graph.json and waycontext-review.html under the configured dir", async () => {
+  const prevAutoOpen = config.reasoningAutoOpen;
+  try {
+    config.reasoningAutoOpen = false;
 
-  const dir = path.join(root, config.reasoningDir, "forgot-password");
-  assert.equal(result.graph_path, path.join(dir, "graph.json"));
-  assert.equal(result.html_path, path.join(dir, "reasoning.html"));
+    const result = await createReasoningGraph(PROJECT, { feature: "Forgot password" });
+    assert.equal(result.slug, "forgot-password");
 
-  const graph = JSON.parse(fs.readFileSync(result.graph_path, "utf8"));
-  assert.equal(graph.feature, "Forgot password");
-  assert.ok(fs.readFileSync(result.html_path, "utf8").includes("Forgot password"));
+    const dir = path.join(root, config.reasoningDir, "forgot-password");
+    assert.equal(result.graph_path, path.join(dir, "graph.json"));
+    assert.equal(result.html_path, path.join(dir, "waycontext-review.html"));
+
+    const graph = JSON.parse(fs.readFileSync(result.graph_path, "utf8"));
+    assert.equal(graph.feature, "Forgot password");
+    assert.ok(fs.existsSync(path.join(dir, "reasoning.html")));
+    assert.ok(fs.readFileSync(result.html_path, "utf8").includes("Forgot password"));
+    assert.equal(result.auto_open.enabled, false);
+  } finally {
+    config.reasoningAutoOpen = prevAutoOpen;
+  }
 });
 
 test("createReasoningGraph refuses to overwrite an existing slug", async () => {
@@ -92,4 +101,60 @@ test("updateReasoningGraph on an unknown slug throws a clear not-found error", a
     () => updateReasoningGraph(PROJECT, { slug: "does-not-exist", patch: "[]" }),
     /does-not-exist/
   );
+});
+
+test("createReasoningGraph auto-opens the generated review file when REASONING_AUTO_OPEN is enabled", async () => {
+  const prevAutoOpen = config.reasoningAutoOpen;
+  try {
+    config.reasoningAutoOpen = true;
+
+    const opened = [];
+    const result = await createReasoningGraph(
+      PROJECT,
+      { feature: "Auto open smoke", slug: "auto-open-smoke" },
+      {
+        openFile: async (filePath) => {
+          opened.push(filePath);
+          return { command: "mock-open", args: [filePath] };
+        },
+      }
+    );
+
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0], result.html_path);
+    assert.equal(result.auto_open.enabled, true);
+    assert.equal(result.auto_open.attempted, true);
+    assert.equal(result.auto_open.opened, true);
+  } finally {
+    config.reasoningAutoOpen = prevAutoOpen;
+  }
+});
+
+test("updateReasoningGraph reports auto-open failures without failing the patch", async () => {
+  const prevAutoOpen = config.reasoningAutoOpen;
+  try {
+    config.reasoningAutoOpen = true;
+
+    await createReasoningGraph(PROJECT, { feature: "Auto open failure", slug: "auto-open-failure" });
+    const result = await updateReasoningGraph(
+      PROJECT,
+      {
+        slug: "auto-open-failure",
+        patch: JSON.stringify([{ op: "add_node", parent: "n1", type: "question", title: "Q" }]),
+      },
+      {
+        openFile: async () => {
+          throw new Error("launcher missing");
+        },
+      }
+    );
+
+    assert.equal(result.node_count, 2);
+    assert.equal(result.auto_open.enabled, true);
+    assert.equal(result.auto_open.attempted, true);
+    assert.equal(result.auto_open.opened, false);
+    assert.match(result.auto_open.warning, /launcher missing/);
+  } finally {
+    config.reasoningAutoOpen = prevAutoOpen;
+  }
 });

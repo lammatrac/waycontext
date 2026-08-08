@@ -354,7 +354,7 @@ export const operations = [
     name: "create_reasoning_graph",
     readOnly: false,
     description:
-      "Start a new reasoning/decision graph for a feature: a self-contained HTML page plus its JSON source of truth, written into the target project at docs/waycontext/<slug>/ (configurable via REASONING_DIR). Use this once, at the start of working out a feature's requirements/edge-cases/design decisions with the developer; call update_reasoning_graph afterward to add questions, alternatives and decisions as they come up. Errors if the slug already exists -- pass an explicit `slug` to disambiguate. Returns the absolute paths to both files, and the slug to pass to update_reasoning_graph.",
+      "Start a new reasoning/decision graph for a feature: a Decision Review HTML page plus its JSON source of truth, written into the target project at docs/waycontext/<slug>/ (configurable via REASONING_DIR). Use this once, at the start of working out a feature's requirements/edge-cases/design decisions with the developer; call update_reasoning_graph afterward to add questions, alternatives, evidence, review state and decisions as they come up. Auto-open of the generated review page is enabled by default on local CLI runs; set REASONING_AUTO_OPEN=0 to disable it. Errors if the slug already exists -- pass an explicit `slug` to disambiguate. Returns the absolute paths to both files, and the slug to pass to update_reasoning_graph.",
     input: {
       project,
       feature: z.string().describe("Feature name/title, e.g. 'Forgot password'"),
@@ -365,13 +365,17 @@ export const operations = [
       aliases: ["reasoning-init"],
       label: (a) => `Creating reasoning graph for "${a.feature}"`,
     },
-    handler: (a) => createReasoningGraph(a.project, { feature: a.feature, slug: a.slug }),
+    handler: (a, ctx) => createReasoningGraph(
+      a.project,
+      { feature: a.feature, slug: a.slug },
+      { log: ctx?.log }
+    ),
   },
   {
     name: "update_reasoning_graph",
     readOnly: false,
     description:
-      "Apply one or more updates to an existing reasoning graph (add a question node, add an alternative with pros/cons, select an answer, mark a node resolved/open, set risk or affected_files, reparent or remove a node) and re-render its HTML. `patch` is a JSON array of patch operations, e.g. '[{\"op\":\"add_node\",\"parent\":\"n1\",\"type\":\"question\",\"title\":\"...\"}]'. Applied atomically: if any operation is invalid, nothing is written. Re-reads graph.json from disk each call, so hand-edits between calls are respected.",
+      "Apply one or more updates to an existing reasoning graph (add a question node, add an alternative with pros/cons, select an answer, mark a node resolved/open, set review/evidence/confidence, set risk or affected_files, reparent or remove a node) and re-render its Decision Review HTML. Auto-open of the regenerated review page is enabled by default on local CLI runs; set REASONING_AUTO_OPEN=0 to disable it. `patch` is a JSON array of patch operations, e.g. '[{\"op\":\"add_node\",\"parent\":\"n1\",\"type\":\"question\",\"title\":\"...\"}]'. Applied atomically: if any operation is invalid, nothing is written. Re-reads graph.json from disk each call, so hand-edits between calls are respected.",
     input: {
       project,
       slug: z.string().describe("Feature slug, as returned by create_reasoning_graph"),
@@ -382,7 +386,11 @@ export const operations = [
       aliases: ["reasoning-update"],
       label: (a) => `Updating reasoning graph "${a.slug}"`,
     },
-    handler: (a) => updateReasoningGraph(a.project, { slug: a.slug, patch: a.patch }),
+    handler: (a, ctx) => updateReasoningGraph(
+      a.project,
+      { slug: a.slug, patch: a.patch },
+      { log: ctx?.log }
+    ),
   },
 ];
 

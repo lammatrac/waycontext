@@ -165,8 +165,11 @@ export const config = {
 
   // Reasoning graphs: a Claude-authored decision tree per feature, written into
   // the target project as git-trackable JSON + a self-contained HTML viewer.
-  // One dir per feature: <reasoningDir>/<slug>/{graph.json,reasoning.html}.
+  // One dir per feature: <reasoningDir>/<slug>/{graph.json,waycontext-review.html}.
   reasoningDir: setting("REASONING_DIR", "docs/waycontext"),
+  // Optional UX helper for local CLI usage: when enabled, create/update opens
+  // the generated review HTML with the OS default app. On by default.
+  reasoningAutoOpen: setting("REASONING_AUTO_OPEN", "1") === "1",
 
   // Derived intelligence (Phase 4). Everything here is recomputed from the
   // planes below it and skipped entirely when its inputs haven't moved, so the
