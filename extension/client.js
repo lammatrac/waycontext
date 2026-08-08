@@ -39,7 +39,7 @@ class WayContextClient {
       // the server simply isn't running. Telling someone "fetch failed" when the
       // fix is one command is a wasted interaction.
       throw new WayContextError(
-        `No WayContext server at ${this.baseUrl}. Start one with: waycontext serve`,
+        `No WayContext server at ${this.baseUrl}. Recover it with: waycontext service ensure`,
         "offline"
       );
     }
@@ -55,7 +55,7 @@ class WayContextClient {
       });
     } catch {
       throw new WayContextError(
-        `No WayContext server at ${this.baseUrl}. Start one with: waycontext serve`,
+        `No WayContext server at ${this.baseUrl}. Recover it with: waycontext service ensure`,
         "offline"
       );
     }

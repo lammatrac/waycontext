@@ -136,6 +136,15 @@ export const MANUAL_COMMANDS = [
   { name: "serve", section: "admin", usage: "serve [--port=4747] [--host=…]",
     flags: ["--port", "--host"],
     help: "HTTP API + web knowledge graph on localhost (no auth)" },
+  { name: "service", section: "admin", usage: "service ensure [--quiet]",
+    subVerbs: ["ensure", "status", "stop"],
+    flags: ["--quiet"],
+    help: "manage the auto-started local WayContext background service",
+    lines: [
+      { usage: "service ensure [--quiet]", help: "start or reuse the managed local service" },
+      { usage: "service status", help: "show service health, pid and version" },
+      { usage: "service stop", help: "stop the managed local background service" },
+    ] },
 
   { name: "delete_project", section: "admin", usage: "delete_project <project> [--yes]",
     args: ["project"], flags: ["--yes"],

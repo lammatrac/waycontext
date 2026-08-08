@@ -9,6 +9,8 @@ import { operations } from "../src/operations.js";
 const { pool, initDb } = await import("../src/db.js");
 const { indexProject } = await import("../src/indexer.js");
 const { createServer, serve } = await import("../src/http.js");
+const { createReasoningGraph } = await import("../src/reasoning/store.js");
+const { config } = await import("../src/config.js");
 const { cleanupTestProject } = await import("./helpers/testProject.js");
 const {
   createGitRepo, writeRepoFile, commitAll, cleanupGitRepo,
@@ -86,7 +88,7 @@ test("the registry is the allow-list: human-only commands are not routable", asy
   // This is the whole reason /v1/ops dispatches through findOperation rather
   // than through a map of handlers: `rule confirm` is a CLI-only command, so it
   // is structurally absent here, exactly as it is absent from MCP.
-  for (const name of ["rule", "serve", "knowledge-import", "setRuleState"]) {
+  for (const name of ["rule", "serve", "service", "knowledge-import", "setRuleState"]) {
     const res = await post(`/v1/ops/${name}`, { project: PROJECT });
     assert.equal(res.status, 404, `${name} must not be routable`);
   }
@@ -240,6 +242,25 @@ test("the web UI is served at the root and calls only registry operations", asyn
   assert.ok(called.length >= 3, `only found ${called.length} operation calls`);
   for (const name of new Set(called)) {
     assert.ok(findOperation(name), `the web UI calls "${name}", which is not an operation`);
+  }
+});
+
+test("reasoning review pages are served by project and slug", async () => {
+  const prevAutoOpen = config.reasoningAutoOpen;
+  const prevAutoService = config.serviceAutoStart;
+  try {
+    config.reasoningAutoOpen = false;
+    config.serviceAutoStart = false;
+
+    await createReasoningGraph(PROJECT, { feature: "HTTP review", slug: "http-review" });
+
+    const res = await get(`/reviews/${PROJECT}/http-review`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type"), /text\/html/);
+    assert.match(await res.text(), /HTTP review/);
+  } finally {
+    config.reasoningAutoOpen = prevAutoOpen;
+    config.serviceAutoStart = prevAutoService;
   }
 });
 

@@ -138,7 +138,7 @@ test("a stopped server is reported as offline, with the command that fixes it", 
   const dead = new WayContextClient("http://127.0.0.1:1");
   for (const call of [() => dead.health(), () => dead.op("list_projects", {})]) {
     await assert.rejects(call, (e) =>
-      e instanceof WayContextError && e.kind === "offline" && /waycontext serve/.test(e.message));
+      e instanceof WayContextError && e.kind === "offline" && /waycontext service ensure/.test(e.message));
   }
 });
 

@@ -60,6 +60,9 @@ Setup & administration:
   hook refresh                              rebuild the hook's project cache from the database
   uninstall                                 remove the hook, the global CLAUDE.md section and the project cache
   serve [--port=4747] [--host=…]            HTTP API + web knowledge graph on localhost (no auth)
+  service ensure [--quiet]                  start or reuse the managed local service
+  service status                            show service health, pid and version
+  service stop                              stop the managed local background service
   delete_project <project> [--yes]          delete a project and all its indexed data
   stats                                     (alias for list_projects, table output)
   db                                        interactive psql session

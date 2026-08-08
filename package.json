@@ -11,6 +11,7 @@
     "code-context-mcp": "src/server.js"
   },
   "scripts": {
+    "postinstall": "node src/postinstall.js",
     "start": "node src/server.js",
     "index": "node src/cli.js index",
     "stats": "node src/cli.js stats",

@@ -171,6 +171,12 @@ export const config = {
   // the generated review HTML with the OS default app. On by default.
   reasoningAutoOpen: setting("REASONING_AUTO_OPEN", "1") === "1",
 
+  // Managed local HTTP service settings. Auto-start is on by default so
+  // review URLs work without requiring a manual `waycontext serve` command.
+  serviceAutoStart: setting("WAYCONTEXT_AUTO_SERVICE", "1") !== "0",
+  serviceHost: setting("WAYCONTEXT_SERVICE_HOST", "127.0.0.1"),
+  servicePort: numeric("WAYCONTEXT_SERVICE_PORT", 4747),
+
   // Derived intelligence (Phase 4). Everything here is recomputed from the
   // planes below it and skipped entirely when its inputs haven't moved, so the
   // cost of leaving it on is a watermark comparison per index run.

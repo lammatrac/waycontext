@@ -27,7 +27,7 @@
         "waycontext.serverUrl": {
           "type": "string",
           "default": "http://127.0.0.1:4747",
-          "description": "The local WayContext server (start it with `waycontext serve`). No credentials are sent; the server has no authentication and binds to localhost."
+          "description": "The local WayContext server (recover with `waycontext service ensure`). No credentials are sent; the server has no authentication and binds to localhost."
         },
         "waycontext.project": {
           "type": "string",

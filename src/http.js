@@ -25,12 +25,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { initDb } from "./db.js";
+import { initDb, getProject } from "./db.js";
 import { operations, findOperation } from "./operations.js";
 import { buildMcpServer } from "./mcpServer.js";
 import { composeContext } from "./context/compose.js";
 import { queryCacheStats } from "./embeddings.js";
 import { NAME, VERSION } from "./version.js";
+import { config } from "./config.js";
+import { slugify } from "./reasoning/slug.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(__dirname, "..", "web");
@@ -85,6 +87,28 @@ function serveStatic(req, res, urlPath) {
     res.writeHead(200, {
       "Content-Type": CONTENT_TYPES[path.extname(abs)] ?? "application/octet-stream",
       "Content-Length": data.length,
+    });
+    res.end(data);
+  });
+}
+
+async function serveReview(res, projectName, slug) {
+  const project = await getProject(projectName);
+  if (!project) return send(res, 404, { error: `Project "${projectName}" not found` });
+
+  const resolvedRoot = path.resolve(project.root_path);
+  const safeSlug = slugify(slug);
+  const abs = path.resolve(resolvedRoot, config.reasoningDir, safeSlug, "waycontext-review.html");
+  if (!abs.startsWith(resolvedRoot + path.sep)) {
+    return send(res, 403, { error: "Forbidden" });
+  }
+
+  fs.readFile(abs, (err, data) => {
+    if (err) return send(res, 404, { error: "Review not found" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Length": data.length,
+      "X-Content-Type-Options": "nosniff",
     });
     res.end(data);
   });
@@ -190,11 +214,24 @@ async function handle(req, res) {
     return handleMcp(req, res);
   }
 
+  if (req.method === "GET" && route.startsWith("/reviews/")) {
+    const parts = route.split("/").filter(Boolean);
+    if (parts.length === 3) {
+      const projectName = decodeURIComponent(parts[1]);
+      const slug = decodeURIComponent(parts[2]);
+      return serveReview(res, projectName, slug);
+    }
+    return send(res, 404, { error: "Not found" });
+  }
+
   if (req.method === "GET" && (route === "/" || /^\/[\w.-]+\.(html|js|css|svg)$/.test(route))) {
     return serveStatic(req, res, route);
   }
 
-  send(res, 404, { error: "Not found", routes: ["/health", "/v1/ops", "/v1/ops/:name", "/v1/context", "/"] });
+  send(res, 404, {
+    error: "Not found",
+    routes: ["/health", "/v1/ops", "/v1/ops/:name", "/v1/context", "/mcp", "/reviews/:project/:slug", "/"],
+  });
 }
 
 export function createServer() {

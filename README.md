@@ -118,6 +118,9 @@ Docker (or apt) if it isn't already reachable, runs `npm install`, seeds `.env` 
 generated password, creates the schema, links the CLI and registers the MCP server at user
 scope. It's idempotent, so it's also the upgrade path (via `./update.sh`).
 
+It also ensures the local WayContext HTTP service is running in the background, so
+review URLs are immediately openable without manually running `waycontext serve`.
+
 ```bash
 git clone https://github.com/lammatrac/waycontext && cd waycontext
 ./install.sh
@@ -202,6 +205,8 @@ Claude Code only, three escalating modes. See
 - `waycontext serve` has **no authentication** and binds to `127.0.0.1` only. Auth, rate limiting and multi-tenancy are deliberately absent rather than half-present.
 
 ## Changes
+
+- 2026-08-08: Added automatic local background service management for `waycontext serve` workflows (`service ensure|status|stop`, install/update/postinstall auto-ensure, duplicate-start protection, version-aware restart, and worker recovery), integrated reasoning review hosting at `GET /reviews/:project/:slug`, and returned `review_url` from reasoning graph create/update responses so CLI/MCP/agent flows can open reviews directly.
 
 - 2026-08-08: Hardened reasoning review auto-open on WSL and Linux. The
   opener now detects WSL, translates Linux paths via `wslpath -w`, launches

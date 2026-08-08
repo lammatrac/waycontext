@@ -29,8 +29,8 @@ the HTTP routes below cannot drift apart.
 | `get_cochange` | What historically changes *with* a file — coupling by commit history rather than by imports. |
 | `get_bug_clusters` | Recurring themes across fix commits — "what keeps breaking here?" |
 | `compose_context` | **All of the above, fused into one answer for one task** — rules, code, docs, memory and past fixes, cited and packed into a token budget. |
-| `create_reasoning_graph` | Start a new decision graph for a feature — JSON + self-contained Decision Review HTML, written into the target project. |
-| `update_reasoning_graph` | Patch an existing decision graph (add questions/alternatives, resolve, set review/evidence/confidence, set risk/affected files) and re-render its HTML. |
+| `create_reasoning_graph` | Start a new decision graph for a feature — JSON + self-contained Decision Review HTML, written into the target project, plus a served review URL. |
+| `update_reasoning_graph` | Patch an existing decision graph (add questions/alternatives, resolve, set review/evidence/confidence, set risk/affected files) and re-render its HTML, plus a served review URL. |
 
 All of these are annotated `readOnlyHint: true` except `index_project`, `remember`, and the two reasoning-graph tools, which write. Clients use the hint to decide what to auto-approve, so an unannotated read-only tool ends up behind a permission prompt that the agent's own built-in search is not.
 
@@ -101,6 +101,7 @@ turns has that edit picked up on the next call rather than clobbered.
 
 For local CLI workflows, `waycontext-review.html` auto-opens by default after
 `create_reasoning_graph` and `update_reasoning_graph`. Set `REASONING_AUTO_OPEN=0` to disable it.
+Each create/update response also includes `review_url`, served by the local WayContext service.
 For compatibility with older references,
 the same HTML is also written to `reasoning.html` in the same folder.
 
@@ -133,6 +134,7 @@ waycontext serve            # http://127.0.0.1:4747
 | `POST /v1/ops/:name` | **Any** operation, by name or alias. |
 | `POST /v1/context` | The composer. `format: "markdown"` returns text, not JSON. |
 | `/mcp` | MCP over StreamableHTTP — `claude mcp add --transport http` is a one-liner. |
+| `GET /reviews/:project/:slug` | One reasoning review page (`waycontext-review.html`) by indexed project + slug. |
 | `GET /` | The web knowledge graph. |
 
 `POST /v1/ops/:name` is what makes "every surface reads the same registry" literal rather

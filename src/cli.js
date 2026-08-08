@@ -25,6 +25,7 @@ import { upsertHook, removeHook } from "./hookInit.js";
 import {
   writeProjectCache, cachePath, HOOK_MODES, DEFAULT_MODE, DEFAULT_MCP_NAME,
 } from "./projectCache.js";
+import { ensureService, serviceStatus, stopService } from "./serviceManager.js";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
 import os from "node:os";
@@ -344,6 +345,32 @@ function priceFor(provider) {
   return null;
 }
 
+function printServiceStatusHuman(status) {
+  const state = status.running ? "running" : "stopped";
+  const managed = status.managed ? "managed" : "unmanaged";
+  const pid = status.pid ?? "-";
+  const version = status.version ?? "-";
+  const alive = status.alive ? "alive" : "not running";
+  const symbol = status.running ? "OK" : "WARN";
+
+  console.log(`[${symbol}] WayContext service: ${state}`);
+  console.log(`  URL:     ${status.url}`);
+  console.log(`  Mode:    ${managed}`);
+  console.log(`  PID:     ${pid} (${alive})`);
+  console.log(`  Version: ${version}`);
+}
+
+function printServiceStopHuman(result) {
+  if (!result.stopped && result.reason) {
+    console.log(`[WARN] WayContext service: ${result.reason}`);
+    return;
+  }
+  const symbol = result.terminated ? "OK" : "WARN";
+  console.log(`[${symbol}] WayContext service: stop requested`);
+  console.log(`  PID:        ${result.pid ?? "-"}`);
+  console.log(`  Terminated: ${result.terminated ? "yes" : "no"}`);
+}
+
 /**
  * Run one operation from src/operations.js.
  *
@@ -507,6 +534,34 @@ async function main() {
       console.log(`${url}  — web UI at ${url}/, operations at ${url}/v1/ops`);
       console.log("No authentication. Bound to localhost. Ctrl-C to stop.");
       return; // hold the process open; the server owns the event loop now
+    }
+    case "service": {
+      const [sub] = args.filter((a) => !a.startsWith("--"));
+      if (sub === "ensure") {
+        const result = await ensureService({ expectedVersion: VERSION });
+        if (!args.includes("--quiet")) {
+          console.log(`WayContext service ${result.status} at ${result.url}`);
+        }
+        break;
+      }
+      if (sub === "status") {
+        const result = await serviceStatus();
+        if (process.stdout.isTTY) printServiceStatusHuman(result);
+        else printJson(result);
+        break;
+      }
+      if (sub === "stop") {
+        const result = await stopService();
+        if (process.stdout.isTTY) printServiceStopHuman(result);
+        else printJson(result);
+        break;
+      }
+      usageAndExit(
+        "Usage: service ensure [--quiet]\n" +
+        "       service status\n" +
+        "       service stop"
+      );
+      break;
     }
     case "backfill-identity": {
       // Symbols indexed before migration 0006 have no symbol_key and no

@@ -13,6 +13,7 @@ import { newGraph, validateGraph } from "./schema.js";
 import { applyPatch } from "./patch.js";
 import { renderHtml } from "./render.js";
 import { openLocalFile } from "./open.js";
+import { ensureService, serviceBaseUrl } from "../serviceManager.js";
 
 async function resolveDir(projectName, slug) {
   const project = await getProject(projectName);
@@ -60,6 +61,38 @@ async function maybeAutoOpenReview(htmlPath, { log = () => {}, openFile = openLo
   }
 }
 
+async function ensureReviewService(log) {
+  if (!config.serviceAutoStart) {
+    return {
+      enabled: false,
+      ensured: false,
+      url: serviceBaseUrl(),
+      reason: "WAYCONTEXT_AUTO_SERVICE is disabled",
+    };
+  }
+
+  try {
+    const result = await ensureService();
+    return {
+      enabled: true,
+      ensured: true,
+      ...result,
+    };
+  } catch (e) {
+    log(`Could not auto-start review service: ${e.message}`);
+    return {
+      enabled: true,
+      ensured: false,
+      url: serviceBaseUrl(),
+      warning: e.message,
+    };
+  }
+}
+
+function reviewUrl(baseUrl, projectName, slug) {
+  return `${baseUrl}/reviews/${encodeURIComponent(projectName)}/${encodeURIComponent(slug)}`;
+}
+
 export async function createReasoningGraph(projectName, { feature, slug }, options = {}) {
   const resolvedSlug = slugify(slug ?? feature);
   const dir = await resolveDir(projectName, resolvedSlug);
@@ -70,7 +103,16 @@ export async function createReasoningGraph(projectName, { feature, slug }, optio
   const graph = newGraph({ feature, slug: resolvedSlug });
   writeGraphFiles(dir, graph);
   const auto_open = await maybeAutoOpenReview(htmlPath, options);
-  return { slug: resolvedSlug, graph_path: graphPath, html_path: htmlPath, auto_open };
+  const review_service = await ensureReviewService(options.log ?? (() => {}));
+  const review_url = reviewUrl(review_service.url ?? serviceBaseUrl(), projectName, resolvedSlug);
+  return {
+    slug: resolvedSlug,
+    graph_path: graphPath,
+    html_path: htmlPath,
+    review_url,
+    review_service,
+    auto_open,
+  };
 }
 
 export async function updateReasoningGraph(projectName, { slug, patch }, options = {}) {
@@ -93,8 +135,11 @@ export async function updateReasoningGraph(projectName, { slug, patch }, options
   const next = applyPatch(current, ops);
   writeGraphFiles(dir, next);
   const auto_open = await maybeAutoOpenReview(htmlPath, options);
+  const review_service = await ensureReviewService(options.log ?? (() => {}));
+  const review_url = reviewUrl(review_service.url ?? serviceBaseUrl(), projectName, resolvedSlug);
   return {
     slug: resolvedSlug, graph_path: graphPath, html_path: htmlPath,
+    review_url, review_service,
     updated_at: next.updated_at, node_count: Object.keys(next.nodes).length,
     auto_open,
   };

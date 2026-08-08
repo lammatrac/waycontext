@@ -306,6 +306,14 @@ if [ -f "$COMPLETION_FILE" ]; then
   fi
 fi
 
+# 10. Start the managed local HTTP service (idempotent, no duplicate processes).
+# This is best-effort: a machine with no reachable DB should still finish install.
+if node "$SCRIPT_DIR/src/cli.js" service ensure --quiet >/dev/null 2>&1; then
+  log "WayContext background service is running"
+else
+  warn "Could not auto-start the WayContext background service. You can diagnose with: waycontext service status"
+fi
+
 log "Setup complete. Edit .env with your embedding API key if you haven't already, then restart Claude Code."
 log ""
 log "Recommended, per project:"

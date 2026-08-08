@@ -34,10 +34,10 @@ function client() {
  */
 async function handleError(e) {
   if (e instanceof WayContextError && e.kind === "offline") {
-    const choice = await vscode.window.showErrorMessage(e.message, "Start server");
-    if (choice === "Start server") {
-      const term = vscode.window.createTerminal("waycontext serve");
-      term.sendText("waycontext serve");
+    const choice = await vscode.window.showErrorMessage(e.message, "Start service");
+    if (choice === "Start service") {
+      const term = vscode.window.createTerminal("waycontext service ensure");
+      term.sendText("waycontext service ensure");
       term.show();
     }
     return;

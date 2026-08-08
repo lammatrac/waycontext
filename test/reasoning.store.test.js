@@ -11,15 +11,19 @@ const { createReasoningGraph, updateReasoningGraph } = await import("../src/reas
 
 const PROJECT = "reasoning_store_fixture";
 let root;
+let previousServiceAutoStart;
 
 before(async () => {
   await initDb();
   await cleanupTestProject(PROJECT);
   root = fs.mkdtempSync(path.join(os.tmpdir(), "wc-reasoning-"));
   await getOrCreateProject(PROJECT, root);
+  previousServiceAutoStart = config.serviceAutoStart;
+  config.serviceAutoStart = false;
 });
 
 after(async () => {
+  config.serviceAutoStart = previousServiceAutoStart;
   await cleanupTestProject(PROJECT);
   if (root) fs.rmSync(root, { recursive: true, force: true });
   await pool.end();
@@ -36,6 +40,7 @@ test("createReasoningGraph writes graph.json and waycontext-review.html under th
     const dir = path.join(root, config.reasoningDir, "forgot-password");
     assert.equal(result.graph_path, path.join(dir, "graph.json"));
     assert.equal(result.html_path, path.join(dir, "waycontext-review.html"));
+    assert.equal(result.review_url, "http://127.0.0.1:4747/reviews/reasoning_store_fixture/forgot-password");
 
     const graph = JSON.parse(fs.readFileSync(result.graph_path, "utf8"));
     assert.equal(graph.feature, "Forgot password");
@@ -68,6 +73,7 @@ test("updateReasoningGraph applies patches cumulatively across calls, re-reading
   const graph = JSON.parse(fs.readFileSync(created.graph_path, "utf8"));
   assert.equal(Object.keys(graph.nodes).length, 3);
   assert.equal(second.node_count, 3);
+  assert.equal(second.review_url, "http://127.0.0.1:4747/reviews/reasoning_store_fixture/change-password");
 });
 
 test("a hand-edit to graph.json between two updateReasoningGraph calls is respected by the next call", async () => {

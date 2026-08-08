@@ -78,7 +78,7 @@ test("human-only admin commands are not reachable as operations", () => {
   // agent should be able to ask for through a tool call, and /v1/ops/:name uses
   // this same registry as its allow-list, so anything absent here is absent
   // there too.
-  for (const name of ["rule", "knowledge-export", "knowledge-import", "serve"]) {
+  for (const name of ["rule", "knowledge-export", "knowledge-import", "serve", "service"]) {
     assert.equal(findOperation(name), null, `"${name}" must stay off the MCP surface`);
   }
 });

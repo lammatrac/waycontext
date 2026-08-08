@@ -4,6 +4,9 @@ Full setup: database, embedding providers, the CLI, MCP registration, and cost t
 For the 60-second version see the [README](../README.md); if something goes wrong see
 [Troubleshooting](troubleshooting.md).
 
+The local HTTP service is now managed automatically. Install/update runs
+`waycontext service ensure` in the background so you do not need to manually run
+`waycontext serve` for review URLs.
 
 ## From npm
 
@@ -142,6 +145,9 @@ waycontext hook uninstall                 remove that hook
 waycontext uninstall                      undo everything written outside this repo
 waycontext migrate                        apply pending SQL migrations
 waycontext migrate --status               show each migration's state without applying anything
+waycontext service ensure [--quiet]       start/reuse the managed local service
+waycontext service status                 show managed-service health and pid
+waycontext service stop                   stop the managed local background service
 
 # project + search
 waycontext index_project <project-name> /path/to/project/    # aliases: index, reindex
