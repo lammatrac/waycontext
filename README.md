@@ -203,6 +203,13 @@ Claude Code only, three escalating modes. See
 
 ## Changes
 
+- 2026-08-08: Hardened reasoning review auto-open on WSL and Linux. The
+  opener now detects WSL, translates Linux paths via `wslpath -w`, launches
+  through `cmd.exe /c start ""`, and falls back to
+  `/mnt/c/Windows/System32/cmd.exe` when `cmd.exe` is missing on PATH. Added
+  focused unit coverage in `test/reasoning.open.test.js` for macOS/Windows/
+  Linux/WSL launch resolution and fallback behavior.
+
 - 2026-08-08: Upgraded reasoning graphs into a reviewer-first Decision Review UI
   and made review auto-open default-on. `create_reasoning_graph` /
   `update_reasoning_graph` now render an executive-summary layout (decision graph,
