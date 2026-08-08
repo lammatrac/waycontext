@@ -18,7 +18,9 @@ import { reportError } from "./friendlyError.js";
 import { extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
 import {
   selectTargets, skippedTargets, planMarkdownWrite, mergeVscodeMcp, VSCODE_MCP_PATH,
+  MARKDOWN_TARGETS,
 } from "./initTargets.js";
+import { findProjectMarker, needsProjectName, fillArgs } from "./projectResolve.js";
 import { upsertHook, removeHook } from "./hookInit.js";
 import {
   writeProjectCache, cachePath, HOOK_MODES, DEFAULT_MODE, DEFAULT_MCP_NAME,
@@ -127,6 +129,9 @@ function buildHelp() {
     "",
     `Run \`${NAME} help <command>\` for the full description of any command,`,
     "or add --debug to any command to see the underlying stack trace on failure.",
+    "",
+    `Inside a repo that has been through \`${NAME} init\`, <project> can be left`,
+    `off — it is read from CLAUDE.md — and \`${NAME} index\` needs no arguments.`,
   ];
 
   for (const { key, title } of SECTIONS) {
@@ -211,6 +216,128 @@ async function defaultProjectName() {
   );
 }
 
+/**
+ * Relative when it is below cwd, absolute otherwise.
+ *
+ * A marker found in a parent directory prints in full on purpose: "../CLAUDE.md"
+ * from three levels down tells you nothing about which repo answered.
+ */
+function displayPath(abs) {
+  const rel = path.relative(process.cwd(), abs);
+  if (!rel) return ".";
+  return rel.startsWith("..") ? abs : `./${rel}`;
+}
+
+/** Ask until a non-empty name is given. Shared with the `init` command. */
+async function promptProjectName(rl) {
+  let name = "";
+  while (!name) {
+    const answer = await rl.question("Project name for WayContext indexing: ");
+    name = answer.trim();
+    if (!name) console.log("Project name cannot be empty.");
+  }
+  return name;
+}
+
+/**
+ * Offer to write the just-typed name into the repo's agent files.
+ *
+ * Reuses init's writer so the section body cannot drift, and skips any file
+ * already configured for a different project -- silently repointing someone's
+ * CLAUDE.md from a query command would be a genuinely bad surprise. Changing it
+ * stays `waycontext init`'s job, which asks about each file by name.
+ */
+async function offerToSave(rl, name, root) {
+  const plans = selectTargets(root)
+    .map((target) => ({ target, ...planMarkdownWrite(root, target, name) }))
+    .filter((p) => p.changed);
+
+  const conflicts = plans.filter((p) => {
+    const current = extractExistingName(p.existing);
+    return current && current !== name;
+  });
+  for (const p of conflicts) {
+    console.log(
+      `${p.target.path} is configured for project "${extractExistingName(p.existing)}" — ` +
+      "left unchanged. Run `waycontext init` to change it."
+    );
+  }
+
+  const writable = plans.filter((p) => !conflicts.includes(p));
+  if (!writable.length) return;
+
+  const list = writable.map((p) => p.target.path).join(", ");
+  const answer = await rl.question(`Save this to ${list} so you aren't asked again? (y/N) `);
+  if (!/^y(es)?$/i.test(answer.trim())) return;
+
+  for (const p of writable) {
+    fs.mkdirSync(path.dirname(p.abs), { recursive: true });
+    fs.writeFileSync(p.abs, p.content);
+    console.log(`${p.mode === "created" ? "Created" : "Updated"} ${p.target.path}`);
+  }
+}
+
+/** What to print when nothing on disk and nothing in the database settles it. */
+function noProjectMessage(op, projects) {
+  return [
+    "Could not determine which project to use.",
+    "",
+    `  - No WayContext section in ${MARKDOWN_TARGETS.map((t) => t.path).join(", ")},`,
+    `    searching up from ${process.cwd()} to the repo root`,
+    projects.length
+      ? `  - ${projects.length} projects are indexed: ${projects.map((p) => p.name).join(", ")}`
+      : "  - No projects are indexed yet",
+    "",
+    "Run `waycontext init <name>` in this repo, or name the project explicitly:",
+    `  ${NAME} ${usageLine(op)}`,
+  ].join("\n");
+}
+
+/**
+ * The positional arguments to actually run with.
+ *
+ * Order: the name written into the repo's agent files, then the sole indexed
+ * project, then a prompt, then an error. The prompt is skipped without a TTY --
+ * an agent, a CI job or a piped invocation must fail with a message rather than
+ * block forever on a question nobody can answer.
+ */
+async function resolveArgs(op) {
+  const wantsName = needsProjectName(op, args);
+  if (!wantsName && !op.cli?.rootDefault) return args;
+
+  const marker = findProjectMarker(process.cwd());
+  const root = marker?.root ?? process.cwd();
+  let name = marker?.name ?? null;
+  let source = marker ? `from ${displayPath(marker.file)}` : null;
+  let rl = null;
+
+  try {
+    if (wantsName && !name) {
+      // A fresh install has no schema yet, and `index` is the command that
+      // creates it -- so a failure to read the project list is "none", not fatal.
+      const projects = await listProjects().catch(() => []);
+      if (projects.length === 1) {
+        name = projects[0].name;
+        source = "the only indexed project";
+      } else if (process.stdin.isTTY) {
+        rl = createInterface({ input: process.stdin, output: process.stdout });
+        name = await promptProjectName(rl);
+        source = "you just entered it";
+      } else {
+        usageAndExit(noProjectMessage(op, projects));
+      }
+    }
+
+    const { argv, usedProject, usedRoot } = fillArgs(op, args, { name, root });
+    if (usedProject) console.error(`· project "${name}" (${source})`);
+    if (usedRoot) console.error(`· path ${displayPath(root)}`);
+    if (rl) await offerToSave(rl, name, root);
+    return argv;
+  } finally {
+    rl?.close();
+  }
+}
+
 function priceFor(provider) {
   if (provider === "voyage") return config.voyage.pricePerMTokens;
   if (provider === "openai") return config.openai.pricePerMTokens;
@@ -225,9 +352,11 @@ function priceFor(provider) {
  * command, so adding an operation needs no change here.
  */
 async function runOperation(op) {
+  const argv = await resolveArgs(op);
+
   let parsed;
   try {
-    parsed = parseCliArgs(op, args);
+    parsed = parseCliArgs(op, argv);
   } catch (e) {
     const detail = e.issues
       ? e.issues.map((i) => `  ${i.path.join(".") || "(argument)"}: ${i.message}`).join("\n")
@@ -439,11 +568,9 @@ async function main() {
 
       try {
         let name = args.find((a) => !a.startsWith("-")) ?? "";
-        while (!name) {
+        if (!name) {
           if (yes) usageAndExit("init --yes needs a project name: waycontext init <name> --yes");
-          const answer = await rl.question("Project name for WayContext indexing: ");
-          name = answer.trim();
-          if (!name) console.log("Project name cannot be empty.");
+          name = await promptProjectName(rl);
         }
 
         let wrote = 0;

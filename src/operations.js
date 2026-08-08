@@ -55,6 +55,12 @@ export const operations = [
     cli: {
       args: ["project", "path"],
       aliases: ["index", "reindex"],
+      // Names the last positional as fillable from the repo the CLI was run
+      // in, so `waycontext index` inside an initialized checkout needs no
+      // arguments at all. Declared here rather than special-cased in cli.js,
+      // which knows nothing about any individual command. The MCP schema keeps
+      // `path` required -- an MCP client has no working directory.
+      rootDefault: "path",
       label: (a) => `Indexing "${a.project}"`,
       // Its own log() output only fires at a handful of milestones (git diff,
       // file count, edge resolution, embeddings); the file-by-file work in

@@ -98,6 +98,19 @@ see [Installation](docs/installation.md#4-register-with-claude-code).
 server in `.vscode/mcp.json` for Copilot. See
 [Getting agents to actually use it](#getting-agents-to-actually-use-it).
 
+That section is also what the CLI reads to work out which project you mean, so once a
+repo has been through `init` you can drop the `<project>` argument entirely:
+
+```bash
+cd /path/to/myapp
+waycontext index                       # same as: waycontext index myapp /path/to/myapp
+waycontext search "purge cache after status update"
+```
+
+Naming a project explicitly still wins, and if nothing on disk settles it the CLI asks —
+or, when it isn't attached to a terminal, exits with the list of indexed projects rather
+than hanging.
+
 ### Working from a clone instead
 
 `./install.sh` does all of the above in one step — provisions PostgreSQL + pgvector via
@@ -190,6 +203,22 @@ Claude Code only, three escalating modes. See
 
 ## Changes
 
+- 2026-08-08: The CLI now works out which project you mean instead of making you
+  retype it. Every command whose first argument is `<project>` can omit it inside a
+  repo that has been through `waycontext init`: the name is read back out of the
+  `## WayContext` section in `CLAUDE.md` (or `AGENTS.md`, or the Copilot file),
+  searching upward from the working directory and stopping at the git root so the
+  walk can't escape into a parent checkout. `waycontext index` needs no arguments at
+  all — `index_project` declares `rootDefault: "path"` in the registry and the
+  detected repo root fills it. Omitted arguments are filled from the right before the
+  left, which is what makes `waycontext index my-app` still mean the *project*
+  my-app rather than a path called that. Falling back: sole indexed project, then a
+  prompt identical to init's — with a `(y/N)` offer to write the answer into the
+  repo's agent files so it's asked once — then, with no TTY, an error naming the
+  indexed projects, because an agent or CI job must fail rather than block on a
+  question nobody can answer. Resolution is skipped entirely when the arguments are
+  already there, reported on stderr so piped JSON stays clean, and left off the MCP
+  surface, where there is no working directory to read.
 - 2026-08-08: Made agents actually reach for the tools instead of falling back to
   their own search. The server now sends MCP `instructions` in the `initialize`
   handshake — the recommended workflow, what the tools are *not* for, and the

@@ -183,6 +183,18 @@ waycontext usage <project-name>           # embedding token usage, one project
 
 `index`/`reindex` are kept as aliases for `index_project` (and the other aliases noted inline above), and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` takes a project name (prompting if omitted) and writes a `## WayContext` section into every agent-instruction file the repo's clients read — `CLAUDE.md`, `AGENTS.md`, and `.github/copilot-instructions.md` — plus `.vscode/mcp.json` for Copilot; `--yes` skips the per-file confirmations and `--all` forces the `.github/` one. `hook install` is the optional, stronger nudge. Both are covered in [5. What makes an agent actually call the tools](#5-what-makes-an-agent-actually-call-the-tools) below. See [docs/api.md](api.md) for the full argument/description reference for every operation above, and [docs/knowledge.md](knowledge.md) for `rule candidates|confirm|reject` and `knowledge-export`/`knowledge-import`, which are CLI-only and intentionally not exposed as MCP tools.
 
+`<project-name>` is optional in a repo that has been through `waycontext init`. The CLI reads it back out of the `## WayContext` section of `CLAUDE.md` (or `AGENTS.md`, or `.github/copilot-instructions.md`), searching upward from the working directory and stopping at the git root, so running from a subdirectory works and the search can't escape into a parent checkout:
+
+```bash
+cd /path/to/myapp
+waycontext index                                 # = index_project myapp /path/to/myapp
+waycontext project_overview
+waycontext search_code "purge cache after match update"
+waycontext index my-other-app                    # a lone argument is still the project name
+```
+
+Naming a project explicitly always wins. With no name on disk the CLI uses the sole indexed project if there is exactly one, otherwise prompts for it the way `init` does and offers to save the answer into the repo's agent files; with no TTY — an agent, a CI job, a piped invocation — it exits with the list of indexed projects instead of blocking on a prompt. The resolved name and path are reported on stderr (`· project "myapp" (from ./CLAUDE.md)`), so piped JSON is unaffected. MCP tools are unchanged: `project` stays required there, as an MCP client has no working directory.
+
 Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`waycontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` runs the same spinner for its whole duration, pausing it around its own per-step `console.log` progress lines (`Found N source files`, `Resolving graph edges…`, …) so the two don't collide — this keeps the animation visible during the otherwise-silent file-by-file processing in between.
 
 ## Tab completion (bash)

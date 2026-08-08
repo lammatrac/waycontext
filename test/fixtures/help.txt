@@ -3,6 +3,9 @@ waycontext <command> [args...]
 Run `waycontext help <command>` for the full description of any command,
 or add --debug to any command to see the underlying stack trace on failure.
 
+Inside a repo that has been through `waycontext init`, <project> can be left
+off — it is read from CLAUDE.md — and `waycontext index` needs no arguments.
+
 Getting started:
   index_project <project> <path>            index a project: symbols, graph, embeddings (alias: index, reindex)
   list_projects                             what's indexed, with file/symbol counts
