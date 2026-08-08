@@ -92,8 +92,11 @@ claude mcp add --scope user waycontext -- waycontext-mcp
 For any other MCP client, the equivalent is `command: "waycontext-mcp"` with no arguments —
 see [Installation](docs/installation.md#4-register-with-claude-code).
 
-**5. Tell the agent which project name to pass**, by running `waycontext init` in the repo.
-It writes a `## WayContext` section into that repo's `CLAUDE.md`.
+**5. Point the repo's agents at it**, by running `waycontext init` in the repo. It writes a
+`## WayContext` section — the project name plus the workflow to follow — into `CLAUDE.md`,
+`AGENTS.md` and, where applicable, `.github/copilot-instructions.md`, and registers the
+server in `.vscode/mcp.json` for Copilot. See
+[Getting agents to actually use it](#getting-agents-to-actually-use-it).
 
 ### Working from a clone instead
 
@@ -138,20 +141,45 @@ Something broken? [Troubleshooting](docs/troubleshooting.md) is organised by sym
 | [Contributing](CONTRIBUTING.md) | Development setup and conventions |
 | [Security policy](SECURITY.md) | Reporting a vulnerability, and what's deliberately out of scope |
 
-## Suggested agent workflow (e.g. in CLAUDE.md)
+## Getting agents to actually use it
+
+Registering an MCP server makes its tools *available*; it doesn't make an agent prefer them
+over its own built-in search. WayContext pushes on that in three places, weakest to
+strongest:
+
+**1. The server tells every client, automatically.** WayContext sends MCP `instructions` in
+the `initialize` response — the workflow below, what the tools are *not* for, and the list of
+indexed projects with their root paths. Clients inject this into the agent's system prompt, so
+it works in Claude Code, Copilot and Cursor alike with no setup at all. Including the project
+list matters more than it looks: every tool takes a required `project` argument, and a tool
+that costs a `list_projects` round-trip before its first real query loses to a grep that costs
+one call.
 
 ```
-Before modifying code:
 1. project_overview → orient
 2. search_code with the task description → candidate symbols
-3. get_graph / get_callers on the target → impact analysis
+3. get_graph / get_callers on the target → blast radius
 4. get_symbol → read actual source
 Re-run index_project after committing changes.
 ```
 
-`waycontext init` writes this as a `## WayContext` section into the project's `CLAUDE.md`,
-including the project name to pass to the tools. For a stronger push there's an opt-in
-`PreToolUse` hook — see [Installation](docs/installation.md#5-optional-nudge-agents-toward-the-mcp).
+**2. `waycontext init` writes it into the repo**, as a `## WayContext` section stating that
+workflow, the project name, and where grep is still the right answer. It writes every
+agent-instruction file the repo's clients read, not just `CLAUDE.md`:
+
+| File | Read by |
+|---|---|
+| `CLAUDE.md` | Claude Code |
+| `AGENTS.md` | Copilot, Cursor, Codex, Gemini CLI, Amp |
+| `.github/copilot-instructions.md` | GitHub Copilot (only if the repo already has a `.github/`; `--all` forces it) |
+| `.vscode/mcp.json` | VS Code / Copilot — *registration*, not instruction. `install.sh` only registers with Claude Code, so without this Copilot never connects to the server in the first place. |
+
+Re-running is idempotent, existing content is preserved, and each file is confirmed
+separately. `waycontext init <name> --yes` is the non-interactive form.
+
+**3. An opt-in `PreToolUse` hook** intercepts greps in an indexed project and redirects —
+Claude Code only, three escalating modes. See
+[Installation](docs/installation.md#5-what-makes-an-agent-actually-call-the-tools).
 
 ## Notes & limits
 
@@ -161,6 +189,28 @@ including the project name to pass to the tools. For a stronger push there's an 
 - `waycontext serve` has **no authentication** and binds to `127.0.0.1` only. Auth, rate limiting and multi-tenancy are deliberately absent rather than half-present.
 
 ## Changes
+
+- 2026-08-08: Made agents actually reach for the tools instead of falling back to
+  their own search. The server now sends MCP `instructions` in the `initialize`
+  handshake — the recommended workflow, what the tools are *not* for, and the
+  indexed projects with their root paths — which every client injects into the
+  agent's system prompt, so it works in Claude Code, Copilot and Cursor with no
+  setup. Including the project list removes a `list_projects` round-trip that a
+  required `project` argument otherwise forced before the first real query. Tools
+  are annotated `readOnlyHint` (all but the four that write): clients auto-approve
+  read-only tools, so without it `search_code` raised a permission prompt while the
+  agent's built-in `Grep` was pre-approved. `waycontext init` now writes a
+  *directive* section — the 4-step workflow and where grep is still correct, not
+  just the project name — into `AGENTS.md` and `.github/copilot-instructions.md`
+  alongside `CLAUDE.md`, and registers the server in `.vscode/mcp.json`, since
+  `install.sh` only ever registered it with Claude Code. Two fixes found on the way:
+  `upsertSection` appended a newline on every run, so init grew its files forever
+  (invisible with one target, not with four); and where two indexed projects share a
+  root — a stale trial index beside the real one — the instructions name both and
+  say to ask rather than guessing one into the system prompt as fact. The dead
+  `buildGlobalSection`/`upsertGlobalSection` pair is gone, its content superseded by
+  `instructions`; `removeGlobalSection` stays so uninstall can still clean up
+  machines older versions wrote to.
 
 - 2026-08-05: Added a new "Support WayContext" section before License, including
   donation messaging, PayPal support options, and a clarification that Team Edition

@@ -15,10 +15,13 @@ import {
 } from "./completion.js";
 import { config } from "./config.js";
 import { reportError } from "./friendlyError.js";
-import { upsertSection, extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
+import { extractExistingName, removeGlobalSection } from "./claudeMdInit.js";
+import {
+  selectTargets, skippedTargets, planMarkdownWrite, mergeVscodeMcp, VSCODE_MCP_PATH,
+} from "./initTargets.js";
 import { upsertHook, removeHook } from "./hookInit.js";
 import {
-  writeProjectCache, cachePath, HOOK_MODES, DEFAULT_MODE,
+  writeProjectCache, cachePath, HOOK_MODES, DEFAULT_MODE, DEFAULT_MCP_NAME,
 } from "./projectCache.js";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
@@ -419,38 +422,81 @@ async function main() {
       }
       break;
     }
+    // Writes the same section into every agent-instruction file the repo's
+    // clients read, not just CLAUDE.md -- Copilot and Cursor never saw the old
+    // single-file output. Each file is confirmed separately: someone who
+    // hand-edited one of them should not have to overwrite all of them.
     case "init": {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      let name = "";
+      const yes = args.includes("--yes") || args.includes("-y");
+      const allTargets = args.includes("--all");
+      const cwd = process.cwd();
+      const rl = yes ? null : createInterface({ input: process.stdin, output: process.stdout });
+      const confirm = async (question) => {
+        if (yes) return true;
+        const answer = await rl.question(question);
+        return /^y(es)?$/i.test(answer.trim());
+      };
+
       try {
+        let name = args.find((a) => !a.startsWith("-")) ?? "";
         while (!name) {
+          if (yes) usageAndExit("init --yes needs a project name: waycontext init <name> --yes");
           const answer = await rl.question("Project name for WayContext indexing: ");
           name = answer.trim();
           if (!name) console.log("Project name cannot be empty.");
         }
 
-        const claudeMdPath = "CLAUDE.md";
-        const existing = fs.existsSync(claudeMdPath) ? fs.readFileSync(claudeMdPath, "utf8") : "";
-        const currentName = extractExistingName(existing);
-
-        if (currentName) {
-          const answer = await rl.question(
-            `Already configured for project "${currentName}". Replace with "${name}"? (y/N) `
-          );
-          if (!/^y(es)?$/i.test(answer.trim())) {
-            console.log("Aborted — CLAUDE.md left unchanged.");
-            break;
+        let wrote = 0;
+        for (const target of selectTargets(cwd, { all: allTargets })) {
+          const { abs, existing, content, mode, changed } = planMarkdownWrite(cwd, target, name);
+          if (!changed) {
+            console.log(`${target.path} — already up to date.`);
+            continue;
           }
+
+          const currentName = extractExistingName(existing);
+          if (currentName && currentName !== name) {
+            const ok = await confirm(
+              `${target.path} is configured for project "${currentName}". Replace with "${name}"? (y/N) `
+            );
+            if (!ok) {
+              console.log(`${target.path} — left unchanged.`);
+              continue;
+            }
+          }
+
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, content);
+          console.log(`${mode === "created" ? "Created" : "Updated"} ${target.path} (${target.readBy})`);
+          wrote++;
         }
 
-        const { content, mode } = upsertSection(existing, name);
-        fs.writeFileSync(claudeMdPath, content);
+        for (const skipped of skippedTargets(cwd)) {
+          if (allTargets) continue;
+          console.log(
+            `Skipped ${skipped.path} — no ${skipped.dependsOnDir}/ in this repo. Re-run with --all to create it.`
+          );
+        }
 
-        if (mode === "created") console.log(`Created CLAUDE.md — project "${name}" registered for WayContext indexing.`);
-        else if (mode === "appended") console.log(`Updated CLAUDE.md — project "${name}" registered for WayContext indexing.`);
-        else console.log(`Updated CLAUDE.md — project is now "${name}".`);
+        // Registration, not instruction: Copilot cannot act on any of the text
+        // above if the server was never connected to it in the first place.
+        const vscodeAbs = path.join(cwd, VSCODE_MCP_PATH);
+        const existingJson = fs.existsSync(vscodeAbs) ? fs.readFileSync(vscodeAbs, "utf8") : "";
+        const { content: json, mode: jsonMode } = mergeVscodeMcp(existingJson, DEFAULT_MCP_NAME);
+        if (jsonMode === "unparseable") {
+          console.log(`${VSCODE_MCP_PATH} — could not parse, left unchanged. Add: "waycontext": { "command": "waycontext-mcp" }`);
+        } else if (jsonMode === "unchanged") {
+          console.log(`${VSCODE_MCP_PATH} — already registered.`);
+        } else if (await confirm(`Register the MCP server in ${VSCODE_MCP_PATH} for VS Code/Copilot? (y/N) `)) {
+          fs.mkdirSync(path.dirname(vscodeAbs), { recursive: true });
+          fs.writeFileSync(vscodeAbs, json);
+          console.log(`${jsonMode === "created" ? "Created" : "Updated"} ${VSCODE_MCP_PATH} (VS Code, Copilot)`);
+          wrote++;
+        }
+
+        if (wrote) console.log(`\nProject "${name}" registered for WayContext indexing.`);
       } finally {
-        rl.close();
+        rl?.close();
       }
       break;
     }

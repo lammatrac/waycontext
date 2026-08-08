@@ -93,8 +93,8 @@ export const OP_HELP = {
 };
 
 export const MANUAL_COMMANDS = [
-  { name: "init", section: "start", usage: "init",
-    help: "write the WayContext section into ./CLAUDE.md" },
+  { name: "init", section: "start", usage: "init [name] [--yes] [--all]",
+    help: "tell this repo's agents to use WayContext" },
 
   { name: "init-db", section: "admin", usage: "init-db",
     help: "create the schema (same as migrate)" },

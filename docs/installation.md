@@ -181,7 +181,7 @@ waycontext usage                          # embedding token usage, all projects
 waycontext usage <project-name>           # embedding token usage, one project
 ```
 
-`index`/`reindex` are kept as aliases for `index_project` (and the other aliases noted inline above), and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` prompts for a project name and writes (or updates) a `## WayContext` section in `./CLAUDE.md`, so an agent reading that file knows which project name to pass to the tools above — it asks for y/N confirmation before overwriting an existing section. `hook install` is the optional, stronger nudge — see [5. Optional: nudge agents toward the MCP](#5-optional-nudge-agents-toward-the-mcp) below. See [docs/api.md](api.md) for the full argument/description reference for every operation above, and [docs/knowledge.md](knowledge.md) for `rule candidates|confirm|reject` and `knowledge-export`/`knowledge-import`, which are CLI-only and intentionally not exposed as MCP tools.
+`index`/`reindex` are kept as aliases for `index_project` (and the other aliases noted inline above), and `stats` prints `list_projects` as a table instead of JSON. `db` requires the `psql` client (`sudo apt install -y postgresql-client` if missing). `init` takes a project name (prompting if omitted) and writes a `## WayContext` section into every agent-instruction file the repo's clients read — `CLAUDE.md`, `AGENTS.md`, and `.github/copilot-instructions.md` — plus `.vscode/mcp.json` for Copilot; `--yes` skips the per-file confirmations and `--all` forces the `.github/` one. `hook install` is the optional, stronger nudge. Both are covered in [5. What makes an agent actually call the tools](#5-what-makes-an-agent-actually-call-the-tools) below. See [docs/api.md](api.md) for the full argument/description reference for every operation above, and [docs/knowledge.md](knowledge.md) for `rule candidates|confirm|reject` and `knowledge-export`/`knowledge-import`, which are CLI-only and intentionally not exposed as MCP tools.
 
 Every DB/network-backed subcommand shows a spinner with a live elapsed-time counter (e.g. `⠹ Searching "purge cache"… 0.8s`) while it runs, then a final `✔ label (Xs)` line — so a slow embedding-API call or a big-table scan doesn't look hung. It only starts animating after ~150ms (fast queries just print the final line, no flicker), and it's written to **stderr**, so stdout stays clean JSON for piping (`waycontext search_code proj query 2>/dev/null | jq`). In a non-TTY context (CI, redirected output) it skips the animation and prints just the final line. `index_project` runs the same spinner for its whole duration, pausing it around its own per-step `console.log` progress lines (`Found N source files`, `Resolving graph edges…`, …) so the two don't collide — this keeps the animation visible during the otherwise-silent file-by-file processing in between.
 
@@ -243,9 +243,48 @@ Or in `.mcp.json` (project scope):
 
 (Registration options: https://docs.claude.com/en/docs/claude-code/mcp)
 
-## 5. Optional: nudge agents toward the MCP
+### Other clients
 
-Registering the MCP server (step 4) makes its tools *available* in every project. `waycontext init` (step 3) tells the agent in *this* project which project name to pass. If you want a stronger push, there's an opt-in `PreToolUse` hook:
+`install.sh` only runs `claude mcp add`, so nothing in the setup path registers WayContext with anything else. For VS Code and Copilot, `waycontext init` writes `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "waycontext": { "command": "waycontext-mcp" }
+  }
+}
+```
+
+It merges into an existing file rather than replacing it, and refuses to rewrite one it can't parse (VS Code accepts comments and trailing commas there; reserializing would destroy whatever else is registered). For any other MCP client the equivalent is `command: "waycontext-mcp"` with no arguments.
+
+Note that many repos gitignore `.vscode/` — including this one. Where that's the case the registration is per-developer rather than shared, which is usually what you want (each person's WayContext points at their own database), but it does mean every contributor has to run `waycontext init` themselves.
+
+This step is worth doing before blaming the agent for ignoring the tools: an unregistered server and an uncooperative agent look identical from the outside.
+
+## 5. What makes an agent actually call the tools
+
+Three mechanisms, weakest to strongest. The first two are automatic.
+
+**MCP `instructions`, sent to every client.** The server returns an `instructions` string in the `initialize` handshake, which clients inject into the agent's system prompt. It carries the recommended workflow, an explicit "use these before grep/glob on indexed code", the counterweight (grep is still right for config, lockfiles, logs, test output, non-indexed languages, and exact-string lookups), and the list of indexed projects with their root paths — including which one contains the current working directory.
+
+That last part is not a convenience. Every tool takes a required `project` argument, so without it an agent must spend a `list_projects` call before its first real query, and a tool costing two calls loses to a grep costing one. Where a directory matches two indexed projects — usually an abandoned trial index alongside the real one — it names both and says to ask, rather than guessing one into the system prompt as fact.
+
+The project list is read from `~/.cache/waycontext/projects.json`, not the database: this runs on every client's connection path, and neither a slow query nor an unreachable database may delay or break a handshake. A missing or corrupt cache degrades to the workflow half. Nothing here can throw.
+
+Tools are also annotated with `readOnlyHint` (all but `index_project`, `remember`, and the two reasoning-graph tools). Clients auto-approve read-only tools, so without the annotation a `search_code` call can raise a permission prompt while the agent's built-in `Grep` is pre-approved — a mechanical reason to route around the MCP that has nothing to do with the tools being worse.
+
+**`waycontext init`, per repo.** Writes a `## WayContext` section — project name, the 4-step workflow, and where grep is still correct — into every agent-instruction file the repo's clients read:
+
+| File | Read by |
+|---|---|
+| `CLAUDE.md` | Claude Code |
+| `AGENTS.md` | Copilot, Cursor, Codex, Gemini CLI, Amp |
+| `.github/copilot-instructions.md` | GitHub Copilot |
+| `.vscode/mcp.json` | VS Code / Copilot (registration, see above) |
+
+`.github/copilot-instructions.md` is only written when the repo already has a `.github/` — creating that directory in a repo that deliberately has none is a bigger imposition than a root-level markdown file. `--all` forces it. Each file is confirmed separately, so someone who hand-edited one isn't made to overwrite all of them, and re-running is a no-op on files that are already current. `waycontext init <name> --yes` skips every prompt.
+
+**The `PreToolUse` hook, opt-in.** Everything above is advice the agent may still ignore. The hook is the only mechanism that can stop a grep:
 
 ```bash
 waycontext hook install                 # this project, advisory

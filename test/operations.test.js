@@ -16,7 +16,19 @@ test("every operation is fully declared", () => {
     assert.ok(op.input && typeof op.input === "object", `${op.name}: missing input shape`);
     assert.ok(op.cli, `${op.name}: missing cli spec`);
     assert.equal(typeof op.cli.label, "function", `${op.name}: missing spinner label`);
+    assert.equal(typeof op.readOnly, "boolean", `${op.name}: must declare readOnly`);
   }
+});
+
+// readOnlyHint is not decoration: clients auto-approve read-only tools, so a
+// search tool left unannotated can raise a permission prompt while the agent's
+// built-in Grep is pre-approved -- a mechanical reason to route around us.
+// Getting this backwards on a writer is the worse failure, so pin the set.
+test("only the four operations that write are marked non-read-only", () => {
+  const writers = operations.filter((op) => !op.readOnly).map((op) => op.name).sort();
+  assert.deepEqual(writers, [
+    "create_reasoning_graph", "index_project", "remember", "update_reasoning_graph",
+  ]);
 });
 
 test("operation names are unique and do not collide with aliases", () => {

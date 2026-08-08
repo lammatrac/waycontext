@@ -7,13 +7,32 @@
 const SECTION_RE = /## (?:WayContext|Code Context MCP)\n[\s\S]*?(?=\n#{1,2} |\n*$)/;
 const NAME_RE = /\*\*`([^`]+)`\*\*/;
 
+// The section is deliberately directive rather than descriptive. Earlier
+// versions only announced the project name, which left an agent with no reason
+// to prefer these tools over its built-in search -- and agents overwhelmingly
+// did not. The counterweight (what grep is still right for) is not politeness:
+// without it an agent follows the instruction too far and burns calls searching
+// a symbol index for a YAML key.
+//
+// This is scoped to one repo and only written by an explicit `waycontext init`,
+// unlike the global ~/.claude/CLAUDE.md rewrite older versions did unattended --
+// see docs/installation.md on why that was walked back.
 export function buildSection(name) {
   return (
     `## WayContext\n\n` +
-    `This project is indexed by the \`waycontext\` MCP server under the project\n` +
-    `name **\`${name}\`**. When using \`waycontext\` tools\n` +
-    `(\`project_overview\`, \`search_code\`, \`get_graph\`, \`get_callers\`, \`get_symbol\`,\n` +
-    `\`index_project\`, etc.) for this repo, use/target project \`${name}\`.\n\n` +
+    `This repo is indexed by the \`waycontext\` MCP server as project\n` +
+    `**\`${name}\`** — pass that as the \`project\` argument. For questions about\n` +
+    `code in this repo, use these tools BEFORE \`Grep\`/\`Glob\` or dispatching a\n` +
+    `search subagent:\n\n` +
+    `1. \`project_overview\` → orient in unfamiliar areas\n` +
+    `2. \`search_code\` with the task description → candidate symbols\n` +
+    `3. \`get_callers\` / \`get_graph\` on the target → blast radius\n` +
+    `4. \`get_symbol\` → read the source (\`get_file_outline\` for a whole file)\n\n` +
+    `\`compose_context\` is the better opening move when starting real work: it\n` +
+    `fuses rules, code, docs and past fixes for a task in one call.\n\n` +
+    `\`Grep\`/\`Glob\` stay correct for what isn't indexed — config, lockfiles, logs,\n` +
+    `test output — and for exact-string lookups. Re-run \`index_project\` after\n` +
+    `committing so the graph doesn't go stale.\n\n` +
     `### Reasoning graphs before a spec or plan review\n\n` +
     `Before presenting a specification or implementation plan for review, in addition to\n` +
     `any required plan text, render it as a visual reasoning graph: call\n` +
@@ -41,7 +60,18 @@ export function upsertSection(content, name) {
     return { content: `# Project Notes\n\n${section}\n`, mode: "created" };
   }
   if (SECTION_RE.test(content)) {
-    return { content: content.replace(SECTION_RE, section + "\n"), mode: "updated" };
+    // How many newlines the match swallows depends on what follows the
+    // section: at EOF the lookahead consumes none, before another heading it
+    // consumes the blank line. Re-emitting exactly what was matched keeps both
+    // shapes intact. Appending a fixed "\n" instead -- as this used to -- grew
+    // the file by one newline on every re-run, which only became visible once
+    // init started rewriting several files and had to report "already up to
+    // date" honestly.
+    const replaced = content.replace(SECTION_RE, (match) => section + match.match(/\n*$/)[0]);
+    return {
+      content: replaced.endsWith("\n") ? replaced : `${replaced}\n`,
+      mode: "updated",
+    };
   }
   const sep = content.endsWith("\n") ? "\n" : "\n\n";
   return {
@@ -50,56 +80,20 @@ export function upsertSection(content, name) {
   };
 }
 
-// Global (user-level ~/.claude/CLAUDE.md) counterpart: unlike the per-project
-// section above, this one takes no project name, so the same fixed block
-// applies to every project once the server is registered at user scope.
+// Global (user-level ~/.claude/CLAUDE.md) counterpart.
 //
-// No longer written by install.sh -- kept so `waycontext uninstall` can remove
-// what older versions left behind, and for anyone who wants it deliberately.
+// The builder is gone: nothing wrote it any more once install.sh stopped
+// rewriting ~/.claude/CLAUDE.md unattended, and the workflow it described now
+// lives in the MCP server's `instructions` (src/mcpInstructions.js), which
+// reaches every client rather than only Claude Code. Two copies of that text
+// would drift, and the stale one would be the one users read.
+//
+// The regex and the remover stay: machines set up by older versions still have
+// the section, and `waycontext uninstall` has to be able to take it back out.
 const GLOBAL_SECTION_RE = /## (?:WayContext Workflow|Code Context MCP Workflow)\n[\s\S]*?(?=\n#{1,2} |\n*$)/;
-
-export function buildGlobalSection() {
-  return (
-    `## WayContext Workflow\n\n` +
-    `\`waycontext\` is a globally-registered MCP server (registered via\n` +
-    `\`claude mcp add --scope user waycontext -- node /path/to/waycontext/src/server.js\`,\n` +
-    `see \`install.sh\`) — it is available in every project's session, not just\n` +
-    `this one. When the current repo is indexed, prefer it over \`Grep\`/\`Glob\`/an\n` +
-    `\`Explore\` agent for code questions: it searches semantically and by call\n` +
-    `graph rather than by string match.\n` +
-    `To find the right project name for the current repo, check the project's\n` +
-    `own \`CLAUDE.md\` first (it should document the indexed project name — see\n` +
-    `\`waycontext init\`), otherwise call \`list_projects\` and match by root\n` +
-    `path (or \`index_project\` with a new name if none exists):\n\n` +
-    `1. \`project_overview\` → orient\n` +
-    `2. \`search_code\` with the task description → candidate symbols\n` +
-    `3. \`get_graph\` / \`get_callers\` on the target → impact analysis\n` +
-    `4. \`get_symbol\` → read actual source (or \`get_file_outline\` for a whole file)\n\n` +
-    `\`Grep\`/\`Glob\` remain the right tools for non-indexed content — docs,\n` +
-    `config, logs, test output, and file types the parser doesn't cover.`
-  );
-}
-
-export function upsertGlobalSection(content) {
-  const section = buildGlobalSection();
-  if (!content.trim()) {
-    return { content: `${section}\n`, mode: "created" };
-  }
-  const match = content.match(GLOBAL_SECTION_RE);
-  if (match) {
-    if (match[0] === section) return { content, mode: "unchanged" };
-    return { content: content.replace(GLOBAL_SECTION_RE, section + "\n"), mode: "updated" };
-  }
-  const sep = content.endsWith("\n") ? "\n" : "\n\n";
-  return { content: `${content}${sep}${section}\n`, mode: "appended" };
-}
 
 /**
  * Strip the global section, leaving the rest of the file untouched.
- *
- * Earlier versions wrote this section into ~/.claude/CLAUDE.md unattended from
- * install.sh, so `codecontext uninstall` needs to be able to take it back out
- * of machines that were set up that way.
  */
 export function removeGlobalSection(content) {
   if (!GLOBAL_SECTION_RE.test(content)) return content;

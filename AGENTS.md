@@ -31,4 +31,3 @@ plan as markdown. There is no tool to auto-open a browser or IDE panel, so sugge
 opening it once via VS Code's Simple Browser (Command Palette -> "Simple Browser:
 Show") or a live-preview extension -- refreshing after each update shows the latest
 state.
-

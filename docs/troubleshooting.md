@@ -222,7 +222,7 @@ claude mcp add --scope user waycontext -- waycontext-mcp
 
 Restart the client after registering or updating. If the agent has the tools but keeps
 reaching for `grep` instead, see the opt-in nudge hook under
-[Installation](installation.md#5-optional-nudge-agents-toward-the-mcp), and `waycontext init`
+[Installation](installation.md#5-what-makes-an-agent-actually-call-the-tools), and `waycontext init`
 to write the project name into `./CLAUDE.md`.
 
 ### The hook fires in the wrong project, or not at all

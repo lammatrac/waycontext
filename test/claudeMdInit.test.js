@@ -1,19 +1,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildSection, extractExistingName, upsertSection,
-  upsertGlobalSection, removeGlobalSection,
+  buildSection, extractExistingName, upsertSection, removeGlobalSection,
 } from "../src/claudeMdInit.js";
+
+// Nothing writes the global section any more -- the workflow it carried now
+// lives in the MCP server's `instructions`, which reaches every client instead
+// of only Claude Code. But older versions did write it, unattended, into
+// ~/.claude/CLAUDE.md, so uninstall must still recognise and remove it. These
+// fixtures are what those versions actually left on disk; they cannot be
+// regenerated from a builder, which is the point.
+const LEGACY_GLOBAL = [
+  "## WayContext Workflow",
+  "",
+  "`waycontext` is a globally-registered MCP server — it is available in every",
+  "project's session, not just this one.",
+  "",
+  "1. `project_overview` → orient",
+].join("\n");
 
 test("removeGlobalSection is a no-op when the section was never installed", () => {
   const content = "# My rules\n\nSome guidance.\n";
   assert.equal(removeGlobalSection(content), content);
 });
 
-test("removeGlobalSection undoes upsertGlobalSection, preserving the rest", () => {
-  const original = "# My rules\n\nSome guidance.\n\n## Git Commit\n\nUse conventional commits.\n";
-  const { content } = upsertGlobalSection(original);
-  assert.match(content, /## WayContext Workflow/);
+test("removeGlobalSection strips a section an older version left behind, preserving the rest", () => {
+  const content = `# My rules\n\nSome guidance.\n\n${LEGACY_GLOBAL}\n\n## Git Commit\n\nUse conventional commits.\n`;
 
   const cleaned = removeGlobalSection(content);
   assert.doesNotMatch(cleaned, /WayContext Workflow/);
@@ -23,7 +35,7 @@ test("removeGlobalSection undoes upsertGlobalSection, preserving the rest", () =
 });
 
 test("removeGlobalSection does not leave a run of blank lines behind", () => {
-  const { content } = upsertGlobalSection("# Rules\n\nA.\n\n## Later\n\nB.\n");
+  const content = `# Rules\n\nA.\n\n${LEGACY_GLOBAL}\n\n## Later\n\nB.\n`;
   assert.doesNotMatch(removeGlobalSection(content), /\n{3,}/);
 });
 
@@ -31,7 +43,26 @@ test("buildSection embeds the project name in the expected format", () => {
   const section = buildSection("my-app");
   assert.match(section, /^## WayContext\n/);
   assert.match(section, /\*\*`my-app`\*\*/);
-  assert.match(section, /use\/target project `my-app`/);
+});
+
+// The whole reason init exists is to change which tool the agent reaches for
+// first. A section that only announces the project name -- which is what this
+// used to be -- leaves the agent no reason to prefer WayContext over grep.
+test("buildSection tells the agent to use WayContext before its built-in search", () => {
+  const section = buildSection("my-app");
+  assert.match(section, /BEFORE `Grep`\/`Glob`/);
+  for (const tool of ["project_overview", "search_code", "get_callers", "get_symbol"]) {
+    assert.match(section, new RegExp(tool), `the workflow must name ${tool}`);
+  }
+});
+
+// ...and it has to say where grep is still correct. Without the counterweight
+// an agent follows the instruction past the point of usefulness and burns calls
+// searching a symbol index for config keys and log lines.
+test("buildSection says what WayContext is not for", () => {
+  const section = buildSection("my-app");
+  assert.match(section, /`Grep`\/`Glob` stay correct/);
+  assert.match(section, /config|logs/);
 });
 
 test("buildSection instructs Claude to render a reasoning graph before a spec/plan review", () => {
@@ -110,13 +141,11 @@ test("an existing pre-v0.2.0 section is migrated in place, not duplicated", () =
   assert.match(content, /Keep me\./);
 });
 
-test("a pre-v0.2.0 global section is recognised and replaced, not duplicated", () => {
+test("the pre-v0.2.0 global heading is still removable", () => {
   const legacy = "# Rules\n\n## Code Context MCP Workflow\n\nOld body.\n\n## Other\n\nKeep.\n";
-  const { content, mode } = upsertGlobalSection(legacy);
-  assert.equal(mode, "updated");
-  assert.doesNotMatch(content, /## Code Context MCP Workflow/);
-  assert.equal((content.match(/## WayContext Workflow/g) || []).length, 1);
-  assert.match(content, /## Other/);
-  assert.equal(removeGlobalSection(legacy).includes("Code Context MCP Workflow"), false,
+  const cleaned = removeGlobalSection(legacy);
+  assert.doesNotMatch(cleaned, /Code Context MCP Workflow/,
     "uninstall must still be able to remove the old heading");
+  assert.match(cleaned, /## Other/);
+  assert.match(cleaned, /Keep\./);
 });

@@ -32,6 +32,12 @@ the HTTP routes below cannot drift apart.
 | `create_reasoning_graph` | Start a new decision graph for a feature — JSON + self-contained HTML, written into the target project. |
 | `update_reasoning_graph` | Patch an existing decision graph (add questions/alternatives, resolve, set risk/affected files) and re-render its HTML. |
 
+All of these are annotated `readOnlyHint: true` except `index_project`, `remember`, and the two reasoning-graph tools, which write. Clients use the hint to decide what to auto-approve, so an unannotated read-only tool ends up behind a permission prompt that the agent's own built-in search is not.
+
+### Server instructions
+
+The server also returns an `instructions` string in the `initialize` handshake — the recommended workflow, what the tools are *not* for, and the indexed projects with their root paths. Clients inject it into the agent's system prompt, which makes it the one steering mechanism that needs no per-repo or per-client setup. Built in [`src/mcpInstructions.js`](../src/mcpInstructions.js) from the projects.json cache rather than the database, so a slow or unreachable DB cannot delay or break a connection; see [Installation §5](installation.md#5-what-makes-an-agent-actually-call-the-tools).
+
 ## The context API
 
 `compose_context` is the one call that replaces firing four tools by hand. Given a task in

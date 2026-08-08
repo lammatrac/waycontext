@@ -45,6 +45,7 @@ const limit = z.coerce.number().int().min(1).max(30).default(10);
 export const operations = [
   {
     name: "index_project",
+    readOnly: false,
     description:
       "Scan and index a project directory: extracts all functions/classes/methods, builds a relationship graph (calls, imports, inheritance, WordPress hooks) and vector embeddings. Incremental: unchanged files are skipped. Run this first, and re-run after code changes.",
     input: {
@@ -65,6 +66,7 @@ export const operations = [
   },
   {
     name: "list_projects",
+    readOnly: true,
     description: "List all indexed projects with file/symbol/edge counts.",
     input: {},
     cli: { args: [], label: () => "Listing projects" },
@@ -72,6 +74,7 @@ export const operations = [
   },
   {
     name: "project_overview",
+    readOnly: true,
     description:
       "High-level map of a project: languages, directory sizes, most-referenced symbols (architecture hubs), and WordPress hooks in use. Best first call for understanding an unfamiliar codebase.",
     input: { project },
@@ -80,8 +83,9 @@ export const operations = [
   },
   {
     name: "search_code",
+    readOnly: true,
     description:
-      "Hybrid search over indexed symbols: combines Postgres full-text ranking with pgvector semantic similarity (when embeddings are enabled) via Reciprocal Rank Fusion. Describe a feature or behavior in natural language (e.g. 'purge cache after match status update') and get the most relevant functions/classes. Each result's `score` is a relative Reciprocal-Rank-Fusion score used for ranking, not a cosine similarity or probability.",
+      "Find code by describing what it does. Give a feature or behaviour in plain language (e.g. 'purge cache after match status update') and get the functions/classes that implement it, ranked. Prefer this over grep as the first move on an indexed project: it matches on meaning, so it finds the right symbol when the query shares no words with the code — which is the usual case when you are describing a behaviour rather than recalling an identifier. Reach for grep instead when you know the literal string you want. Mechanically: Postgres full-text ranking fused with pgvector semantic similarity (when embeddings are enabled) via Reciprocal Rank Fusion; each `score` is a relative RRF rank, not a cosine similarity or probability.",
     input: {
       project,
       query: z.string().describe("Natural-language description of what you're looking for"),
@@ -92,6 +96,7 @@ export const operations = [
   },
   {
     name: "search_knowledge",
+    readOnly: true,
     description:
       "Search code and project documentation together — symbols, READMEs, guides and ADRs — in one fused ranking. Use this for 'why is it this way' questions, where the answer is usually prose (a decision record, a guide) rather than a function body: each result is tagged `type: \"code\"` or `type: \"doc\"`, and doc hits carry the heading path they came from. Use `search_code` when you want the implementation itself.",
     input: {
@@ -108,53 +113,61 @@ export const operations = [
   },
   {
     name: "get_symbol",
+    readOnly: true,
     description:
-      "Get full details of a symbol by name (function, class, or method). Accepts 'Class::method' or bare method name. Returns signature, docblock, file location and source body.",
+      "Read one symbol's actual source, by name — function, class or method. Accepts 'Class::method' or a bare method name, so you do not need its file path first; use this rather than locating the file and reading it when you already know what the thing is called. Returns signature, docblock, file location and source body.",
     input: { project, name: z.string() },
     cli: { args: ["project", "name"], label: (a) => `Fetching "${a.name}"` },
     handler: (a) => getSymbol(a.project, a.name),
   },
   {
     name: "get_callers",
+    readOnly: true,
     description:
-      "Who calls / references this symbol? Returns all inbound edges (CALLS, INSTANTIATES, EXTENDS, hook registrations). Use to assess blast radius before changing a function.",
+      "What references this — the blast radius. Returns all inbound edges (CALLS, INSTANTIATES, EXTENDS, hook registrations). Call it before changing or deleting any function: these are resolved graph edges, so it catches subclass and hook callers that a text search for the name would miss.",
     input: { project, name: z.string() },
     cli: { args: ["project", "name"], label: (a) => `Finding callers of "${a.name}"` },
     handler: (a) => getCallers(a.project, a.name),
   },
   {
     name: "get_callees",
+    readOnly: true,
     description:
-      "What does this symbol call / depend on? Returns all outbound edges including WordPress hooks it registers or fires.",
+      "What does this symbol call / depend on? Returns all outbound edges including WordPress hooks it registers or fires. These are resolved graph edges, so unlike reading the body you also get calls made through inherited methods and hook indirection.",
     input: { project, name: z.string() },
     cli: { args: ["project", "name"], label: (a) => `Finding callees of "${a.name}"` },
     handler: (a) => getCallees(a.project, a.name),
   },
   {
     name: "get_graph",
+    readOnly: true,
     description:
-      "Get a dependency subgraph around a symbol (BFS in both directions up to `depth` hops). Returns nodes + labeled edges — ideal for understanding how a feature is wired together.",
+      "See how a feature is wired together: the dependency subgraph around a symbol, BFS in both directions up to `depth` hops, as nodes + labeled edges. Use it when 'who calls this' (get_callers) is one hop short of the answer and you need the shape of the neighbourhood — there is no way to get this by reading files one at a time.",
     input: { project, name: z.string(), depth: z.coerce.number().int().min(1).max(4).default(2) },
     cli: { args: ["project", "name", "depth"], label: (a) => `Building graph around "${a.name}"` },
     handler: (a) => getSubgraph(a.project, a.name, a.depth),
   },
   {
     name: "get_file_outline",
-    description: "List all symbols defined in one file (ordered by line), with signatures and docblocks.",
+    readOnly: true,
+    description:
+      "See what is in a file without reading it: every symbol defined there, in line order, with signatures and docblocks. Cheaper than reading the whole file when you need to find your way to the right function in it.",
     input: { project, path: z.string().describe("File path relative to project root") },
     cli: { args: ["project", "path"], label: (a) => `Outlining "${a.path}"` },
     handler: (a) => getFileOutline(a.project, a.path),
   },
   {
     name: "find_related",
+    readOnly: true,
     description:
-      "Find symbols semantically similar to a given symbol (same feature area). Useful for discovering all code belonging to one feature even when names differ.",
+      "Find the rest of a feature: symbols semantically similar to one you already have. Use it after search_code or get_symbol to sweep up the code that belongs to the same feature but is named differently and shares no call edge — the pieces a grep on the first symbol's name would never surface. Requires embeddings.",
     input: { project, name: z.string(), limit },
     cli: { args: ["project", "name", "limit"], label: (a) => `Finding symbols related to "${a.name}"` },
     handler: (a) => findRelated(a.project, a.name, a.limit),
   },
   {
     name: "get_history",
+    readOnly: true,
     description:
       "Why is this code the way it is? Returns the commits that touched a file, symbol or directory — newest first — with author, date, whether it was a fix or a revert, and any issue/ticket numbers referenced in the message. Answers 'what broke last time someone touched this' and 'which ticket introduced this behaviour'. Omit `target` for recent project-wide history. Symbols keep their history across renames and file moves.",
     input: {
@@ -174,6 +187,7 @@ export const operations = [
   },
   {
     name: "who_owns",
+    readOnly: true,
     description:
       "Who should you ask about this code? Ranks contributors to a file, symbol or directory by recency-weighted authorship, so the answer is whoever still has it in their head rather than whoever wrote the most lines in 2019. Returns commit counts, how many of those were fixes, first/last touch and their most recent change. Omit `target` to rank contributors across the whole project.",
     input: {
@@ -193,6 +207,7 @@ export const operations = [
   },
   {
     name: "get_rules",
+    readOnly: true,
     description:
       "Project rules that apply to a file, symbol or directory — the conventions and constraints a human has confirmed, most severe first. Only confirmed rules are returned: heuristically extracted candidates are not, so anything you get here is something a maintainer stood behind. Omit `target` for project-wide rules.",
     input: {
@@ -208,6 +223,7 @@ export const operations = [
   },
   {
     name: "remember",
+    readOnly: false,
     description:
       "Record something learned about this project so it outlives this session — a gotcha, a fix that worked, a convention, a postmortem note. Use it when you discover something non-obvious that the next reader would otherwise waste time rediscovering. Pass `supersedes` with an earlier memory's key when you learn that memory was wrong. This records an observation, not a rule: rules require human confirmation.",
     input: {
@@ -226,6 +242,7 @@ export const operations = [
   },
   {
     name: "recall",
+    readOnly: true,
     description:
       "Search this project's engineering memory — gotchas, fixes, conventions and postmortems recorded earlier. Ask before debugging something that smells like it has been hit before. Pinned memories always come first; memories that were later corrected are hidden.",
     input: { project, query: z.string(), limit },
@@ -234,6 +251,7 @@ export const operations = [
   },
   {
     name: "review_context",
+    readOnly: true,
     description:
       "Everything worth knowing before reviewing or continuing a change: the confirmed rules governing the changed paths, memories scoped to them, and what was last fixed there. Defaults to the working tree's uncommitted changes — including untracked files — so it answers 'what should I know about what I'm about to commit'. Pass `paths` (comma-separated) to ask about specific files instead.",
     input: {
@@ -245,6 +263,7 @@ export const operations = [
   },
   {
     name: "get_modules",
+    readOnly: true,
     description:
       "The project's architecture as modules (directories) with churn, defect density and a risk score, most at-risk first. Start here when you don't know a codebase: it answers 'what are the parts, which are hot, and which have been breaking'. Check `risk_basis` — 'churn_only' means the project has no recognisable fix commits, so risk is ranked on change volume alone.",
     input: {
@@ -261,6 +280,7 @@ export const operations = [
   },
   {
     name: "get_module",
+    readOnly: true,
     description:
       "One module in full: its metrics, what it depends on and what depends on it, who has been changing it lately, its largest files, and the recurring bug themes that land in it. Use it before changing unfamiliar code, and to find out who to ask.",
     input: {
@@ -276,6 +296,7 @@ export const operations = [
   },
   {
     name: "get_cochange",
+    readOnly: true,
     description:
       "What else historically changes when this changes — the files coupled to a target by commit history rather than by imports. Use it to catch the file you were about to forget: a test, a migration, a fixture, a doc. Takes a path, directory or symbol name.",
     input: {
@@ -292,6 +313,7 @@ export const operations = [
   },
   {
     name: "get_bug_clusters",
+    readOnly: true,
     description:
       "Recurring themes across this project's fix commits, grouped and labelled, largest first — 'what keeps breaking here'. Clustered from fix commit messages, not from an issue tracker. `method: 'terms'` means embeddings were off and the grouping is keyword-based, so treat it as weaker evidence.",
     input: { project, limit: z.coerce.number().int().min(1).max(50).default(10) },
@@ -304,6 +326,7 @@ export const operations = [
   },
   {
     name: "compose_context",
+    readOnly: true,
     description:
       "Assemble everything worth knowing before starting a task, in one call: the confirmed rules governing the code involved, the code and docs that match, what was fixed there before, and what this project has learned — each with a citation, packed into a token budget that rules always survive. Prefer this over firing search_code, get_rules, recall and get_history separately; it fuses them and tells you in `understood` what it took your description to mean. `format: markdown` returns paste-ready prose.",
     input: {
@@ -323,6 +346,7 @@ export const operations = [
   },
   {
     name: "create_reasoning_graph",
+    readOnly: false,
     description:
       "Start a new reasoning/decision graph for a feature: a self-contained HTML page plus its JSON source of truth, written into the target project at docs/waycontext/<slug>/ (configurable via REASONING_DIR). Use this once, at the start of working out a feature's requirements/edge-cases/design decisions with the developer; call update_reasoning_graph afterward to add questions, alternatives and decisions as they come up. Errors if the slug already exists -- pass an explicit `slug` to disambiguate. Returns the absolute paths to both files, and the slug to pass to update_reasoning_graph.",
     input: {
@@ -339,6 +363,7 @@ export const operations = [
   },
   {
     name: "update_reasoning_graph",
+    readOnly: false,
     description:
       "Apply one or more updates to an existing reasoning graph (add a question node, add an alternative with pros/cons, select an answer, mark a node resolved/open, set risk or affected_files, reparent or remove a node) and re-render its HTML. `patch` is a JSON array of patch operations, e.g. '[{\"op\":\"add_node\",\"parent\":\"n1\",\"type\":\"question\",\"title\":\"...\"}]'. Applied atomically: if any operation is invalid, nothing is written. Re-reads graph.json from disk each call, so hand-edits between calls are respected.",
     input: {
