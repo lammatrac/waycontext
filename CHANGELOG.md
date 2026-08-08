@@ -2,6 +2,43 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-08 — v0.5.0: agents that reach for the tools, a CLI that knows where it is
+
+Two halves of the same problem: an agent that fell back to its own `Grep` instead of calling
+WayContext, and a human retyping the project name on every command from inside the very repo
+that already records it.
+
+- **MCP `instructions` in the `initialize` handshake.** The recommended workflow, what the
+  tools are *not* for, and the indexed projects with their root paths — injected into the
+  agent's system prompt by every client, so it works in Claude Code, Copilot and Cursor with
+  no setup. Shipping the project list also removes the `list_projects` round-trip that a
+  required `project` argument otherwise forced before the first real query.
+- **`readOnlyHint` on every tool that doesn't write** (all but four). Clients auto-approve
+  read-only tools; without the annotation `search_code` raised a permission prompt while the
+  agent's built-in `Grep` was pre-approved — which is exactly the wrong incentive.
+- **`waycontext init` now writes a directive section** — the 4-step workflow and where grep
+  is still correct, not just the project name — into `AGENTS.md` and
+  `.github/copilot-instructions.md` alongside `CLAUDE.md`, and registers the server in
+  `.vscode/mcp.json` for Copilot. Two fixes found on the way: `upsertSection` appended a
+  newline on every run, so init grew its files forever; and where two indexed projects share
+  a root, the instructions name both and say to ask rather than guessing one into the system
+  prompt as fact.
+- **The CLI infers the project from the repo it runs in.** Every command whose first argument
+  is `<project>` can now omit it: the name is read back out of the `## WayContext` section of
+  `CLAUDE.md` (or `AGENTS.md`, or the Copilot file), searching upward from the working
+  directory and stopping at the git root so the walk can't escape into a parent checkout.
+  `waycontext index` needs no arguments at all — `index_project` declares
+  `rootDefault: "path"` in the operation registry and the detected repo root fills it, so
+  `cli.js` still holds no per-command knowledge. Omitted arguments are filled from the right
+  before the left, which is what keeps `waycontext index my-app` meaning the *project*
+  my-app rather than a path called that.
+- **Falling back, in order:** the sole indexed project, then a prompt identical to `init`'s —
+  with a `(y/N)` offer to write the answer into the repo's agent files so it is asked once —
+  then, with no TTY, an error naming the indexed projects, because an agent or a CI job must
+  fail with a message rather than block on a question nobody can answer. Resolution is
+  skipped entirely when the arguments are already there, reported on stderr so piped JSON
+  stays clean, and absent from the MCP surface, where there is no working directory to read.
+
 ## 2026-08-05 — v0.4.0: reasoning and decision graphs
 
 AI-assisted development skips the "quiet QA" that used to happen naturally when a human sat
