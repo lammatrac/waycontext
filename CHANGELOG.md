@@ -2,6 +2,33 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-11 — v0.7.0: a deterministic gate hook, and SCSS joins the languages
+
+Two additions: the CLAUDE.md spec→plan→gate→code→review pipeline now has a hook that actually
+enforces it instead of relying on an agent to follow it voluntarily, and SCSS gets the same
+real symbol extraction CSS already has.
+
+- **Added `waycontext_gate.py`, a deterministic Claude Code hook enforcing the CLAUDE.md
+  spec→plan→gate→code→review pipeline** (blocks `Edit`/`Write`/`MultiEdit`/`NotebookEdit` until
+  a gate is approved, blocks `Grep`/`Glob` until WayContext has been queried first), opt-in per
+  directory via a `waycontext-tasks/` folder or `.claude/.gate/enabled` marker. Wired it into
+  setup with a new `waycontext gate install`/`gate uninstall` CLI subcommand (`src/gateInit.js`)
+  that copies the hook script to `~/.claude/hooks/`, merges its `env`/`hooks` into
+  `~/.claude/settings.json` without disturbing unrelated settings or the existing search hook,
+  and merges `.gitignore.sample` into a repo's own `.gitignore`; `install.sh` now runs it
+  automatically (best-effort), and the top-level `waycontext uninstall` reverses it.
+- **Renamed the ambiguous "project root" wording** `waycontext init` writes into
+  CLAUDE.md/AGENTS.md/copilot-instructions.md to "indexed directory", since the directory
+  WayContext indexes can be a subdirectory of a repo's actual git root. `extractExistingPath`
+  still parses the old phrasing for backward compatibility with files an older version wrote.
+- **Added SCSS to the languages**, reusing the existing CSS symbol-extraction walker as-is:
+  `tree-sitter-scss`'s grammar node types (`rule_set`, `selectors`, and every at-rule ending in
+  `_statement`) are a superset of CSS's, so nested rules and SCSS-only at-rules (`@mixin`,
+  `@include`, etc.) become `rule` symbols the same way CSS's do — no new symbol kind, no
+  dedicated walker. Added the `tree-sitter-scss` dependency; its declared peer dependency
+  (`tree-sitter@^0.21.0`) is already satisfied by the pinned core, so no version substitution
+  was needed.
+
 ## 2026-08-11 — v0.6.0: quieter reasoning reviews, self-locating agents, four more languages
 
 Three unrelated threads that happened to land in the same window: the reasoning-review UI

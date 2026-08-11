@@ -1,6 +1,6 @@
 {
   "name": "waycontext",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Engineering intelligence for AI coding agents: indexes a codebase into symbols, a relationship graph and vector embeddings, and serves it over MCP",
   "type": "module",
   "main": "src/server.js",
