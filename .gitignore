@@ -18,6 +18,8 @@ pgvector/
 /*.sql
 *.bk
 
+__pycache__/
+
 .DS_Store
 /.idea/
 /.vscode/
