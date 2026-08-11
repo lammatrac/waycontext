@@ -85,9 +85,9 @@ export function mergeVscodeMcp(existingJson, mcpName = "waycontext") {
 }
 
 /** Read a target, upsert the section, and report what changed. Pure except the read. */
-export function planMarkdownWrite(cwd, target, name) {
+export function planMarkdownWrite(cwd, target, name, rootPath) {
   const abs = path.join(cwd, target.path);
   const existing = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : "";
-  const { content, mode } = upsertSection(existing, name);
+  const { content, mode } = upsertSection(existing, name, rootPath);
   return { abs, existing, content, mode, changed: content !== existing };
 }

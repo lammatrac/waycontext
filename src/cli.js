@@ -229,6 +229,40 @@ function displayPath(abs) {
   return rel.startsWith("..") ? abs : `./${rel}`;
 }
 
+/**
+ * A readline `completer` offering shell-style Tab completion of directories,
+ * resolved against `cwd` the same way a shell resolves a relative path
+ * against its own working directory. Only directories are offered -- this
+ * exists for the `init` path prompt, which never asks for a file -- and
+ * dotfiles are hidden unless the typed text itself starts with `.`, matching
+ * ordinary shell completion.
+ */
+function completeDirectory(cwd) {
+  return (line) => {
+    // Split the typed text itself before resolving anything -- resolving
+    // first and reading dirname/basename back off the result collapses a
+    // bare "." or ".." into cwd's own name, which then gets searched for in
+    // cwd's *parent* instead of listing what's inside "." like a shell does.
+    const sep = line.lastIndexOf(path.sep);
+    const prefix = sep === -1 ? "" : line.slice(0, sep + 1);
+    const base = sep === -1 ? line : line.slice(sep + 1);
+    const dir = path.resolve(cwd, prefix || ".");
+
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return [[], line];
+    }
+
+    const matches = entries
+      .filter((e) => e.isDirectory() && e.name.startsWith(base))
+      .filter((e) => base.startsWith(".") || !e.name.startsWith("."))
+      .map((e) => `${prefix}${e.name}${path.sep}`);
+    return [matches.length ? matches : [line], line];
+  };
+}
+
 /** Ask until a non-empty name is given. Shared with the `init` command. */
 async function promptProjectName(rl) {
   let name = "";
@@ -238,6 +272,32 @@ async function promptProjectName(rl) {
     if (!name) console.log("Project name cannot be empty.");
   }
   return name;
+}
+
+/**
+ * `rootPath` relative to `cwd` -- the form written into CLAUDE.md/AGENTS.md.
+ *
+ * Those files are committed and cloned onto other machines, so the absolute
+ * path `init` resolved the answer to would be wrong the moment anyone else
+ * checks the repo out somewhere else. `./` for the common case (project root
+ * == where the file lives), `../sibling` or `packages/foo` when an explicit
+ * `init <name> <path>` argument named a different root.
+ */
+function relativeRootPath(cwd, rootPath) {
+  const rel = path.relative(cwd, rootPath);
+  if (!rel) return "./";
+  return rel.startsWith("..") ? rel : `./${rel}`;
+}
+
+/**
+ * Ask for the project's root path, once -- unlike `promptProjectName` this
+ * never loops, because the path (unlike the name) always has a sensible
+ * default: the directory `init` was run in.
+ */
+async function promptProjectPath(rl, cwd) {
+  const answer = await rl.question(`Project root path for WayContext indexing [${cwd}]: `);
+  const trimmed = answer.trim();
+  return trimmed ? path.resolve(trimmed) : cwd;
 }
 
 /**
@@ -614,7 +674,11 @@ async function main() {
       const yes = args.includes("--yes") || args.includes("-y");
       const allTargets = args.includes("--all");
       const cwd = process.cwd();
-      const rl = yes ? null : createInterface({ input: process.stdin, output: process.stdout });
+      const rl = yes ? null : createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        completer: completeDirectory(cwd),
+      });
       const confirm = async (question) => {
         if (yes) return true;
         const answer = await rl.question(question);
@@ -622,15 +686,21 @@ async function main() {
       };
 
       try {
-        let name = args.find((a) => !a.startsWith("-")) ?? "";
+        const positional = args.filter((a) => !a.startsWith("-"));
+        let name = positional[0] ?? "";
         if (!name) {
           if (yes) usageAndExit("init --yes needs a project name: waycontext init <name> --yes");
           name = await promptProjectName(rl);
         }
 
+        const rootPath = positional[1]
+          ? path.resolve(positional[1])
+          : yes ? cwd : await promptProjectPath(rl, cwd);
+        const relativeRoot = relativeRootPath(cwd, rootPath);
+
         let wrote = 0;
         for (const target of selectTargets(cwd, { all: allTargets })) {
-          const { abs, existing, content, mode, changed } = planMarkdownWrite(cwd, target, name);
+          const { abs, existing, content, mode, changed } = planMarkdownWrite(cwd, target, name, relativeRoot);
           if (!changed) {
             console.log(`${target.path} — already up to date.`);
             continue;

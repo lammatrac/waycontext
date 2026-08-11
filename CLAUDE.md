@@ -3,7 +3,7 @@
 ## WayContext
 
 This repo is indexed by the `waycontext` MCP server as project
-**`waycontext`** — pass that as the `project` argument. For questions about
+**`waycontext`** — pass that as the `project` argument. Its project root, relative to this file, is **`./`** — resolve that against this file's own directory to get an absolute path, then pass it as the `path` argument to `index_project` when no path is otherwise known (an MCP tool call has no working directory of its own). For questions about
 code in this repo, use these tools BEFORE `Grep`/`Glob` or dispatching a
 search subagent:
 
@@ -27,8 +27,9 @@ any required plan text, render it as a visual reasoning graph: call
 existing one, using `search_code`, `get_graph` and `get_modules` to fill in
 `affected_files` and risk. Tell the developer the path to the generated
 `waycontext-review.html` under `docs/waycontext/<slug>/` instead of asking them to read the
-plan as markdown. There is no tool to auto-open a browser or IDE panel, so suggest
-opening it once via VS Code's Simple Browser (Command Palette -> "Simple Browser:
-Show") or a live-preview extension -- refreshing after each update shows the latest
-state.
+plan as markdown. There is no tool to auto-open a browser or IDE panel, and
+neither reasoning-graph call does so on its own -- open the returned
+`review_url` yourself, or open the file once via VS Code's Simple Browser
+(Command Palette -> "Simple Browser: Show") or a live-preview extension --
+refreshing after each update shows the latest state.
 

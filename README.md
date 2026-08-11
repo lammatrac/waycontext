@@ -220,6 +220,25 @@ Claude Code only, three escalating modes. See
   `create_reasoning_graph` init call, which still auto-opens as before).
   Updated the tool description and test coverage accordingly.
 
+- 2026-08-11: `create_reasoning_graph` also no longer auto-opens a browser
+  tab, closing the gap left by the `update_reasoning_graph` fix above. Removed
+  the now-dead `maybeAutoOpenReview` helper, corrected both tools'
+  descriptions and the generated CLAUDE.md wording, and updated test coverage.
+
+- 2026-08-11: `waycontext init` now also asks for the project's root path and
+  writes it into CLAUDE.md/AGENTS.md/.github/copilot-instructions.md next to
+  the project name, so an MCP-calling agent (which has no working directory
+  of its own) knows what to pass as `index_project`'s `path` argument instead
+  of guessing. The stored value is relative to the file's own location
+  (`./` in the common case) rather than a machine-specific absolute path,
+  since these files are committed and cloned onto other machines; it's
+  resolved back to an absolute path only where one is actually needed
+  (`findProjectMarker`, against the marker file's known directory). The path
+  prompt also supports shell-style Tab completion of directories. Added
+  `extractExistingPath`, updated `findProjectMarker`'s root-default
+  preference, and extended test coverage across `claudeMdInit.js`,
+  `initTargets.js`, and `projectResolve.js`.
+
 - 2026-08-08: Upgraded reasoning graphs into a reviewer-first Decision Review UI
   and made review auto-open default-on. `create_reasoning_graph` /
   `update_reasoning_graph` now render an executive-summary layout (decision graph,

@@ -109,7 +109,7 @@ test("updateReasoningGraph on an unknown slug throws a clear not-found error", a
   );
 });
 
-test("createReasoningGraph auto-opens the generated review file when REASONING_AUTO_OPEN is enabled", async () => {
+test("createReasoningGraph never auto-opens, even when REASONING_AUTO_OPEN is enabled", async () => {
   const prevAutoOpen = config.reasoningAutoOpen;
   try {
     config.reasoningAutoOpen = true;
@@ -126,11 +126,10 @@ test("createReasoningGraph auto-opens the generated review file when REASONING_A
       }
     );
 
-    assert.equal(opened.length, 1);
-    assert.equal(opened[0], result.html_path);
-    assert.equal(result.auto_open.enabled, true);
-    assert.equal(result.auto_open.attempted, true);
-    assert.equal(result.auto_open.opened, true);
+    assert.equal(opened.length, 0);
+    assert.equal(result.auto_open.enabled, false);
+    assert.equal(result.auto_open.attempted, false);
+    assert.equal(result.auto_open.opened, false);
   } finally {
     config.reasoningAutoOpen = prevAutoOpen;
   }

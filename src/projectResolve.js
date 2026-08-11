@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { MARKDOWN_TARGETS } from "./initTargets.js";
-import { extractExistingName } from "./claudeMdInit.js";
+import { extractExistingName, extractExistingPath } from "./claudeMdInit.js";
 import { requiredArgs } from "./operations.js";
 
 /**
@@ -46,6 +46,16 @@ export function searchDirs(startDir) {
  * a repo has drifted between the two. A section whose bolded name has been
  * hand-removed returns null rather than an empty string: the caller must fall
  * through to the prompt, not index a project called "".
+ *
+ * `root` prefers a path stored in the section by a recent `init` over the
+ * marker file's own directory -- the two usually coincide, but a stored path
+ * wins when they don't (e.g. a monorepo subpackage). The stored value is
+ * relative to the marker file's own directory (CLAUDE.md is committed and
+ * cloned onto other machines, so an absolute path baked in there would be
+ * wrong the moment anyone else checks the repo out somewhere else) and is
+ * resolved against `dir` here to hand callers an absolute path regardless.
+ * Older sections written before `init` asked for a path have none, so `root`
+ * falls back to the marker's directory exactly as it always has.
  */
 export function findProjectMarker(startDir) {
   for (const dir of searchDirs(startDir)) {
@@ -58,7 +68,9 @@ export function findProjectMarker(startDir) {
         continue; // missing file, or a directory in its place
       }
       const name = extractExistingName(content);
-      if (name) return { name, file: abs, root: dir };
+      if (!name) continue;
+      const storedPath = extractExistingPath(content);
+      return { name, file: abs, root: storedPath ? path.resolve(dir, storedPath) : dir };
     }
   }
   return null;

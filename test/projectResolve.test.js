@@ -82,6 +82,30 @@ test("no marker anywhere resolves to null", () => {
   assert.equal(findProjectMarker(repo()), null);
 });
 
+// A stored path is relative to the marker file (CLAUDE.md is committed and
+// cloned onto other machines, so an absolute path baked in there would be
+// wrong elsewhere) -- it must resolve against the marker's own directory,
+// not get handed to the caller as a bare unresolved string.
+test("a relative stored path resolves against the marker's directory, not the caller's cwd", () => {
+  const root = repo();
+  const abs = path.join(root, "CLAUDE.md");
+  fs.writeFileSync(abs, `# Project Notes\n\n${buildSection("my-app", "packages/sub")}\n`);
+  assert.deepEqual(findProjectMarker(root), {
+    name: "my-app",
+    file: abs,
+    root: path.join(root, "packages", "sub"),
+  });
+});
+
+// `./` is the common case (project root == where CLAUDE.md lives) and must
+// resolve back to exactly the marker's directory, same as no stored path at all.
+test("a stored `./` resolves to the marker's own directory", () => {
+  const root = repo();
+  const abs = path.join(root, "CLAUDE.md");
+  fs.writeFileSync(abs, `# Project Notes\n\n${buildSection("my-app", "./")}\n`);
+  assert.deepEqual(findProjectMarker(root), { name: "my-app", file: abs, root });
+});
+
 test("searchDirs includes the start directory and ends at the git root", () => {
   const root = repo("a/b");
   const dirs = searchDirs(path.join(root, "a", "b"));

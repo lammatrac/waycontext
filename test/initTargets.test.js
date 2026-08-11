@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   MARKDOWN_TARGETS, selectTargets, skippedTargets, mergeVscodeMcp, planMarkdownWrite,
 } from "../src/initTargets.js";
+import { extractExistingPath } from "../src/claudeMdInit.js";
 
 const repo = (...dirs) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wc-init-"));
@@ -56,6 +57,13 @@ test("planMarkdownWrite reports no change on a second run", () => {
 
   fs.writeFileSync(first.abs, first.content);
   assert.equal(planMarkdownWrite(root, target, "my-app").changed, false);
+});
+
+test("planMarkdownWrite plumbs a root path through to the written section", () => {
+  const root = repo();
+  const target = MARKDOWN_TARGETS[0];
+  const { content } = planMarkdownWrite(root, target, "my-app", "./");
+  assert.equal(extractExistingPath(content), "./");
 });
 
 test("mergeVscodeMcp registers the server in a fresh file", () => {

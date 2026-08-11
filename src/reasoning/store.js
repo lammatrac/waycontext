@@ -12,7 +12,6 @@ import { slugify } from "./slug.js";
 import { newGraph, validateGraph } from "./schema.js";
 import { applyPatch } from "./patch.js";
 import { renderHtml } from "./render.js";
-import { openLocalFile } from "./open.js";
 import { ensureService, serviceBaseUrl } from "../serviceManager.js";
 
 async function resolveDir(projectName, slug) {
@@ -37,28 +36,6 @@ function writeGraphFiles(dir, graph) {
   fs.writeFileSync(htmlPath, html);
   fs.writeFileSync(legacyHtmlPath, html);
   return { graphPath, htmlPath };
-}
-
-async function maybeAutoOpenReview(htmlPath, { log = () => {}, openFile = openLocalFile } = {}) {
-  if (!config.reasoningAutoOpen) {
-    return { enabled: false, attempted: false, opened: false, reason: "REASONING_AUTO_OPEN is disabled" };
-  }
-
-  try {
-    const launched = await openFile(htmlPath);
-    log(`Opened review file: ${htmlPath}`);
-    return {
-      enabled: true,
-      attempted: true,
-      opened: true,
-      command: launched.command,
-      args: launched.args,
-    };
-  } catch (e) {
-    const warning = `Auto-open failed: ${e.message}`;
-    log(warning);
-    return { enabled: true, attempted: true, opened: false, warning };
-  }
 }
 
 async function ensureReviewService(log) {
@@ -102,7 +79,12 @@ export async function createReasoningGraph(projectName, { feature, slug }, optio
   }
   const graph = newGraph({ feature, slug: resolvedSlug });
   writeGraphFiles(dir, graph);
-  const auto_open = await maybeAutoOpenReview(htmlPath, options);
+  const auto_open = {
+    enabled: false,
+    attempted: false,
+    opened: false,
+    reason: "create_reasoning_graph never auto-opens; open review_url manually",
+  };
   const review_service = await ensureReviewService(options.log ?? (() => {}));
   const review_url = reviewUrl(review_service.url ?? serviceBaseUrl(), projectName, resolvedSlug);
   return {

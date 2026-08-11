@@ -11,7 +11,7 @@ Getting started:
   list_projects                             what's indexed, with file/symbol counts
   project_overview <project>                orient in an unfamiliar codebase
   search_code <project> <query> [limit]     find code by describing what it does (alias: search)
-  init [name] [--yes] [--all]               tell this repo's agents to use WayContext
+  init [name] [path] [--yes] [--all]        tell this repo's agents to use WayContext
 
 Search & navigate:
   search_knowledge <project> <query> [limit]

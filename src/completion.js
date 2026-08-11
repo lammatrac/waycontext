@@ -93,7 +93,7 @@ export const OP_HELP = {
 };
 
 export const MANUAL_COMMANDS = [
-  { name: "init", section: "start", usage: "init [name] [--yes] [--all]",
+  { name: "init", section: "start", usage: "init [name] [path] [--yes] [--all]",
     help: "tell this repo's agents to use WayContext" },
 
   { name: "init-db", section: "admin", usage: "init-db",

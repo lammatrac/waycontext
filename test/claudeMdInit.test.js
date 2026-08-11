@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildSection, extractExistingName, upsertSection, removeGlobalSection,
+  buildSection, extractExistingName, extractExistingPath, upsertSection, removeGlobalSection,
 } from "../src/claudeMdInit.js";
 
 // Nothing writes the global section any more -- the workflow it carried now
@@ -71,11 +71,32 @@ test("buildSection instructs Claude to render a reasoning graph before a spec/pl
   assert.match(section, /update_reasoning_graph/);
   assert.match(section, /docs\/waycontext/);
   assert.match(section, /waycontext-review\.html/);
-  assert.match(section, /REASONING_AUTO_OPEN=0/);
+  assert.match(section, /review_url/);
   assert.match(section, /before (?:presenting|a) .*(?:spec|plan)/i);
-  // Claude has no tool to open a browser/IDE panel automatically -- the
+  // Neither reasoning-graph call auto-opens a browser/IDE panel -- the
   // convention must say so, or a future session will falsely claim it did.
   assert.match(section, /no tool to (?:auto-open|automatically open)/i);
+  assert.doesNotMatch(section, /REASONING_AUTO_OPEN/, "the flag is inert now that neither call auto-opens");
+});
+
+test("buildSection omits the project root sentence when no path is given", () => {
+  const section = buildSection("my-app");
+  assert.doesNotMatch(section, /project root, relative to this file/);
+});
+
+// CLAUDE.md/AGENTS.md are committed and cloned onto other machines, so an
+// absolute, machine-specific path baked into the section would be wrong the
+// moment anyone else checks the repo out somewhere else.
+test("buildSection embeds a relative project root and tells the agent how to resolve it", () => {
+  const section = buildSection("my-app", "./");
+  assert.match(section, /project root, relative to this file, is \*\*`\.\/`\*\*/);
+  assert.match(section, /resolve that\s+against this file's own directory/);
+  assert.match(section, /`path` argument to `index_project`/);
+});
+
+test("buildSection embeds a relative project root pointing at a different directory as-is", () => {
+  const section = buildSection("my-app", "../sibling");
+  assert.match(section, /project root, relative to this file, is \*\*`\.\.\/sibling`\*\*/);
 });
 
 test("extractExistingName returns null when there is no section", () => {
@@ -86,6 +107,16 @@ test("extractExistingName returns null when there is no section", () => {
 test("extractExistingName returns the name from a section built by buildSection", () => {
   const content = `# Project Notes\n\n${buildSection("computer-bild-casino")}\n`;
   assert.equal(extractExistingName(content), "computer-bild-casino");
+});
+
+test("extractExistingPath returns null when the section has no stored path", () => {
+  const content = `# Project Notes\n\n${buildSection("my-app")}\n`;
+  assert.equal(extractExistingPath(content), null);
+});
+
+test("extractExistingPath returns the path from a section built by buildSection", () => {
+  const content = `# Project Notes\n\n${buildSection("my-app", "./")}\n`;
+  assert.equal(extractExistingPath(content), "./");
 });
 
 test("upsertSection creates a new file when content is empty", () => {
@@ -114,6 +145,15 @@ test("upsertSection replaces only the section when one already exists, preservin
   assert.ok(content.endsWith(after));
   assert.match(content, /\*\*`new-name`\*\*/);
   assert.ok(!content.includes("old-name"));
+});
+
+test("upsertSection updates a previously stored path without corrupting the rest of the section", () => {
+  const original = `# Project Notes\n\n${buildSection("my-app", "./old-sub")}\n`;
+  const { content, mode } = upsertSection(original, "my-app", "./new-sub");
+  assert.equal(mode, "updated");
+  assert.equal(extractExistingPath(content), "./new-sub");
+  assert.equal(extractExistingName(content), "my-app");
+  assert.ok(!content.includes("old-sub"));
 });
 
 test("an existing pre-v0.2.0 section is migrated in place, not duplicated", () => {

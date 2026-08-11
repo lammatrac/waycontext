@@ -6,6 +6,7 @@
 // in place instead of appending a second, contradictory one.
 const SECTION_RE = /## (?:WayContext|Code Context MCP)\n[\s\S]*?(?=\n#{1,2} |\n*$)/;
 const NAME_RE = /\*\*`([^`]+)`\*\*/;
+const PATH_RE = /project root, relative to this file, is \*\*`([^`]+)`\*\*/;
 
 // The section is deliberately directive rather than descriptive. Earlier
 // versions only announced the project name, which left an agent with no reason
@@ -17,11 +18,17 @@ const NAME_RE = /\*\*`([^`]+)`\*\*/;
 // This is scoped to one repo and only written by an explicit `waycontext init`,
 // unlike the global ~/.claude/CLAUDE.md rewrite older versions did unattended --
 // see docs/installation.md on why that was walked back.
-export function buildSection(name) {
+export function buildSection(name, rootPath) {
+  const pathSentence = rootPath
+    ? `Its project root, relative to this file, is **\`${rootPath}\`** — resolve that ` +
+      `against this file's own directory to get an absolute path, then pass it as the ` +
+      `\`path\` argument to \`index_project\` when no path is otherwise known (an MCP ` +
+      `tool call has no working directory of its own). `
+    : "";
   return (
     `## WayContext\n\n` +
     `This repo is indexed by the \`waycontext\` MCP server as project\n` +
-    `**\`${name}\`** — pass that as the \`project\` argument. For questions about\n` +
+    `**\`${name}\`** — pass that as the \`project\` argument. ${pathSentence}For questions about\n` +
     `code in this repo, use these tools BEFORE \`Grep\`/\`Glob\` or dispatching a\n` +
     `search subagent:\n\n` +
     `1. \`project_overview\` → orient in unfamiliar areas\n` +
@@ -40,11 +47,11 @@ export function buildSection(name) {
     `existing one, using \`search_code\`, \`get_graph\` and \`get_modules\` to fill in\n` +
     `\`affected_files\` and risk. Tell the developer the path to the generated\n` +
     `\`waycontext-review.html\` under \`docs/waycontext/<slug>/\` instead of asking them to read the\n` +
-    `plan as markdown. There is no tool to auto-open a browser or IDE panel, so suggest\n` +
-    `opening it manually when needed (local CLI runs auto-open by default; set \`REASONING_AUTO_OPEN=0\` to disable),\n` +
-    `opening it once via VS Code's Simple Browser (Command Palette -> "Simple Browser:\n` +
-    `Show") or a live-preview extension -- refreshing after each update shows the latest\n` +
-    `state.`
+    `plan as markdown. There is no tool to auto-open a browser or IDE panel, and\n` +
+    `neither reasoning-graph call does so on its own -- open the returned\n` +
+    `\`review_url\` yourself, or open the file once via VS Code's Simple Browser\n` +
+    `(Command Palette -> "Simple Browser: Show") or a live-preview extension --\n` +
+    `refreshing after each update shows the latest state.`
   );
 }
 
@@ -55,8 +62,15 @@ export function extractExistingName(content) {
   return nameMatch ? nameMatch[1] : null;
 }
 
-export function upsertSection(content, name) {
-  const section = buildSection(name);
+export function extractExistingPath(content) {
+  const match = content.match(SECTION_RE);
+  if (!match) return null;
+  const pathMatch = match[0].match(PATH_RE);
+  return pathMatch ? pathMatch[1] : null;
+}
+
+export function upsertSection(content, name, rootPath) {
+  const section = buildSection(name, rootPath);
   if (!content.trim()) {
     return { content: `# Project Notes\n\n${section}\n`, mode: "created" };
   }
