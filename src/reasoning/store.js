@@ -134,7 +134,12 @@ export async function updateReasoningGraph(projectName, { slug, patch }, options
   const current = validateGraph(JSON.parse(fs.readFileSync(graphPath, "utf8")));
   const next = applyPatch(current, ops);
   writeGraphFiles(dir, next);
-  const auto_open = await maybeAutoOpenReview(htmlPath, options);
+  const auto_open = {
+    enabled: false,
+    attempted: false,
+    opened: false,
+    reason: "update_reasoning_graph never auto-opens; open review_url manually",
+  };
   const review_service = await ensureReviewService(options.log ?? (() => {}));
   const review_url = reviewUrl(review_service.url ?? serviceBaseUrl(), projectName, resolvedSlug);
   return {

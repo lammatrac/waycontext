@@ -375,7 +375,7 @@ export const operations = [
     name: "update_reasoning_graph",
     readOnly: false,
     description:
-      "Apply one or more updates to an existing reasoning graph (add a question node, add an alternative with pros/cons, select an answer, mark a node resolved/open, set review/evidence/confidence, set risk or affected_files, reparent or remove a node) and re-render its Decision Review HTML. Auto-open of the regenerated review page is enabled by default on local CLI runs; set REASONING_AUTO_OPEN=0 to disable it. `patch` is a JSON array of patch operations, e.g. '[{\"op\":\"add_node\",\"parent\":\"n1\",\"type\":\"question\",\"title\":\"...\"}]'. Applied atomically: if any operation is invalid, nothing is written. Re-reads graph.json from disk each call, so hand-edits between calls are respected. Returns a served review URL for direct browser open.",
+      "Apply one or more updates to an existing reasoning graph (add a question node, add an alternative with pros/cons, select an answer, mark a node resolved/open, set review/evidence/confidence, set risk or affected_files, reparent or remove a node) and re-render its Decision Review HTML. Does not auto-open a browser tab (unlike create_reasoning_graph) since this is called repeatedly; open the returned review_url manually to see the update. `patch` is a JSON array of patch operations, e.g. '[{\"op\":\"add_node\",\"parent\":\"n1\",\"type\":\"question\",\"title\":\"...\"}]'. Applied atomically: if any operation is invalid, nothing is written. Re-reads graph.json from disk each call, so hand-edits between calls are respected. Returns a served review URL for direct browser open.",
     input: {
       project,
       slug: z.string().describe("Feature slug, as returned by create_reasoning_graph"),

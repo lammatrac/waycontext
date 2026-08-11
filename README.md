@@ -215,6 +215,11 @@ Claude Code only, three escalating modes. See
   focused unit coverage in `test/reasoning.open.test.js` for macOS/Windows/
   Linux/WSL launch resolution and fallback behavior.
 
+- 2026-08-11: `update_reasoning_graph` no longer auto-opens a browser tab on
+  every call (it re-runs repeatedly during a session, unlike the one-time
+  `create_reasoning_graph` init call, which still auto-opens as before).
+  Updated the tool description and test coverage accordingly.
+
 - 2026-08-08: Upgraded reasoning graphs into a reviewer-first Decision Review UI
   and made review auto-open default-on. `create_reasoning_graph` /
   `update_reasoning_graph` now render an executive-summary layout (decision graph,

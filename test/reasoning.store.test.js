@@ -136,30 +136,32 @@ test("createReasoningGraph auto-opens the generated review file when REASONING_A
   }
 });
 
-test("updateReasoningGraph reports auto-open failures without failing the patch", async () => {
+test("updateReasoningGraph never auto-opens, even when REASONING_AUTO_OPEN is enabled", async () => {
   const prevAutoOpen = config.reasoningAutoOpen;
   try {
     config.reasoningAutoOpen = true;
 
-    await createReasoningGraph(PROJECT, { feature: "Auto open failure", slug: "auto-open-failure" });
+    await createReasoningGraph(PROJECT, { feature: "No auto open on update", slug: "no-auto-open-on-update" });
+    const opened = [];
     const result = await updateReasoningGraph(
       PROJECT,
       {
-        slug: "auto-open-failure",
+        slug: "no-auto-open-on-update",
         patch: JSON.stringify([{ op: "add_node", parent: "n1", type: "question", title: "Q" }]),
       },
       {
-        openFile: async () => {
-          throw new Error("launcher missing");
+        openFile: async (filePath) => {
+          opened.push(filePath);
+          return { command: "mock-open", args: [filePath] };
         },
       }
     );
 
     assert.equal(result.node_count, 2);
-    assert.equal(result.auto_open.enabled, true);
-    assert.equal(result.auto_open.attempted, true);
+    assert.equal(opened.length, 0);
+    assert.equal(result.auto_open.enabled, false);
+    assert.equal(result.auto_open.attempted, false);
     assert.equal(result.auto_open.opened, false);
-    assert.match(result.auto_open.warning, /launcher missing/);
   } finally {
     config.reasoningAutoOpen = prevAutoOpen;
   }
