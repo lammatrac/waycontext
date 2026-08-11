@@ -17,7 +17,7 @@ test("EXT_LANG maps the supported extensions", () => {
     ".js": "js", ".mjs": "js", ".cjs": "js",
     ".jsx": "jsx", ".ts": "ts", ".tsx": "tsx", ".php": "php",
     ".py": "python", ".pyi": "python", ".go": "go",
-    ".json": "json", ".html": "html", ".htm": "html", ".css": "css", ".xml": "xml",
+    ".json": "json", ".html": "html", ".htm": "html", ".css": "css", ".scss": "scss", ".xml": "xml",
   });
 });
 
@@ -402,6 +402,26 @@ test("css: bodyless at-rules (@import, @charset) still get a symbol", () => {
   const r = parseFile("css", `@charset "utf-8";\n@import url("foo.css");\n`);
   assert.ok(names(r).some((n) => n.startsWith("@charset")));
   assert.ok(names(r).some((n) => n.startsWith("@import")));
+});
+
+// --- SCSS --------------------------------------------------------------
+// Reuses the CSS walker verbatim: SCSS's rule_set/selectors/*_statement node
+// shapes are a superset of CSS's, so nested rules and SCSS-only at-rules
+// (@mixin, @include, etc.) are named and walked the same way.
+
+test("scss: a nested rule is named after its selector at every level", () => {
+  const r = parseFile("scss", `.foo { .bar { color: red; } }`);
+  assert.deepEqual(names(r), [".foo", ".bar"]);
+  assert.equal(kinds(r)[".foo"], "rule");
+  assert.equal(kinds(r)[".bar"], "rule");
+  assert.deepEqual(rels(r), []);
+});
+
+test("scss: SCSS-only at-rules (@mixin) get a rule symbol like any other at-rule", () => {
+  const r = parseFile("scss", `@mixin button-variant { color: red; }\n@include button-variant;`);
+  assert.ok(names(r).includes("@mixin button-variant"));
+  assert.ok(names(r).some((n) => n.startsWith("@include")));
+  assert.deepEqual(rels(r), []);
 });
 
 // --- HTML ------------------------------------------------------------------

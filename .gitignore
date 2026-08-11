@@ -4,8 +4,8 @@ pgvector/
 *.log
 .claude/
 .superpowers/
-/docs/superpowers
-/docs/waycontext
+docs/superpowers
+docs/waycontext
 /tasks/
 
 # Scratch dumps and backups. These were `.sql` and `.bk` with no `*`, so they
@@ -15,14 +15,14 @@ pgvector/
 # src/migrations/*.sql, and while the ten existing ones stay tracked, every NEW
 # migration would be silently ignored -- a schema change that works locally and
 # is missing from the commit.
-/*.sql
+*.sql
 *.bk
 
 __pycache__/
 
 .DS_Store
-/.idea/
-/.vscode/
+.idea/
+.vscode/
 .waycontext/knowledge/candidates.yaml
 
 # WayContext gate hook

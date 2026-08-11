@@ -7,6 +7,7 @@ import Go from "tree-sitter-go";
 import JSON_LANG from "tree-sitter-json";
 import HTML from "tree-sitter-html";
 import CSS from "tree-sitter-css";
+import SCSS from "tree-sitter-scss";
 import Xml from "@tree-sitter-grammars/tree-sitter-xml";
 
 const LANGS = {
@@ -20,6 +21,7 @@ const LANGS = {
   json: JSON_LANG,
   html: HTML,
   css: CSS,
+  scss: SCSS,
   xml: Xml.xml,
 };
 
@@ -38,6 +40,7 @@ export const EXT_LANG = {
   ".html": "html",
   ".htm": "html",
   ".css": "css",
+  ".scss": "scss",
   ".xml": "xml",
 };
 
@@ -431,7 +434,7 @@ export function parseFile(lang, source) {
     }
   }
 
-  const MARKUP_WALKERS = { json: walkJson, css: walkCss, html: walkHtml, xml: walkXml };
+  const MARKUP_WALKERS = { json: walkJson, css: walkCss, scss: walkCss, html: walkHtml, xml: walkXml };
 
   function walkTopLevel(node, namespace = "") {
     // Mutable, because PHP's statement-form `namespace App;` has no body and

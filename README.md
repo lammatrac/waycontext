@@ -13,7 +13,8 @@ MCP server that scans and indexes an entire codebase — not just listing symbol
 - **Architecture as modules.** Churn, defect density and a risk score per module, plus co-change coupling and recurring bug clusters.
 - **One call that fuses all of it.** `compose_context` returns rules, code, docs, memory and past fixes for a task — cited, and packed into a token budget.
 - **Incremental by default.** SHA-256 per file, `git diff` scoping since the last indexed commit, deleted files pruned.
-- **Languages:** JavaScript, TypeScript, JSX/TSX, PHP, Python, Go.
+- **Languages:** JavaScript, TypeScript, JSX/TSX, PHP, Python, Go — plus full
+  symbol extraction for CSS/SCSS, HTML, JSON, and XML.
 - **Every surface reads one registry.** MCP tools, CLI subcommands and HTTP routes are generated from the same operation list, so they cannot drift apart.
 
 ## What it looks like
@@ -359,6 +360,14 @@ Claude Code only, three escalating modes. See
   of the enclosing function's own parameters (e.g. `function derive(project, log = () => {})`
   calling `log(...)`) is no longer treated as a call to a same-named project symbol elsewhere
   — it previously invented phantom module dependencies in `get_module`'s architecture graph.
+
+- 2026-08-11: Added SCSS to the languages with full symbol extraction, reusing
+  the existing CSS walker as-is (verified `tree-sitter-scss`'s grammar node
+  types — `rule_set`, `selectors`, and every at-rule ending in `_statement` —
+  are a superset of CSS's, so nested rules and SCSS-only at-rules like
+  `@mixin`/`@include` land as `rule` symbols the same way CSS's do). Added the
+  `tree-sitter-scss` dependency (peer-compatible with the pinned `tree-sitter`
+  core, no version substitution needed).
 
 ## ❤️ Support WayContext
 

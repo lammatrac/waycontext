@@ -7,7 +7,7 @@ import { pool, initDb, getProject } from "../src/db.js";
 import { indexProject } from "../src/indexer.js";
 import { cleanupTestProject } from "./helpers/testProject.js";
 
-// End-to-end proof that a real indexProject run over JSON/CSS/HTML/XML
+// End-to-end proof that a real indexProject run over JSON/CSS/SCSS/HTML/XML
 // fixture files parses cleanly and lands the expected symbol kinds in the
 // database -- the parser-unit tests in parser.test.js cover parseFile()
 // directly, this covers the full path through runIndex's glob/hash/insert
@@ -44,6 +44,11 @@ before(async () => {
 @media screen { .footer { color: gray; } }
 `);
 
+  fs.writeFileSync(path.join(dir, "styles.scss"), `
+.card { .title { color: navy; } }
+@mixin button-variant { color: gray; }
+`);
+
   fs.writeFileSync(path.join(dir, "page.html"), `
 <div id="app">
   <span class="widget">hi</span>
@@ -62,10 +67,10 @@ after(async () => {
   await pool.end();
 });
 
-test("a full index run over the four new fixture types has zero failures", async () => {
+test("a full index run over the five new fixture types has zero failures", async () => {
   const stats = await indexProject(PROJECT, dir);
   assert.equal(stats.failed, 0, JSON.stringify(stats));
-  assert.equal(stats.changed, 4);
+  assert.equal(stats.changed, 5);
 });
 
 test("json: nested keys land as kind 'key'", async () => {
@@ -87,6 +92,15 @@ test("css: rules and at-rules land as kind 'rule'", async () => {
   assert.ok(rows.every((r) => r.kind === "rule"));
 });
 
+test("scss: nested rules and SCSS-only at-rules land as kind 'rule'", async () => {
+  const rows = await symbolsFor("styles.scss");
+  const names = rows.map((r) => r.name);
+  assert.ok(names.includes(".card"));
+  assert.ok(names.includes(".title"));
+  assert.ok(names.includes("@mixin button-variant"));
+  assert.ok(rows.every((r) => r.kind === "rule"));
+});
+
 test("html: only elements with id/class land as kind 'element'", async () => {
   const rows = await symbolsFor("page.html");
   const names = rows.map((r) => r.name);
@@ -101,13 +115,13 @@ test("xml: every element lands as kind 'element', unconditionally", async () => 
   assert.ok(rows.every((r) => r.kind === "element"));
 });
 
-test("no relation rows are produced for any of the four new languages", async () => {
+test("no relation rows are produced for any of the five new languages", async () => {
   const project = await getProject(PROJECT);
   const res = await pool.query(
     `SELECT count(*)::int AS n FROM edges e
        JOIN files f ON f.id = e.file_id
       WHERE f.project_id = $1
-        AND f.path IN ('config.json', 'styles.css', 'page.html', 'data.xml')`,
+        AND f.path IN ('config.json', 'styles.css', 'styles.scss', 'page.html', 'data.xml')`,
     [project.id]
   );
   assert.equal(res.rows[0].n, 0);
