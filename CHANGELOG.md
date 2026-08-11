@@ -2,6 +2,53 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-08-11 — v0.6.0: quieter reasoning reviews, self-locating agents, four more languages
+
+Three unrelated threads that happened to land in the same window: the reasoning-review UI
+stopped popping a browser tab on every tool call, `waycontext init` now hands agents the one
+path-shaped fact they can't discover for themselves, and four more languages get real symbol
+extraction instead of full-text-only indexing.
+
+- **Upgraded reasoning graphs into a reviewer-first Decision Review UI, auto-open now
+  default-on.** `create_reasoning_graph`/`update_reasoning_graph` render an executive-summary
+  layout (decision graph, impact map, risks/conflicts, evidence, approval panel) from
+  `graph.json` into `waycontext-review.html`, still mirroring `reasoning.html` for backward
+  compatibility. Nodes gained explicit review semantics (`verified`, `assumed`, `inferred`,
+  `conflict`, `unknown`), confidence scores and evidence lines, with matching patch ops
+  (`set_review`, `set_confidence`, `set_evidence`). Auto-open defaults to enabled whenever
+  `REASONING_AUTO_OPEN` is unset; set it to `0` to disable.
+- **Hardened reasoning review auto-open on WSL and Linux.** The opener detects WSL, translates
+  Linux paths via `wslpath -w`, launches through `cmd.exe /c start ""`, and falls back to
+  `/mnt/c/Windows/System32/cmd.exe` when `cmd.exe` isn't on PATH. Added focused coverage in
+  `test/reasoning.open.test.js` for macOS/Windows/Linux/WSL resolution and fallback.
+- **Added automatic local service management for `waycontext serve`** (`service
+  ensure|status|stop`, install/update/postinstall auto-ensure, duplicate-start protection,
+  version-aware restart, worker recovery), integrated reasoning review hosting at
+  `GET /reviews/:project/:slug`, and returned `review_url` from reasoning graph create/update
+  responses so CLI/MCP/agent flows can open a review directly instead of locating the HTML file.
+- **`update_reasoning_graph` no longer auto-opens a browser tab on every call** — it re-runs
+  repeatedly during a session, unlike the one-time `create_reasoning_graph` init call, which
+  still auto-opens as before. `create_reasoning_graph` itself later lost the same behavior for
+  a different reason: once review hosting existed, popping a tab on every incremental update
+  was the wrong default there too. Removed the now-dead `maybeAutoOpenReview` helper and
+  corrected both tools' descriptions.
+- **`waycontext init` now also asks for the project's root path**, writing it into
+  `CLAUDE.md`/`AGENTS.md`/`.github/copilot-instructions.md` next to the project name, so an
+  MCP-calling agent — which has no working directory of its own — knows what to pass as
+  `index_project`'s `path` argument instead of guessing. The stored value is relative to the
+  file's own location (`./` in the common case) rather than a machine-specific absolute path,
+  since these files are committed and cloned onto other machines; it resolves back to an
+  absolute path only where one is actually needed. The path prompt supports shell-style Tab
+  completion of directories.
+- **Added full symbol extraction for JSON, HTML, CSS and XML**, on par with the existing
+  JS/TS/PHP/Python/Go languages. JSON object keys become `key` symbols (at any nesting depth),
+  CSS rules/at-rules become `rule` symbols, and HTML/XML elements become `element` symbols
+  (HTML only for elements carrying an `id`/`class`; XML unconditionally). None of the four
+  produce relation-graph edges, since none have a call concept. Added `tree-sitter-json`,
+  `tree-sitter-html`, `tree-sitter-css` (exact-pinned to avoid a peer-dependency conflict with
+  the pinned `tree-sitter` core), and `@tree-sitter-grammars/tree-sitter-xml` (in place of the
+  originally intended `tree-sitter-xml@1.0.0`, which fails to build on Node 22).
+
 ## 2026-08-08 — v0.5.0: agents that reach for the tools, a CLI that knows where it is
 
 Two halves of the same problem: an agent that fell back to its own `Grep` instead of calling
