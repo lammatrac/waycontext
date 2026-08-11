@@ -239,6 +239,17 @@ Claude Code only, three escalating modes. See
   preference, and extended test coverage across `claudeMdInit.js`,
   `initTargets.js`, and `projectResolve.js`.
 
+- 2026-08-11: Added full symbol extraction for JSON, HTML, CSS, and XML,
+  on par with the existing JS/TS/PHP/Python/Go languages. JSON object keys
+  become `key` symbols (at any nesting depth), CSS rules/at-rules become
+  `rule` symbols, and HTML/XML elements become `element` symbols (HTML only
+  for elements carrying an `id`/`class`; XML unconditionally). None of the
+  four produce relation-graph edges, since none have a call concept. Added
+  `tree-sitter-json`, `tree-sitter-html`, `tree-sitter-css` (exact-pinned to
+  avoid a peer-dependency conflict with the pinned `tree-sitter` core), and
+  `@tree-sitter-grammars/tree-sitter-xml` (in place of the spec's originally
+  named `tree-sitter-xml@1.0.0`, which fails to build on Node 22).
+
 - 2026-08-08: Upgraded reasoning graphs into a reviewer-first Decision Review UI
   and made review auto-open default-on. `create_reasoning_graph` /
   `update_reasoning_graph` now render an executive-summary layout (decision graph,

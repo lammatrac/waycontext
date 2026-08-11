@@ -17,6 +17,7 @@ test("EXT_LANG maps the supported extensions", () => {
     ".js": "js", ".mjs": "js", ".cjs": "js",
     ".jsx": "jsx", ".ts": "ts", ".tsx": "tsx", ".php": "php",
     ".py": "python", ".pyi": "python", ".go": "go",
+    ".json": "json", ".html": "html", ".htm": "html", ".css": "css", ".xml": "xml",
   });
 });
 
@@ -357,6 +358,92 @@ import (
 test("go: qualified calls keep their package prefix", () => {
   const r = parseFile("go", `package main\nfunc f() { fmt.Println("x") }\n`);
   assert.ok(rels(r).includes("f -CALLS-> fmt.Println"));
+});
+
+// --- JSON ----------------------------------------------------------------
+// No calls/classes in JSON, so extraction is flat: every object key becomes
+// a "key" symbol, at any nesting depth, and there are never any relations.
+
+test("json: every key becomes a symbol, at any nesting depth", () => {
+  const r = parseFile("json", `{ "a": 1, "b": { "c": 2, "d": [1, 2] } }`);
+  assert.deepEqual(names(r), ["a", "b", "c", "d"]);
+  assert.ok(Object.values(kinds(r)).every((k) => k === "key"));
+  assert.deepEqual(rels(r), []);
+});
+
+test("json: an empty object or array produces no symbols", () => {
+  assert.deepEqual(names(parseFile("json", `{}`)), []);
+  assert.deepEqual(names(parseFile("json", `[]`)), []);
+});
+
+// --- CSS -------------------------------------------------------------------
+// Rules and at-rules become "rule" symbols named after their selector (or,
+// for at-rules, their keyword + prelude); nested rule_sets inside at-rules
+// are walked too. No relations, since CSS has no call concept.
+
+test("css: a plain rule is named after its selector", () => {
+  const r = parseFile("css", `.foo { color: red; }`);
+  assert.deepEqual(names(r), [".foo"]);
+  assert.equal(kinds(r)[".foo"], "rule");
+  assert.deepEqual(rels(r), []);
+});
+
+test("css: at-rules are named by keyword + prelude, and their nested rules are still captured", () => {
+  const r = parseFile("css", `
+@media screen { .bar { color: blue; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+`);
+  assert.ok(names(r).includes("@media screen"));
+  assert.ok(names(r).includes(".bar"));
+  assert.ok(names(r).includes("@keyframes fadeIn"));
+});
+
+test("css: bodyless at-rules (@import, @charset) still get a symbol", () => {
+  const r = parseFile("css", `@charset "utf-8";\n@import url("foo.css");\n`);
+  assert.ok(names(r).some((n) => n.startsWith("@charset")));
+  assert.ok(names(r).some((n) => n.startsWith("@import")));
+});
+
+// --- HTML ------------------------------------------------------------------
+// Only elements carrying an id or class attribute become symbols -- a plain
+// <p> with neither is noise, not a symbol. No relations.
+
+test("html: an element with an id becomes tag#id", () => {
+  const r = parseFile("html", `<div id="main"><p>text</p></div>`);
+  assert.deepEqual(names(r), ["div#main"]);
+  assert.equal(kinds(r)["div#main"], "element");
+  assert.deepEqual(rels(r), []);
+});
+
+test("html: an element with a class (no id) becomes tag.firstClass", () => {
+  const r = parseFile("html", `<span class="card highlight">x</span>`);
+  assert.deepEqual(names(r), ["span.card"]);
+});
+
+test("html: an element with neither id nor class produces no symbol", () => {
+  const r = parseFile("html", `<p>no attrs</p>`);
+  assert.deepEqual(names(r), []);
+});
+
+test("html: id wins over class when both are present", () => {
+  const r = parseFile("html", `<div id="main" class="card">x</div>`);
+  assert.deepEqual(names(r), ["div#main"]);
+});
+
+// --- XML -------------------------------------------------------------------
+// Every element becomes a symbol unconditionally (no id/class gating, unlike
+// HTML), named after its tag. No relations.
+
+test("xml: every element becomes a symbol named after its tag", () => {
+  const r = parseFile("xml", `<root><item id="1"><name>foo</name></item></root>`);
+  assert.deepEqual(names(r), ["root", "item", "name"]);
+  assert.ok(Object.values(kinds(r)).every((k) => k === "element"));
+  assert.deepEqual(rels(r), []);
+});
+
+test("xml: a self-closing element still becomes a symbol", () => {
+  const r = parseFile("xml", `<root><item id="2"/></root>`);
+  assert.deepEqual(names(r), ["root", "item"]);
 });
 
 // --- regressions -------------------------------------------------------

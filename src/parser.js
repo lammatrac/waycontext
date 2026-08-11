@@ -4,6 +4,10 @@ import TypeScript from "tree-sitter-typescript";
 import PHP from "tree-sitter-php";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+import JSON_LANG from "tree-sitter-json";
+import HTML from "tree-sitter-html";
+import CSS from "tree-sitter-css";
+import Xml from "@tree-sitter-grammars/tree-sitter-xml";
 
 const LANGS = {
   js: JavaScript,
@@ -13,6 +17,10 @@ const LANGS = {
   php: PHP.php,
   python: Python,
   go: Go,
+  json: JSON_LANG,
+  html: HTML,
+  css: CSS,
+  xml: Xml.xml,
 };
 
 export const EXT_LANG = {
@@ -26,6 +34,11 @@ export const EXT_LANG = {
   ".py": "python",
   ".pyi": "python",
   ".go": "go",
+  ".json": "json",
+  ".html": "html",
+  ".htm": "html",
+  ".css": "css",
+  ".xml": "xml",
 };
 
 const parsers = {};
@@ -335,6 +348,91 @@ export function parseFile(lang, source) {
     for (const c of classNode.namedChildren) visitClause(c);
   }
 
+  // ---- JSON / CSS / HTML / XML --------------------------------------
+  //
+  // None of these have functions, classes, or calls, so they skip
+  // collectRefs/paramNames/heritage entirely and never produce relations --
+  // just a flat walk emitting addSymbol() for whatever counts as a
+  // "symbol" in that grammar.
+
+  function walkJson(node) {
+    for (const c of node.namedChildren) {
+      if (c.type === "pair") {
+        const keyNode = c.childForFieldName("key");
+        addSymbol(keyNode ? stripQuotes(text(keyNode)) : "?", "key", c);
+      }
+      walkJson(c);
+    }
+  }
+
+  /** Text of an at-rule up to (not including) its block, e.g. "@media screen". */
+  function atRuleName(node, blockChild) {
+    const end = blockChild ? blockChild.startIndex : node.endIndex;
+    return text(node).slice(0, end - node.startIndex).trim().replace(/;$/, "").replace(/\s+/g, " ").slice(0, 200);
+  }
+
+  function walkCss(node) {
+    for (const c of node.namedChildren) {
+      if (c.type === "rule_set") {
+        const selectors = c.namedChildren.find((k) => k.type === "selectors");
+        addSymbol(selectors ? text(selectors).trim().slice(0, 200) : "?", "rule", c);
+      } else if (c.type.endsWith("_statement")) {
+        // at-rules: @media, @supports use a plain "block"; @keyframes uses
+        // "keyframe_block_list" -- both just need *some* body child to cut
+        // the prelude text off before. @import/@charset have no body at all.
+        const block = c.namedChildren.find((k) => k.type.includes("block"));
+        addSymbol(atRuleName(c, block), "rule", c);
+      }
+      walkCss(c);
+    }
+  }
+
+  /** id/class attribute value off a start_tag/self_closing_tag node, or null. */
+  function htmlAttr(tagNode, attrName) {
+    for (const a of tagNode.namedChildren) {
+      if (a.type !== "attribute") continue;
+      const nameNode = a.namedChildren.find((k) => k.type === "attribute_name");
+      if (!nameNode || text(nameNode) !== attrName) continue;
+      const valueNode = a.namedChildren.find(
+        (k) => k.type === "quoted_attribute_value" || k.type === "attribute_value"
+      );
+      if (!valueNode) return "";
+      const inner = valueNode.namedChildren.find((k) => k.type === "attribute_value") || valueNode;
+      return text(inner);
+    }
+    return null;
+  }
+
+  function walkHtml(node) {
+    for (const c of node.namedChildren) {
+      if (c.type === "element" || c.type === "script_element" || c.type === "style_element") {
+        const tagNode = c.namedChildren.find((k) => k.type === "start_tag" || k.type === "self_closing_tag");
+        const tagNameNode = tagNode?.namedChildren.find((k) => k.type === "tag_name");
+        if (tagNode && tagNameNode) {
+          const tag = text(tagNameNode);
+          const id = htmlAttr(tagNode, "id");
+          const cls = htmlAttr(tagNode, "class");
+          if (id) addSymbol(`${tag}#${id}`, "element", c);
+          else if (cls) addSymbol(`${tag}.${cls.trim().split(/\s+/)[0]}`, "element", c);
+        }
+      }
+      walkHtml(c);
+    }
+  }
+
+  function walkXml(node) {
+    for (const c of node.namedChildren) {
+      if (c.type === "element") {
+        const tagNode = c.namedChildren.find((k) => k.type === "STag" || k.type === "EmptyElemTag");
+        const nameNode = tagNode?.namedChildren.find((k) => k.type === "Name");
+        addSymbol(nameNode ? text(nameNode) : "?", "element", c);
+      }
+      walkXml(c);
+    }
+  }
+
+  const MARKUP_WALKERS = { json: walkJson, css: walkCss, html: walkHtml, xml: walkXml };
+
   function walkTopLevel(node, namespace = "") {
     // Mutable, because PHP's statement-form `namespace App;` has no body and
     // applies to every following sibling in the file rather than to a block.
@@ -521,6 +619,10 @@ export function parseFile(lang, source) {
     }
   }
 
-  walkTopLevel(tree.rootNode);
+  if (MARKUP_WALKERS[lang]) {
+    MARKUP_WALKERS[lang](tree.rootNode);
+  } else {
+    walkTopLevel(tree.rootNode);
+  }
   return { symbols, relations };
 }
