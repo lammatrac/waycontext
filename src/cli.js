@@ -22,6 +22,7 @@ import {
 } from "./initTargets.js";
 import { findProjectMarker, needsProjectName, fillArgs } from "./projectResolve.js";
 import { upsertHook, removeHook } from "./hookInit.js";
+import { mergeGateSettings, removeGateSettings, mergeGitignore } from "./gateInit.js";
 import {
   writeProjectCache, cachePath, HOOK_MODES, DEFAULT_MODE, DEFAULT_MCP_NAME,
 } from "./projectCache.js";
@@ -828,6 +829,69 @@ async function main() {
       }
       break;
     }
+    case "gate": {
+      // Enforces the CLAUDE.md pipeline (spec -> plan -> gate -> code -> review).
+      // Global and inert until opted into per directory (see waycontext_gate.py's
+      // own docstring) -- unlike the search hook above, install.sh installs this
+      // one unconditionally, the same way it starts the background service.
+      const [sub] = args;
+      const gateHookSrc = path.join(__dirname, "..", "waycontext_gate.py");
+      const gateHookDest = path.join(os.homedir(), ".claude", "hooks", "waycontext_gate.py");
+      const globalSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
+      const repoGitignorePath = path.join(__dirname, "..", ".gitignore");
+
+      if (sub === "uninstall") {
+        if (fs.existsSync(globalSettingsPath)) {
+          const { settings, mode } = removeGateSettings(JSON.parse(fs.readFileSync(globalSettingsPath, "utf8")));
+          if (mode === "removed") {
+            fs.writeFileSync(globalSettingsPath, JSON.stringify(settings, null, 2) + "\n");
+            console.log(`Removed the gate hook entries from ${globalSettingsPath}.`);
+          }
+        }
+        if (fs.existsSync(gateHookDest)) {
+          fs.rmSync(gateHookDest, { force: true });
+          console.log(`Removed ${gateHookDest}.`);
+        }
+        break;
+      }
+
+      if (sub !== "install") {
+        usageAndExit("Usage: gate install\n       gate uninstall");
+      }
+
+      const hookSrcContent = fs.readFileSync(gateHookSrc);
+      const alreadyIdentical = fs.existsSync(gateHookDest) && fs.readFileSync(gateHookDest).equals(hookSrcContent);
+      if (!alreadyIdentical) {
+        fs.mkdirSync(path.dirname(gateHookDest), { recursive: true });
+        fs.writeFileSync(gateHookDest, hookSrcContent);
+      }
+      fs.chmodSync(gateHookDest, 0o755);
+      console.log(`${alreadyIdentical ? "Unchanged" : "Installed"} ${gateHookDest}`);
+
+      const gateSettings = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "settings.json"), "utf8"));
+      const existingSettings = fs.existsSync(globalSettingsPath)
+        ? JSON.parse(fs.readFileSync(globalSettingsPath, "utf8"))
+        : {};
+      const { settings, mode: settingsMode } = mergeGateSettings(existingSettings, gateSettings);
+      if (settingsMode === "unchanged") {
+        console.log(`${globalSettingsPath} already has the gate hook's env/hooks.`);
+      } else {
+        fs.mkdirSync(path.dirname(globalSettingsPath), { recursive: true });
+        fs.writeFileSync(globalSettingsPath, JSON.stringify(settings, null, 2) + "\n");
+        console.log(`${settingsMode === "created" ? "Created" : "Updated"} ${globalSettingsPath} with the gate hook's env/hooks.`);
+      }
+
+      const sampleContent = fs.readFileSync(path.join(__dirname, "..", ".gitignore.sample"), "utf8");
+      const existingGitignore = fs.existsSync(repoGitignorePath) ? fs.readFileSync(repoGitignorePath, "utf8") : "";
+      const { content: gitignoreContent, mode: gitignoreMode } = mergeGitignore(existingGitignore, sampleContent);
+      if (gitignoreMode === "unchanged") {
+        console.log(`${repoGitignorePath} already covers .gitignore.sample.`);
+      } else {
+        fs.writeFileSync(repoGitignorePath, gitignoreContent);
+        console.log(`${gitignoreMode === "created" ? "Created" : "Updated"} ${repoGitignorePath} from .gitignore.sample.`);
+      }
+      break;
+    }
     case "completion": {
       // Opt-in, like the search hook. install.sh only prints a hint -- this repo
       // walked back one unattended global install already.
@@ -865,11 +929,21 @@ async function main() {
         path.join(globalDir, "settings.json"),
       ]) {
         if (!fs.existsSync(settingsPath)) continue;
-        const { settings, mode } = removeHook(JSON.parse(fs.readFileSync(settingsPath, "utf8")));
-        if (mode === "removed") {
-          fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-          console.log(`Removed the search hook from ${settingsPath}.`);
+        let current = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+        const removed = removeHook(current);
+        if (removed.mode === "removed") current = removed.settings;
+        const gateRemoved = removeGateSettings(current);
+        if (gateRemoved.mode === "removed") current = gateRemoved.settings;
+        if (removed.mode === "removed" || gateRemoved.mode === "removed") {
+          fs.writeFileSync(settingsPath, JSON.stringify(current, null, 2) + "\n");
+          console.log(`Removed the search hook and/or gate hook entries from ${settingsPath}.`);
         }
+      }
+
+      const gateHookScript = path.join(globalDir, "hooks", "waycontext_gate.py");
+      if (fs.existsSync(gateHookScript)) {
+        fs.rmSync(gateHookScript, { force: true });
+        console.log(`Removed ${gateHookScript}.`);
       }
 
       const globalClaudeMd = path.join(globalDir, "CLAUDE.md");

@@ -6,7 +6,7 @@
 // in place instead of appending a second, contradictory one.
 const SECTION_RE = /## (?:WayContext|Code Context MCP)\n[\s\S]*?(?=\n#{1,2} |\n*$)/;
 const NAME_RE = /\*\*`([^`]+)`\*\*/;
-const PATH_RE = /project root, relative to this file, is \*\*`([^`]+)`\*\*/;
+const PATH_RE = /(?:project root|indexed directory), relative to this file, is \*\*`([^`]+)`\*\*/;
 
 // The section is deliberately directive rather than descriptive. Earlier
 // versions only announced the project name, which left an agent with no reason
@@ -20,10 +20,11 @@ const PATH_RE = /project root, relative to this file, is \*\*`([^`]+)`\*\*/;
 // see docs/installation.md on why that was walked back.
 export function buildSection(name, rootPath) {
   const pathSentence = rootPath
-    ? `Its project root, relative to this file, is **\`${rootPath}\`** — resolve that ` +
-      `against this file's own directory to get an absolute path, then pass it as the ` +
-      `\`path\` argument to \`index_project\` when no path is otherwise known (an MCP ` +
-      `tool call has no working directory of its own). `
+    ? `Its indexed directory, relative to this file, is **\`${rootPath}\`** — resolve ` +
+      `that against this file's own directory to get an absolute path, then pass it as ` +
+      `the \`path\` argument to \`index_project\` when no path is otherwise known (an ` +
+      `MCP tool call has no working directory of its own). This can be a subdirectory ` +
+      `of the repo's actual root, i.e. where \`.git\` lives — don't confuse the two. `
     : "";
   return (
     `## WayContext\n\n` +

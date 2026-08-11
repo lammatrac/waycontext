@@ -1,0 +1,7 @@
+.vscode/
+.claude/
+.superpowers/
+docs/superpowers/
+docs/waycontext/
+waycontext-tasks/
+/tasks/

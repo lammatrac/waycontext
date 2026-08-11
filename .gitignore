@@ -22,3 +22,6 @@ pgvector/
 /.idea/
 /.vscode/
 .waycontext/knowledge/candidates.yaml
+
+# WayContext gate hook
+waycontext-tasks/

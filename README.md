@@ -250,6 +250,25 @@ Claude Code only, three escalating modes. See
   `@tree-sitter-grammars/tree-sitter-xml` (in place of the spec's originally
   named `tree-sitter-xml@1.0.0`, which fails to build on Node 22).
 
+- 2026-08-11: Added `waycontext_gate.py`, a deterministic Claude Code hook
+  enforcing the CLAUDE.md spec→plan→gate→code→review pipeline (blocks
+  `Edit`/`Write`/`MultiEdit`/`NotebookEdit` until a gate is approved, blocks
+  `Grep`/`Glob` until WayContext has been queried first), opt-in per
+  directory via a `waycontext-tasks/` folder or `.claude/.gate/enabled`
+  marker. Wired it into setup with a new `waycontext gate install`/
+  `gate uninstall` CLI subcommand (`src/gateInit.js`) that copies the hook
+  script to `~/.claude/hooks/`, merges its `env`/`hooks` into
+  `~/.claude/settings.json` without disturbing unrelated settings or the
+  existing search hook, and merges `.gitignore.sample` into a repo's own
+  `.gitignore`; `install.sh` now runs it automatically (best-effort), and
+  the top-level `waycontext uninstall` reverses it.
+
+- 2026-08-11: Renamed the ambiguous "project root" wording `waycontext init`
+  writes into CLAUDE.md/AGENTS.md/copilot-instructions.md to "indexed
+  directory", since the directory WayContext indexes can be a subdirectory
+  of a repo's actual git root. `extractExistingPath` still parses the old
+  phrasing for backward compatibility with files an older version wrote.
+
 - 2026-08-08: Upgraded reasoning graphs into a reviewer-first Decision Review UI
   and made review auto-open default-on. `create_reasoning_graph` /
   `update_reasoning_graph` now render an executive-summary layout (decision graph,

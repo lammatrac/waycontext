@@ -58,6 +58,8 @@ Setup & administration:
   hook install [--global] [--mode M]        install the opt-in search hook (M: advise|ask|deny, default advise)
   hook uninstall [--global]                 remove the search hook
   hook refresh                              rebuild the hook's project cache from the database
+  gate install                              copy the hook script, merge settings.json, merge .gitignore
+  gate uninstall                            remove the hook script and its settings.json entries
   uninstall                                 remove the hook, the global CLAUDE.md section and the project cache
   serve [--port=4747] [--host=…]            HTTP API + web knowledge graph on localhost (no auth)
   service ensure [--quiet]                  start or reuse the managed local service

@@ -314,6 +314,16 @@ else
   warn "Could not auto-start the WayContext background service. You can diagnose with: waycontext service status"
 fi
 
+# 11. Gate hook + settings + this repo's own .gitignore (best-effort, like
+# completion/service above -- a machine with no reachable DB should still
+# finish install). Installed unconditionally: the hook is inert everywhere
+# except an indexed directory that opts in (see waycontext_gate.py).
+if node "$SCRIPT_DIR/src/cli.js" gate install >/dev/null 2>&1; then
+  log "Installed the gate hook and merged settings/.gitignore"
+else
+  warn "Could not install the gate hook; run: waycontext gate install"
+fi
+
 log "Setup complete. Edit .env with your embedding API key if you haven't already, then restart Claude Code."
 log ""
 log "Recommended, per project:"

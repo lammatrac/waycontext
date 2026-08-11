@@ -115,6 +115,13 @@ export const MANUAL_COMMANDS = [
       { usage: "hook uninstall [--global]", help: "remove the search hook" },
       { usage: "hook refresh", help: "rebuild the hook's project cache from the database" },
     ] },
+  { name: "gate", section: "admin", usage: "gate install",
+    subVerbs: ["install", "uninstall"],
+    help: "install the CLAUDE.md-pipeline enforcement hook (opt-in per directory)",
+    lines: [
+      { usage: "gate install", help: "copy the hook script, merge settings.json, merge .gitignore" },
+      { usage: "gate uninstall", help: "remove the hook script and its settings.json entries" },
+    ] },
   { name: "uninstall", section: "admin", usage: "uninstall",
     help: "remove the hook, the global CLAUDE.md section and the project cache" },
   { name: "rule", section: "knowledge", usage: "rule candidates [project] [--json]",

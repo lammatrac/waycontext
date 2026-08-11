@@ -79,24 +79,38 @@ test("buildSection instructs Claude to render a reasoning graph before a spec/pl
   assert.doesNotMatch(section, /REASONING_AUTO_OPEN/, "the flag is inert now that neither call auto-opens");
 });
 
-test("buildSection omits the project root sentence when no path is given", () => {
+test("buildSection omits the indexed-directory sentence when no path is given", () => {
   const section = buildSection("my-app");
-  assert.doesNotMatch(section, /project root, relative to this file/);
+  assert.doesNotMatch(section, /indexed directory, relative to this file/);
 });
 
 // CLAUDE.md/AGENTS.md are committed and cloned onto other machines, so an
 // absolute, machine-specific path baked into the section would be wrong the
 // moment anyone else checks the repo out somewhere else.
-test("buildSection embeds a relative project root and tells the agent how to resolve it", () => {
+test("buildSection embeds a relative indexed directory and tells the agent how to resolve it", () => {
   const section = buildSection("my-app", "./");
-  assert.match(section, /project root, relative to this file, is \*\*`\.\/`\*\*/);
-  assert.match(section, /resolve that\s+against this file's own directory/);
+  assert.match(section, /indexed directory, relative to this file, is \*\*`\.\/`\*\*/);
+  assert.match(section, /resolve\s+that\s+against this file's own directory/);
   assert.match(section, /`path` argument to `index_project`/);
 });
 
-test("buildSection embeds a relative project root pointing at a different directory as-is", () => {
+test("buildSection embeds a relative indexed directory pointing at a different directory as-is", () => {
   const section = buildSection("my-app", "../sibling");
-  assert.match(section, /project root, relative to this file, is \*\*`\.\.\/sibling`\*\*/);
+  assert.match(section, /indexed directory, relative to this file, is \*\*`\.\.\/sibling`\*\*/);
+});
+
+// "Project root" is ambiguous (git root vs. the directory WayContext indexes,
+// which can be a subdirectory of it) -- buildSection now says "indexed
+// directory" instead, but extractExistingPath must keep parsing CLAUDE.md
+// files an older version already wrote with the old phrasing.
+test("extractExistingPath still parses the old 'project root' phrasing for backward compat", () => {
+  const legacy =
+    "# Project Notes\n\n## WayContext\n\n" +
+    "This repo is indexed by the `waycontext` MCP server as project\n" +
+    "**`my-app`** — pass that as the `project` argument. Its project root, " +
+    "relative to this file, is **`./old-sub`** — resolve that against this " +
+    "file's own directory.\n";
+  assert.equal(extractExistingPath(legacy), "./old-sub");
 });
 
 test("extractExistingName returns null when there is no section", () => {

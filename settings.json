@@ -1,0 +1,40 @@
+{
+  "_comment": "Merge into ~/.claude/settings.json. Hooks from settings files also fire inside subagents, which is the point: superpowers agents get the same gate as the main session. CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS removes the built-in Explore/Plan agents so nothing can route code discovery around waycontext.",
+
+  "env": {
+    "CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS": "1"
+  },
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 $HOME/.claude/hooks/waycontext_gate.py" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 $HOME/.claude/hooks/waycontext_gate.py" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": "python3 $HOME/.claude/hooks/waycontext_gate.py" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__waycontext__.*",
+        "hooks": [
+          { "type": "command", "command": "python3 $HOME/.claude/hooks/waycontext_gate.py" }
+        ]
+      }
+    ]
+  }
+}

@@ -3,7 +3,7 @@
 ## WayContext
 
 This repo is indexed by the `waycontext` MCP server as project
-**`waycontext`** — pass that as the `project` argument. Its project root, relative to this file, is **`./`** — resolve that against this file's own directory to get an absolute path, then pass it as the `path` argument to `index_project` when no path is otherwise known (an MCP tool call has no working directory of its own). For questions about
+**`waycontext`** — pass that as the `project` argument. Its indexed directory, relative to this file, is **`./`** — resolve that against this file's own directory to get an absolute path, then pass it as the `path` argument to `index_project` when no path is otherwise known (an MCP tool call has no working directory of its own). This can be a subdirectory of the repo's actual root, i.e. where `.git` lives — don't confuse the two. For questions about
 code in this repo, use these tools BEFORE `Grep`/`Glob` or dispatching a
 search subagent:
 
