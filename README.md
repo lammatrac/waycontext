@@ -221,6 +221,15 @@ Claude Code only, three escalating modes. See
   `create_reasoning_graph` init call, which still auto-opens as before).
   Updated the tool description and test coverage accordingly.
 
+- 2026-08-12: Added an English/Vietnamese language switcher to the
+  self-contained Decision Review HTML page (`renderHtml` in
+  `src/reasoning/render.js`) — a toggle in the topbar swaps all app-chrome
+  text (nav, headings, cards, tables, empty states, pill labels) via a new
+  client-side `I18N` dictionary, persisting the choice in `localStorage`.
+  Node-authored content from `graph.json` (titles, notes, evidence) stays
+  untranslated by design; default remains English, and the existing
+  render test suite is unaffected.
+
 - 2026-08-11: `create_reasoning_graph` also no longer auto-opens a browser
   tab, closing the gap left by the `update_reasoning_graph` fix above. Removed
   the now-dead `maybeAutoOpenReview` helper, corrected both tools'

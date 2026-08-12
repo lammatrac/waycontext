@@ -249,6 +249,26 @@ export function renderHtml(graph) {
     font-size: 12px;
     background: var(--panel);
   }
+  .lang-switch {
+    display: inline-flex;
+    gap: 2px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 2px;
+    background: var(--panel);
+  }
+  .lang-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+  .lang-btn.active { background: var(--accent); color: #fff; }
 
   main {
     display: grid;
@@ -472,63 +492,67 @@ export function renderHtml(graph) {
 <body>
 <header class="topbar">
   <div class="title">
-    <h1>WayContext · Decision Review</h1>
-    <span class="meta">${escapeHtml(graph.feature)} · updated ${escapeHtml(graph.updated_at)}</span>
-    <span class="pulse">Global pull-to-refresh review mode</span>
+    <h1 data-i18n="app.title">WayContext · Decision Review</h1>
+    <span class="meta">${escapeHtml(graph.feature)} · <span data-i18n="app.updatedLabel">updated</span> ${escapeHtml(graph.updated_at)}</span>
+    <span class="pulse" data-i18n="app.pulse">Global pull-to-refresh review mode</span>
   </div>
   <div class="health">
-    <span class="badge">Confidence ${summary.confidence}%</span>
-    <span class="badge">⚠ ${summary.concerns} concerns</span>
-    <span class="badge">✓ ${summary.reviewCounts.verified} verified</span>
+    <span class="badge" data-i18n-tpl="badge.confidence" data-i18n-vars='{"n":${summary.confidence}}'>Confidence ${summary.confidence}%</span>
+    <span class="badge" data-i18n-tpl="badge.concerns" data-i18n-vars='{"n":${summary.concerns}}'>⚠ ${summary.concerns} concerns</span>
+    <span class="badge" data-i18n-tpl="badge.verified" data-i18n-vars='{"n":${summary.reviewCounts.verified}}'>✓ ${summary.reviewCounts.verified} verified</span>
+    <span class="lang-switch">
+      <button type="button" class="lang-btn active" data-lang="en">EN</button>
+      <button type="button" class="lang-btn" data-lang="vi">VI</button>
+    </span>
   </div>
 </header>
 <main>
   <nav id="review-nav">
-    <div class="nav-title">Overview</div>
-    <button class="nav-btn active" data-panel="overview">Overview<span class="nav-count">${summary.nodeCount} decisions</span></button>
-    <button class="nav-btn" data-panel="graph">Decision Graph<span class="nav-count">interactive</span></button>
-    <button class="nav-btn" data-panel="impact">Change Map<span class="nav-count">${summary.filesTouched} files</span></button>
-    <div class="nav-title" style="margin-top: 12px;">Review</div>
-    <button class="nav-btn" data-panel="risks">Risks &amp; Conflicts<span class="nav-count">${summary.concerns} concerns</span></button>
-    <button class="nav-btn" data-panel="evidence">Evidence<span class="nav-count">${summary.reviewCounts.verified} verified</span></button>
-    <button class="nav-btn" data-panel="approval">Decisions Required<span class="nav-count">${summary.unresolved} open</span></button>
+    <div class="nav-title" data-i18n="nav.sectionOverview">Overview</div>
+    <button class="nav-btn active" data-panel="overview"><span data-i18n="nav.overview">Overview</span><span class="nav-count" data-i18n-tpl="nav.count.decisions" data-i18n-vars='{"n":${summary.nodeCount}}'>${summary.nodeCount} decisions</span></button>
+    <button class="nav-btn" data-panel="graph"><span data-i18n="nav.graph">Decision Graph</span><span class="nav-count" data-i18n="nav.count.interactive">interactive</span></button>
+    <button class="nav-btn" data-panel="impact"><span data-i18n="nav.impact">Change Map</span><span class="nav-count" data-i18n-tpl="nav.count.files" data-i18n-vars='{"n":${summary.filesTouched}}'>${summary.filesTouched} files</span></button>
+    <div class="nav-title" style="margin-top: 12px;" data-i18n="nav.sectionReview">Review</div>
+    <button class="nav-btn" data-panel="risks"><span data-i18n="nav.risks">Risks &amp; Conflicts</span><span class="nav-count" data-i18n-tpl="nav.count.concerns" data-i18n-vars='{"n":${summary.concerns}}'>${summary.concerns} concerns</span></button>
+    <button class="nav-btn" data-panel="evidence"><span data-i18n="nav.evidence">Evidence</span><span class="nav-count" data-i18n-tpl="nav.count.verified" data-i18n-vars='{"n":${summary.reviewCounts.verified}}'>${summary.reviewCounts.verified} verified</span></button>
+    <button class="nav-btn" data-panel="approval"><span data-i18n="nav.approval">Decisions Required</span><span class="nav-count" data-i18n-tpl="nav.count.open" data-i18n-vars='{"n":${summary.unresolved}}'>${summary.unresolved} open</span></button>
   </nav>
   <section id="workspace">
     <section class="panel active" id="panel-overview">
       <h2 class="section-head">${escapeHtml(graph.feature)}</h2>
-      <p class="muted">Review question: what changes are proposed, why they should work in the current codebase, and what still needs a human decision.</p>
+      <p class="muted" data-i18n="overview.reviewQuestion">Review question: what changes are proposed, why they should work in the current codebase, and what still needs a human decision.</p>
       <div class="cards">
-        <article class="card"><div class="k">Affected files</div><div class="v">${summary.filesTouched}</div></article>
-        <article class="card"><div class="k">Resolved decisions</div><div class="v">${summary.resolved}/${summary.nodeCount}</div></article>
-        <article class="card"><div class="k">Concerns</div><div class="v">${summary.concerns}</div></article>
+        <article class="card"><div class="k" data-i18n="overview.card.affectedFiles">Affected files</div><div class="v">${summary.filesTouched}</div></article>
+        <article class="card"><div class="k" data-i18n="overview.card.resolvedDecisions">Resolved decisions</div><div class="v">${summary.resolved}/${summary.nodeCount}</div></article>
+        <article class="card"><div class="k" data-i18n="overview.card.concerns">Concerns</div><div class="v">${summary.concerns}</div></article>
       </div>
       <div class="confidence">
-        <div class="muted">Confidence</div>
+        <div class="muted" data-i18n="overview.confidenceLabel">Confidence</div>
         <div class="confidence-track"><div class="confidence-fill" style="width:${summary.confidence}%"></div></div>
       </div>
       <div class="split">
         <article class="card">
-          <div class="k">Current → Proposed Architecture</div>
+          <div class="k" data-i18n="overview.archCard">Current → Proposed Architecture</div>
           <ul class="list">
-            <li>Current: feature root with ${summary.nodeCount} decision nodes mapped to existing files.</li>
-            <li>Proposed: decisions flow through reviewed nodes with explicit evidence and risk annotations.</li>
-            <li>Status model: verified, assumed, inferred, conflict, unknown.</li>
+            <li data-i18n-tpl="overview.current" data-i18n-vars='{"n":${summary.nodeCount}}'>Current: feature root with ${summary.nodeCount} decision nodes mapped to existing files.</li>
+            <li data-i18n="overview.proposed">Proposed: decisions flow through reviewed nodes with explicit evidence and risk annotations.</li>
+            <li data-i18n="overview.statusModel">Status model: verified, assumed, inferred, conflict, unknown.</li>
           </ul>
         </article>
         <article class="card">
-          <div class="k">Before You Approve</div>
+          <div class="k" data-i18n="overview.approveCard">Before You Approve</div>
           <ul class="list">
-            <li>✓ ${summary.reviewCounts.verified} nodes have verified evidence.</li>
-            <li>⚠ ${summary.reviewCounts.assumed + summary.reviewCounts.unknown} nodes are still assumption-heavy.</li>
-            <li>⚠ ${summary.reviewCounts.conflict} nodes are in direct conflict with available evidence.</li>
+            <li data-i18n-tpl="overview.verifiedCount" data-i18n-vars='{"n":${summary.reviewCounts.verified}}'>✓ ${summary.reviewCounts.verified} nodes have verified evidence.</li>
+            <li data-i18n-tpl="overview.assumptionHeavy" data-i18n-vars='{"n":${summary.reviewCounts.assumed + summary.reviewCounts.unknown}}'>⚠ ${summary.reviewCounts.assumed + summary.reviewCounts.unknown} nodes are still assumption-heavy.</li>
+            <li data-i18n-tpl="overview.conflictCount" data-i18n-vars='{"n":${summary.reviewCounts.conflict}}'>⚠ ${summary.reviewCounts.conflict} nodes are in direct conflict with available evidence.</li>
           </ul>
         </article>
       </div>
     </section>
 
     <section class="panel" id="panel-graph">
-      <h2 class="section-head">Decision Graph</h2>
-      <p class="muted">Click any node to inspect why it exists, evidence, alternatives, and expected impact.</p>
+      <h2 class="section-head" data-i18n="panel.graph.head">Decision Graph</h2>
+      <p class="muted" data-i18n="panel.graph.desc">Click any node to inspect why it exists, evidence, alternatives, and expected impact.</p>
       <div id="tree">${tree}</div>
     </section>
 
@@ -544,6 +568,194 @@ export function renderHtml(graph) {
 (function () {
   var graph = JSON.parse(document.getElementById('graph-data').textContent);
   var inspector = document.getElementById('inspector');
+
+  var I18N = {
+    en: {
+      'app.title': 'WayContext · Decision Review',
+      'app.updatedLabel': 'updated',
+      'app.pulse': 'Global pull-to-refresh review mode',
+      'badge.confidence': 'Confidence {n}%',
+      'badge.concerns': '⚠ {n} concerns',
+      'badge.verified': '✓ {n} verified',
+      'nav.sectionOverview': 'Overview',
+      'nav.overview': 'Overview',
+      'nav.graph': 'Decision Graph',
+      'nav.impact': 'Change Map',
+      'nav.sectionReview': 'Review',
+      'nav.risks': 'Risks & Conflicts',
+      'nav.evidence': 'Evidence',
+      'nav.approval': 'Decisions Required',
+      'nav.count.decisions': '{n} decisions',
+      'nav.count.interactive': 'interactive',
+      'nav.count.files': '{n} files',
+      'nav.count.concerns': '{n} concerns',
+      'nav.count.verified': '{n} verified',
+      'nav.count.open': '{n} open',
+      'overview.reviewQuestion': 'Review question: what changes are proposed, why they should work in the current codebase, and what still needs a human decision.',
+      'overview.card.affectedFiles': 'Affected files',
+      'overview.card.resolvedDecisions': 'Resolved decisions',
+      'overview.card.concerns': 'Concerns',
+      'overview.confidenceLabel': 'Confidence',
+      'overview.archCard': 'Current → Proposed Architecture',
+      'overview.approveCard': 'Before You Approve',
+      'overview.current': 'Current: feature root with {n} decision nodes mapped to existing files.',
+      'overview.proposed': 'Proposed: decisions flow through reviewed nodes with explicit evidence and risk annotations.',
+      'overview.statusModel': 'Status model: verified, assumed, inferred, conflict, unknown.',
+      'overview.verifiedCount': '✓ {n} nodes have verified evidence.',
+      'overview.assumptionHeavy': '⚠ {n} nodes are still assumption-heavy.',
+      'overview.conflictCount': '⚠ {n} nodes are in direct conflict with available evidence.',
+      'panel.graph.head': 'Decision Graph',
+      'panel.graph.desc': 'Click any node to inspect why it exists, evidence, alternatives, and expected impact.',
+      'panel.impact.head': 'Codebase Impact Map',
+      'panel.impact.desc': 'Impact is computed from decision-node affected files and risk annotations.',
+      'impact.col.file': 'File',
+      'impact.col.impact': 'Impact',
+      'impact.col.touches': 'Touches',
+      'impact.col.why': 'Why',
+      'impact.level.high': 'HIGH',
+      'impact.level.medium': 'MEDIUM',
+      'impact.level.low': 'LOW',
+      'impact.empty': 'No impacted files recorded yet. Use set_affected_files on decision nodes.',
+      'impact.more': '+{n} more',
+      'panel.risks.head': 'Risks & Conflicts',
+      'panel.risks.desc': 'WayContext concern panel: this is where the review pushes back on weak assumptions.',
+      'concern.reason.conflict': 'Plan or assumption conflicts with codebase evidence.',
+      'concern.reason.highRisk': 'High-risk change across dependent files.',
+      'concern.reason.mediumRisk': 'Medium-risk decision remains unresolved.',
+      'concern.reason.partial': 'Evidence is partial; human confirmation recommended.',
+      'concern.none.title': 'No active concerns.',
+      'concern.none.desc': 'Every node is either verified/inferred with low risk or already resolved.',
+      'concern.action.accept': 'Accept',
+      'concern.action.reject': 'Reject',
+      'concern.action.discuss': 'Discuss',
+      'panel.evidence.head': 'Evidence Traceability',
+      'panel.evidence.desc': 'Each decision claim should map to concrete evidence. Missing evidence appears as unknown/assumed.',
+      'evidence.empty': 'No explicit evidence captured.',
+      'common.confidencePct': 'confidence {n}%',
+      'panel.approval.head': 'Decisions Required',
+      'panel.approval.desc': 'Approve unresolved choices before implementation starts.',
+      'alternatives.empty': 'No alternatives recorded yet.',
+      'approval.allResolved.title': 'All decision nodes are resolved.',
+      'approval.allResolved.desc': 'No pending approval choices detected from graph.json.',
+      'inspector.alternatives': 'Alternatives',
+      'inspector.affectedFiles': 'Affected files',
+      'inspector.evidence': 'Evidence',
+      'inspector.notes': 'Notes',
+      'inspector.why': 'Why?',
+      'inspector.noneRecorded': 'None recorded',
+      'inspector.noEvidence': 'No explicit evidence',
+      'inspector.noRationale': 'No rationale written yet.',
+      'label.selected': ' (selected)',
+      'code.open': 'open',
+      'code.resolved': 'resolved',
+      'code.verified': 'verified',
+      'code.assumed': 'assumed',
+      'code.inferred': 'inferred',
+      'code.conflict': 'conflict',
+      'code.unknown': 'unknown',
+      'code.low': 'low',
+      'code.medium': 'medium',
+      'code.high': 'high'
+    },
+    vi: {
+      'app.title': 'WayContext · Đánh giá quyết định',
+      'app.updatedLabel': 'cập nhật lúc',
+      'app.pulse': 'Chế độ đánh giá tự làm mới toàn cục',
+      'badge.confidence': 'Độ tin cậy {n}%',
+      'badge.concerns': '⚠ {n} vấn đề cần lưu ý',
+      'badge.verified': '✓ {n} đã xác minh',
+      'nav.sectionOverview': 'Tổng quan',
+      'nav.overview': 'Tổng quan',
+      'nav.graph': 'Sơ đồ quyết định',
+      'nav.impact': 'Bản đồ thay đổi',
+      'nav.sectionReview': 'Đánh giá',
+      'nav.risks': 'Rủi ro & Xung đột',
+      'nav.evidence': 'Bằng chứng',
+      'nav.approval': 'Quyết định cần duyệt',
+      'nav.count.decisions': '{n} quyết định',
+      'nav.count.interactive': 'tương tác',
+      'nav.count.files': '{n} tệp',
+      'nav.count.concerns': '{n} vấn đề',
+      'nav.count.verified': '{n} đã xác minh',
+      'nav.count.open': '{n} chưa xử lý',
+      'overview.reviewQuestion': 'Câu hỏi đánh giá: những thay đổi nào được đề xuất, vì sao chúng phù hợp với codebase hiện tại, và điều gì vẫn cần con người quyết định.',
+      'overview.card.affectedFiles': 'Tệp bị ảnh hưởng',
+      'overview.card.resolvedDecisions': 'Quyết định đã giải quyết',
+      'overview.card.concerns': 'Vấn đề cần lưu ý',
+      'overview.confidenceLabel': 'Độ tin cậy',
+      'overview.archCard': 'Kiến trúc hiện tại → đề xuất',
+      'overview.approveCard': 'Trước khi phê duyệt',
+      'overview.current': 'Hiện tại: gốc tính năng có {n} nút quyết định được ánh xạ tới các tệp hiện có.',
+      'overview.proposed': 'Đề xuất: các quyết định đi qua những nút đã được đánh giá kèm bằng chứng và mức rủi ro rõ ràng.',
+      'overview.statusModel': 'Mô hình trạng thái: đã xác minh, giả định, suy luận, xung đột, chưa rõ.',
+      'overview.verifiedCount': '✓ {n} nút có bằng chứng đã xác minh.',
+      'overview.assumptionHeavy': '⚠ {n} nút vẫn chủ yếu dựa trên giả định.',
+      'overview.conflictCount': '⚠ {n} nút đang xung đột trực tiếp với bằng chứng hiện có.',
+      'panel.graph.head': 'Sơ đồ quyết định',
+      'panel.graph.desc': 'Nhấp vào một nút bất kỳ để xem lý do tồn tại, bằng chứng, phương án thay thế và tác động dự kiến.',
+      'panel.impact.head': 'Bản đồ tác động lên codebase',
+      'panel.impact.desc': 'Tác động được tính từ các tệp bị ảnh hưởng và mức rủi ro gắn với từng nút quyết định.',
+      'impact.col.file': 'Tệp',
+      'impact.col.impact': 'Tác động',
+      'impact.col.touches': 'Số lần chạm',
+      'impact.col.why': 'Lý do',
+      'impact.level.high': 'CAO',
+      'impact.level.medium': 'TRUNG BÌNH',
+      'impact.level.low': 'THẤP',
+      'impact.empty': 'Chưa ghi nhận tệp bị ảnh hưởng nào. Dùng set_affected_files trên các nút quyết định.',
+      'impact.more': '+{n} nữa',
+      'panel.risks.head': 'Rủi ro & Xung đột',
+      'panel.risks.desc': 'Bảng vấn đề của WayContext: đây là nơi việc đánh giá phản biện các giả định còn yếu.',
+      'concern.reason.conflict': 'Kế hoạch hoặc giả định xung đột với bằng chứng trong codebase.',
+      'concern.reason.highRisk': 'Thay đổi rủi ro cao trên các tệp phụ thuộc.',
+      'concern.reason.mediumRisk': 'Quyết định rủi ro trung bình vẫn chưa được giải quyết.',
+      'concern.reason.partial': 'Bằng chứng chưa đầy đủ; nên có xác nhận từ con người.',
+      'concern.none.title': 'Không có vấn đề nào đang mở.',
+      'concern.none.desc': 'Mọi nút đều đã xác minh/suy luận với rủi ro thấp hoặc đã được giải quyết.',
+      'concern.action.accept': 'Chấp nhận',
+      'concern.action.reject': 'Từ chối',
+      'concern.action.discuss': 'Thảo luận',
+      'panel.evidence.head': 'Truy vết bằng chứng',
+      'panel.evidence.desc': 'Mỗi quyết định nên gắn với bằng chứng cụ thể. Thiếu bằng chứng sẽ hiện thành chưa rõ/giả định.',
+      'evidence.empty': 'Chưa ghi nhận bằng chứng cụ thể.',
+      'common.confidencePct': 'độ tin cậy {n}%',
+      'panel.approval.head': 'Quyết định cần duyệt',
+      'panel.approval.desc': 'Phê duyệt các lựa chọn còn mở trước khi bắt đầu triển khai.',
+      'alternatives.empty': 'Chưa ghi nhận phương án thay thế nào.',
+      'approval.allResolved.title': 'Tất cả các nút quyết định đã được giải quyết.',
+      'approval.allResolved.desc': 'Không phát hiện lựa chọn nào đang chờ duyệt trong graph.json.',
+      'inspector.alternatives': 'Phương án thay thế',
+      'inspector.affectedFiles': 'Tệp bị ảnh hưởng',
+      'inspector.evidence': 'Bằng chứng',
+      'inspector.notes': 'Ghi chú',
+      'inspector.why': 'Vì sao?',
+      'inspector.noneRecorded': 'Không có bản ghi',
+      'inspector.noEvidence': 'Không có bằng chứng cụ thể',
+      'inspector.noRationale': 'Chưa có lý do được ghi lại.',
+      'label.selected': ' (đã chọn)',
+      'code.open': 'chưa xử lý',
+      'code.resolved': 'đã giải quyết',
+      'code.verified': 'đã xác minh',
+      'code.assumed': 'giả định',
+      'code.inferred': 'suy luận',
+      'code.conflict': 'xung đột',
+      'code.unknown': 'chưa rõ',
+      'code.low': 'thấp',
+      'code.medium': 'trung bình',
+      'code.high': 'cao'
+    }
+  };
+  var lang = localStorage.getItem('waycontext-review-lang') || 'en';
+
+  function t(key) {
+    return (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
+  }
+
+  function tv(key, vars) {
+    return t(key).replace(/\{(\w+)\}/g, function (_, name) {
+      return vars && Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : '{' + name + '}';
+    });
+  }
   var navButtons = Array.from(document.querySelectorAll('.nav-btn'));
   var panels = {
     overview: document.getElementById('panel-overview'),
@@ -587,14 +799,14 @@ export function renderHtml(graph) {
   }
 
   function statusPill(kind, value) {
-    return '<span class="pill ' + kind + '-' + esc(value) + '">' + esc(value) + '</span>';
+    return '<span class="pill ' + kind + '-' + esc(value) + '">' + esc(t('code.' + value)) + '</span>';
   }
 
   function nodeConcernReason(node) {
-    if (node.review === 'conflict') return 'Plan or assumption conflicts with codebase evidence.';
-    if (node.risk === 'high') return 'High-risk change across dependent files.';
-    if (node.status !== 'resolved' && node.risk === 'medium') return 'Medium-risk decision remains unresolved.';
-    if (node.review === 'assumed' || node.review === 'unknown') return 'Evidence is partial; human confirmation recommended.';
+    if (node.review === 'conflict') return t('concern.reason.conflict');
+    if (node.risk === 'high') return t('concern.reason.highRisk');
+    if (node.status !== 'resolved' && node.risk === 'medium') return t('concern.reason.mediumRisk');
+    if (node.review === 'assumed' || node.review === 'unknown') return t('concern.reason.partial');
     return null;
   }
 
@@ -602,19 +814,19 @@ export function renderHtml(graph) {
     var rows = fileImpactRows();
     var body = rows.length
       ? rows.map(function (row) {
-          var impact = row.risk === 'high' ? 'HIGH' : (row.risk === 'medium' ? 'MEDIUM' : 'LOW');
+          var impact = row.risk === 'high' ? t('impact.level.high') : (row.risk === 'medium' ? t('impact.level.medium') : t('impact.level.low'));
           return '<tr>' +
             '<td>' + esc(row.file) + '</td>' +
             '<td>' + impact + '</td>' +
             '<td>' + row.count + '</td>' +
-            '<td>' + esc(row.titles.slice(0, 3).join(' · ')) + (row.titles.length > 3 ? ' +' + (row.titles.length - 3) + ' more' : '') + '</td>' +
+            '<td>' + esc(row.titles.slice(0, 3).join(' · ')) + (row.titles.length > 3 ? ' ' + esc(tv('impact.more', { n: row.titles.length - 3 })) : '') + '</td>' +
           '</tr>';
         }).join('')
-      : '<tr><td colspan="4" class="muted">No impacted files recorded yet. Use set_affected_files on decision nodes.</td></tr>';
+      : '<tr><td colspan="4" class="muted">' + esc(t('impact.empty')) + '</td></tr>';
     panels.impact.innerHTML =
-      '<h2 class="section-head">Codebase Impact Map</h2>' +
-      '<p class="muted">Impact is computed from decision-node affected files and risk annotations.</p>' +
-      '<table class="table"><thead><tr><th>File</th><th>Impact</th><th>Touches</th><th>Why</th></tr></thead><tbody>' + body + '</tbody></table>';
+      '<h2 class="section-head">' + esc(t('panel.impact.head')) + '</h2>' +
+      '<p class="muted">' + esc(t('panel.impact.desc')) + '</p>' +
+      '<table class="table"><thead><tr><th>' + esc(t('impact.col.file')) + '</th><th>' + esc(t('impact.col.impact')) + '</th><th>' + esc(t('impact.col.touches')) + '</th><th>' + esc(t('impact.col.why')) + '</th></tr></thead><tbody>' + body + '</tbody></table>';
   }
 
   function renderRisks() {
@@ -625,20 +837,20 @@ export function renderHtml(graph) {
       .filter(function (item) { return Boolean(item.reason); });
 
     panels.risks.innerHTML =
-      '<h2 class="section-head">Risks &amp; Conflicts</h2>' +
-      '<p class="muted">WayContext concern panel: this is where the review pushes back on weak assumptions.</p>' +
+      '<h2 class="section-head">' + esc(t('panel.risks.head')) + '</h2>' +
+      '<p class="muted">' + esc(t('panel.risks.desc')) + '</p>' +
       (concerns.length
         ? concerns.map(function (item, idx) {
             var n = item.node;
             return '<article class="concern">' +
               '<h3>' + String(idx + 1).padStart(2, '0') + ' · ' + esc(n.title) + '</h3>' +
-              '<div>' + statusPill('review', n.review || 'unknown') + ' ' + (n.risk ? '<span class="dot risk-' + esc(n.risk) + '"></span> ' + esc(n.risk) : '') + '</div>' +
+              '<div>' + statusPill('review', n.review || 'unknown') + ' ' + (n.risk ? '<span class="dot risk-' + esc(n.risk) + '"></span> ' + esc(t('code.' + n.risk)) : '') + '</div>' +
               '<p>' + esc(item.reason) + '</p>' +
               (n.notes ? '<p class="muted">' + esc(n.notes) + '</p>' : '') +
-              '<div class="concern-actions"><span class="btn-lite">Accept</span><span class="btn-lite">Reject</span><span class="btn-lite">Discuss</span></div>' +
+              '<div class="concern-actions"><span class="btn-lite">' + esc(t('concern.action.accept')) + '</span><span class="btn-lite">' + esc(t('concern.action.reject')) + '</span><span class="btn-lite">' + esc(t('concern.action.discuss')) + '</span></div>' +
             '</article>';
           }).join('')
-        : '<div class="card"><strong>No active concerns.</strong><div class="muted">Every node is either verified/inferred with low risk or already resolved.</div></div>');
+        : '<div class="card"><strong>' + esc(t('concern.none.title')) + '</strong><div class="muted">' + esc(t('concern.none.desc')) + '</div></div>');
   }
 
   function renderEvidence() {
@@ -647,17 +859,17 @@ export function renderHtml(graph) {
       var evidence = node.evidence || [];
       var evidenceList = evidence.length
         ? '<ul class="list">' + evidence.map(function (ev) { return '<li>' + esc(ev) + '</li>'; }).join('') + '</ul>'
-        : '<div class="empty">No explicit evidence captured.</div>';
+        : '<div class="empty">' + esc(t('evidence.empty')) + '</div>';
       return '<article class="card">' +
         '<div><strong>' + esc(node.title) + '</strong></div>' +
-        '<div style="margin-top:6px;">' + statusPill('review', node.review || 'unknown') + (node.confidence != null ? ' <span class="muted">confidence ' + node.confidence + '%</span>' : '') + '</div>' +
+        '<div style="margin-top:6px;">' + statusPill('review', node.review || 'unknown') + (node.confidence != null ? ' <span class="muted">' + esc(tv('common.confidencePct', { n: node.confidence })) + '</span>' : '') + '</div>' +
         '<div style="margin-top:8px;">' + evidenceList + '</div>' +
       '</article>';
     });
 
     panels.evidence.innerHTML =
-      '<h2 class="section-head">Evidence Traceability</h2>' +
-      '<p class="muted">Each decision claim should map to concrete evidence. Missing evidence appears as unknown/assumed.</p>' +
+      '<h2 class="section-head">' + esc(t('panel.evidence.head')) + '</h2>' +
+      '<p class="muted">' + esc(t('panel.evidence.desc')) + '</p>' +
       blocks.join('');
   }
 
@@ -670,34 +882,34 @@ export function renderHtml(graph) {
       ? decisions.map(function (node, idx) {
           var alternatives = (node.alternatives || []).length
             ? '<ul class="list">' + node.alternatives.map(function (alt) {
-                var picked = alt.id === node.selected ? ' (selected)' : '';
-                return '<li>' + esc(alt.label + picked) + '</li>';
+                var picked = alt.id === node.selected ? esc(t('label.selected')) : '';
+                return '<li>' + esc(alt.label) + picked + '</li>';
               }).join('') + '</ul>'
-            : '<div class="empty">No alternatives recorded yet.</div>';
+            : '<div class="empty">' + esc(t('alternatives.empty')) + '</div>';
           return '<article class="card">' +
             '<div><strong>' + String(idx + 1) + '. ' + esc(node.title) + '</strong></div>' +
             '<div style="margin-top:6px;">' + statusPill('status', node.status) + ' ' + statusPill('review', node.review || 'unknown') + '</div>' +
             '<div style="margin-top:8px;">' + alternatives + '</div>' +
           '</article>';
         }).join('')
-      : '<div class="card"><strong>All decision nodes are resolved.</strong><div class="muted">No pending approval choices detected from graph.json.</div></div>';
+      : '<div class="card"><strong>' + esc(t('approval.allResolved.title')) + '</strong><div class="muted">' + esc(t('approval.allResolved.desc')) + '</div></div>';
 
     panels.approval.innerHTML =
-      '<h2 class="section-head">Decisions Required</h2>' +
-      '<p class="muted">Approve unresolved choices before implementation starts.</p>' +
+      '<h2 class="section-head">' + esc(t('panel.approval.head')) + '</h2>' +
+      '<p class="muted">' + esc(t('panel.approval.desc')) + '</p>' +
       decisionHtml;
   }
 
   function renderInspector(node) {
     var html = '<h2>' + esc(node.title) + '</h2>';
     html += '<div>' +
-      '<span class="pill status-' + node.status + '">' + node.status + '</span> ' +
-      '<span class="pill review-' + (node.review || 'unknown') + '">' + (node.review || 'unknown') + '</span>' +
-      (node.risk ? ' <span class="dot risk-' + node.risk + '"></span> ' + node.risk : '') +
-      (typeof node.confidence === 'number' ? ' <span class="muted">confidence ' + node.confidence + '%</span>' : '') +
+      '<span class="pill status-' + node.status + '">' + esc(t('code.' + node.status)) + '</span> ' +
+      '<span class="pill review-' + (node.review || 'unknown') + '">' + esc(t('code.' + (node.review || 'unknown'))) + '</span>' +
+      (node.risk ? ' <span class="dot risk-' + node.risk + '"></span> ' + esc(t('code.' + node.risk)) : '') +
+      (typeof node.confidence === 'number' ? ' <span class="muted">' + esc(tv('common.confidencePct', { n: node.confidence })) + '</span>' : '') +
       '</div>';
     if (node.alternatives && node.alternatives.length) {
-      html += '<h3>Alternatives</h3>';
+      html += '<h3>' + esc(t('inspector.alternatives')) + '</h3>';
       node.alternatives.forEach(function (alt) {
         html += '<div class="alt' + (alt.id === node.selected ? ' selected' : '') + '">';
         html += '<strong>' + esc(alt.label) + '</strong>';
@@ -706,22 +918,49 @@ export function renderHtml(graph) {
         html += '</div>';
       });
     }
-    html += '<h3>Affected files</h3>';
+    html += '<h3>' + esc(t('inspector.affectedFiles')) + '</h3>';
     html += (node.affected_files && node.affected_files.length)
       ? '<ul class="list">' + node.affected_files.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>'
-      : '<div class="empty">None recorded</div>';
+      : '<div class="empty">' + esc(t('inspector.noneRecorded')) + '</div>';
 
-    html += '<h3>Evidence</h3>';
+    html += '<h3>' + esc(t('inspector.evidence')) + '</h3>';
     html += (node.evidence && node.evidence.length)
       ? '<ul class="list">' + node.evidence.map(function (entry) { return '<li>' + esc(entry) + '</li>'; }).join('') + '</ul>'
-      : '<div class="empty">No explicit evidence</div>';
+      : '<div class="empty">' + esc(t('inspector.noEvidence')) + '</div>';
 
-    if (node.notes) html += '<h3>Notes</h3><div>' + esc(node.notes) + '</div>';
+    if (node.notes) html += '<h3>' + esc(t('inspector.notes')) + '</h3><div>' + esc(node.notes) + '</div>';
 
-    var why = node.notes || (node.evidence && node.evidence[0]) || 'No rationale written yet.';
-    html += '<div class="why-box"><strong>Why?</strong><div class="muted" style="margin-top:6px;">' + esc(why) + '</div></div>';
+    var why = node.notes || (node.evidence && node.evidence[0]) || t('inspector.noRationale');
+    html += '<div class="why-box"><strong>' + esc(t('inspector.why')) + '</strong><div class="muted" style="margin-top:6px;">' + esc(why) + '</div></div>';
 
     inspector.innerHTML = html;
+  }
+
+  function applyStaticTranslations() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    document.querySelectorAll('[data-i18n-tpl]').forEach(function (el) {
+      var vars = {};
+      try { vars = JSON.parse(el.getAttribute('data-i18n-vars') || '{}'); } catch (e) { /* leave vars empty */ }
+      el.textContent = tv(el.getAttribute('data-i18n-tpl'), vars);
+    });
+    document.querySelectorAll('.lang-btn').forEach(function (button) {
+      button.classList.toggle('active', button.getAttribute('data-lang') === lang);
+    });
+  }
+
+  function applyLang(next) {
+    lang = next;
+    localStorage.setItem('waycontext-review-lang', next);
+    applyStaticTranslations();
+    renderImpact();
+    renderRisks();
+    renderEvidence();
+    renderApproval();
+    var selectedRow = document.querySelector('.node-row.sel');
+    renderInspector(selectedRow ? graph.nodes[selectedRow.getAttribute('data-id')] : graph.nodes[graph.root_id]);
   }
 
   function switchPanel(name) {
@@ -750,12 +989,13 @@ export function renderHtml(graph) {
     });
   });
 
-  renderImpact();
-  renderRisks();
-  renderEvidence();
-  renderApproval();
+  document.querySelectorAll('.lang-btn').forEach(function (button) {
+    button.addEventListener('click', function () {
+      applyLang(button.getAttribute('data-lang'));
+    });
+  });
 
-  renderInspector(graph.nodes[graph.root_id]);
+  applyLang(lang);
 })();
 </script>
 </body>
