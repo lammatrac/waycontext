@@ -212,13 +212,13 @@ export async function searchKnowledge(projectName, query, limit = 10) {
     .map(({ id, score, sources }) => ({ ...byId.get(id), score, matched_via: sources }));
 }
 
-export async function getSymbol(projectName, name) {
+export async function getSymbol(projectName, name, limit = 5) {
   const project = await requireProject(projectName);
   const res = await pool.query(
     `SELECT s.*, f.path FROM symbols s JOIN files f ON f.id = s.file_id
      WHERE s.project_id = $1 AND (s.name = $2 OR s.name LIKE '%::' || $2)
-     ORDER BY s.name = $2 DESC LIMIT 5`,
-    [project.id, name]
+     ORDER BY s.name = $2 DESC LIMIT $3`,
+    [project.id, name, limit]
   );
   // No requireSymbol call: this query IS the existence check, so a second one
   // would only duplicate the round trip.
@@ -228,10 +228,15 @@ export async function getSymbol(projectName, name) {
       `Pass an exact name or Class::method — search_code finds one from a description.`
     );
   }
-  return res.rows.map(({ embedding, ...r }) => r);
+  // A bare name (e.g. "type") can match hundreds of unrelated symbols across
+  // classes. Only the best-ranked candidate is worth its full source body;
+  // the rest come back as stubs so an ambiguous name doesn't pull N full
+  // bodies. Re-query with the qualified "Class::method" name to get another
+  // candidate's body.
+  return res.rows.map(({ embedding, body, ...r }, i) => (i === 0 ? { ...r, body } : r));
 }
 
-export async function getCallers(projectName, name) {
+export async function getCallers(projectName, name, limit = 10) {
   const project = await requireProject(projectName);
   await requireSymbol(project, name);
   const res = await pool.query(
@@ -242,13 +247,14 @@ export async function getCallers(projectName, name) {
      LEFT JOIN files f ON f.id = e.file_id
      WHERE e.project_id = $1
        AND (dst_s.name = $2 OR dst_s.name LIKE '%::' || $2)
-     ORDER BY caller NULLS LAST`,
-    [project.id, name]
+     ORDER BY caller NULLS LAST
+     LIMIT $3`,
+    [project.id, name, limit]
   );
   return res.rows;
 }
 
-export async function getCallees(projectName, name) {
+export async function getCallees(projectName, name, limit = 10) {
   const project = await requireProject(projectName);
   await requireSymbol(project, name);
   const res = await pool.query(
@@ -261,8 +267,9 @@ export async function getCallees(projectName, name) {
      LEFT JOIN files f2 ON f2.id = dst_s.file_id
      WHERE e.project_id = $1
        AND (src_s.name = $2 OR src_s.name LIKE '%::' || $2)
-     ORDER BY e.relation, target`,
-    [project.id, name]
+     ORDER BY e.relation, target
+     LIMIT $3`,
+    [project.id, name, limit]
   );
   return res.rows;
 }
@@ -328,15 +335,16 @@ export async function getSubgraph(projectName, name, depth = 2, maxNodes = 60) {
   return { root: seed.rows[0].name, nodes: [...nodes.values()], edges: uniqEdges };
 }
 
-export async function getFileOutline(projectName, filePath) {
+export async function getFileOutline(projectName, filePath, limit = 10) {
   const project = await requireProject(projectName);
   await requireFile(project, filePath);
   const res = await pool.query(
     `SELECT s.name, s.kind, s.signature, s.doc, s.start_line, s.end_line
      FROM symbols s JOIN files f ON f.id = s.file_id
      WHERE s.project_id = $1 AND f.path = $2
-     ORDER BY s.start_line`,
-    [project.id, filePath]
+     ORDER BY s.start_line
+     LIMIT $3`,
+    [project.id, filePath, limit]
   );
   return res.rows;
 }

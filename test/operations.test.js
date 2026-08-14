@@ -106,7 +106,7 @@ test("reasoning graph operations are reachable by name and alias, unlike knowled
 test("usage lines are generated from the schema, marking optionals with brackets", () => {
   assert.equal(usageLine(findOperation("search_code")), "search_code <project> <query> [limit]");
   assert.equal(usageLine(findOperation("get_graph")), "get_graph <project> <name> [depth]");
-  assert.equal(usageLine(findOperation("get_symbol")), "get_symbol <project> <name>");
+  assert.equal(usageLine(findOperation("get_symbol")), "get_symbol <project> <name> [limit]");
   assert.equal(usageLine(findOperation("list_projects")), "list_projects");
 });
 
@@ -145,8 +145,8 @@ test("missing required arguments are rejected", () => {
 });
 
 test("extra positional arguments are ignored rather than misassigned", () => {
-  const parsed = parseCliArgs(findOperation("get_symbol"), ["proj", "Thing", "junk"]);
-  assert.deepEqual(parsed, { project: "proj", name: "Thing" });
+  const parsed = parseCliArgs(findOperation("get_module"), ["proj", "src/thing", "junk"]);
+  assert.deepEqual(parsed, { project: "proj", module: "src/thing" });
 });
 
 test("only index_project streams progress and needs the schema ensured", () => {

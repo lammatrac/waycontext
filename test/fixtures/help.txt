@@ -16,11 +16,11 @@ Getting started:
 Search & navigate:
   search_knowledge <project> <query> [limit]
                                             search code and docs together (the 'why') (alias: knowledge)
-  get_symbol <project> <name>               full source and signature of one symbol
-  get_callers <project> <name>              what references this — the blast radius
-  get_callees <project> <name>              what this depends on
+  get_symbol <project> <name> [limit]       full source and signature of one symbol
+  get_callers <project> <name> [limit]      what references this — the blast radius
+  get_callees <project> <name> [limit]      what this depends on
   get_graph <project> <name> [depth]        dependency subgraph, both directions
-  get_file_outline <project> <path>         every symbol defined in one file
+  get_file_outline <project> <path> [limit] every symbol defined in one file
   find_related <project> <name> [limit]     semantically similar symbols
 
 Architecture & history:

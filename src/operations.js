@@ -41,6 +41,9 @@ import { createReasoningGraph, updateReasoningGraph } from "./reasoning/store.js
 
 const project = z.string().describe("Indexed project name (see list_projects)");
 const limit = z.coerce.number().int().min(1).max(30).default(10);
+// get_symbol's rows carry a full source body, not a one-line summary, so its
+// cap stays lower than the generic result-list limit above.
+const symbolLimit = z.coerce.number().int().min(1).max(10).default(5);
 
 export const operations = [
   {
@@ -121,28 +124,28 @@ export const operations = [
     name: "get_symbol",
     readOnly: true,
     description:
-      "Read one symbol's actual source, by name — function, class or method. Accepts 'Class::method' or a bare method name, so you do not need its file path first; use this rather than locating the file and reading it when you already know what the thing is called. Returns signature, docblock, file location and source body.",
-    input: { project, name: z.string() },
-    cli: { args: ["project", "name"], label: (a) => `Fetching "${a.name}"` },
-    handler: (a) => getSymbol(a.project, a.name),
+      "Read one symbol's actual source, by name — function, class or method. Accepts 'Class::method' or a bare method name, so you do not need its file path first; use this rather than locating the file and reading it when you already know what the thing is called. Returns signature, docblock, file location and source body for the best match; a bare name that is ambiguous across classes returns additional candidates as stubs (no body) — re-call with 'Class::method' to read one of those.",
+    input: { project, name: z.string(), limit: symbolLimit },
+    cli: { args: ["project", "name", "limit"], label: (a) => `Fetching "${a.name}"` },
+    handler: (a) => getSymbol(a.project, a.name, a.limit),
   },
   {
     name: "get_callers",
     readOnly: true,
     description:
-      "What references this — the blast radius. Returns all inbound edges (CALLS, INSTANTIATES, EXTENDS, hook registrations). Call it before changing or deleting any function: these are resolved graph edges, so it catches subclass and hook callers that a text search for the name would miss.",
-    input: { project, name: z.string() },
-    cli: { args: ["project", "name"], label: (a) => `Finding callers of "${a.name}"` },
-    handler: (a) => getCallers(a.project, a.name),
+      "What references this — the blast radius. Returns inbound edges (CALLS, INSTANTIATES, EXTENDS, hook registrations), capped at `limit`. Call it before changing or deleting any function: these are resolved graph edges, so it catches subclass and hook callers that a text search for the name would miss. A widely-used symbol can have thousands of callers; raise `limit` only when you actually need to enumerate them.",
+    input: { project, name: z.string(), limit },
+    cli: { args: ["project", "name", "limit"], label: (a) => `Finding callers of "${a.name}"` },
+    handler: (a) => getCallers(a.project, a.name, a.limit),
   },
   {
     name: "get_callees",
     readOnly: true,
     description:
-      "What does this symbol call / depend on? Returns all outbound edges including WordPress hooks it registers or fires. These are resolved graph edges, so unlike reading the body you also get calls made through inherited methods and hook indirection.",
-    input: { project, name: z.string() },
-    cli: { args: ["project", "name"], label: (a) => `Finding callees of "${a.name}"` },
-    handler: (a) => getCallees(a.project, a.name),
+      "What does this symbol call / depend on? Returns outbound edges including WordPress hooks it registers or fires, capped at `limit`. These are resolved graph edges, so unlike reading the body you also get calls made through inherited methods and hook indirection.",
+    input: { project, name: z.string(), limit },
+    cli: { args: ["project", "name", "limit"], label: (a) => `Finding callees of "${a.name}"` },
+    handler: (a) => getCallees(a.project, a.name, a.limit),
   },
   {
     name: "get_graph",
@@ -157,10 +160,10 @@ export const operations = [
     name: "get_file_outline",
     readOnly: true,
     description:
-      "See what is in a file without reading it: every symbol defined there, in line order, with signatures and docblocks. Cheaper than reading the whole file when you need to find your way to the right function in it.",
-    input: { project, path: z.string().describe("File path relative to project root") },
-    cli: { args: ["project", "path"], label: (a) => `Outlining "${a.path}"` },
-    handler: (a) => getFileOutline(a.project, a.path),
+      "See what is in a file without reading it: symbols defined there, in line order, with signatures and docblocks, capped at `limit`. Cheaper than reading the whole file when you need to find your way to the right function in it. Raise `limit` for a file with more symbols than that — most files have far fewer.",
+    input: { project, path: z.string().describe("File path relative to project root"), limit },
+    cli: { args: ["project", "path", "limit"], label: (a) => `Outlining "${a.path}"` },
+    handler: (a) => getFileOutline(a.project, a.path, a.limit),
   },
   {
     name: "find_related",
