@@ -124,7 +124,7 @@ export const operations = [
     name: "get_symbol",
     readOnly: true,
     description:
-      "Read one symbol's actual source, by name — function, class or method. Accepts 'Class::method' or a bare method name, so you do not need its file path first; use this rather than locating the file and reading it when you already know what the thing is called. Returns signature, docblock, file location and source body for the best match; a bare name that is ambiguous across classes returns additional candidates as stubs (no body) — re-call with 'Class::method' to read one of those.",
+      "Read one symbol's actual source, by name — function, class or method. Accepts 'Class::method' or a bare method name, so you do not need its file path first; use this rather than locating the file and reading it when you already know what the thing is called. Returns signature, docblock, file location and source body for the best match; a bare name that is ambiguous across classes returns additional candidates as stubs (no body) — re-call with 'Class::method' to read one of those. A very long body is truncated with a pointer naming the exact file and line range holding the rest — read that range directly instead of grepping the file.",
     input: { project, name: z.string(), limit: symbolLimit },
     cli: { args: ["project", "name", "limit"], label: (a) => `Fetching "${a.name}"` },
     handler: (a) => getSymbol(a.project, a.name, a.limit),

@@ -34,7 +34,7 @@ test("FTS-only search ranks a name match above a body-only match and reports mat
   // its prose `doc` (weight B) -- not by decomposing the `purgeCache...`
   // name (weight A) into "purge"/"cache"/etc. The doc must contain every
   // query word since plainto_tsquery ANDs terms together.
-  const nameMatchId = await insertTestSymbol(project.id, fileId, {
+  await insertTestSymbol(project.id, fileId, {
     name: "purgeCacheAfterMatchUpdate",
     doc: "Purge the cache after a match result update occurs.",
     body: "function purgeCacheAfterMatchUpdate() { cache.del('scoreboard'); }",
@@ -49,6 +49,6 @@ test("FTS-only search ranks a name match above a body-only match and reports mat
 
   const results = await searchCode(PROJECT, "purge cache after match update", 5);
   assert.ok(results.length >= 1);
-  assert.equal(results[0].id, nameMatchId);
+  assert.equal(results[0].name, "purgeCacheAfterMatchUpdate");
   assert.deepEqual(results[0].matched_via, ["fts"]);
 });

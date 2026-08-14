@@ -55,6 +55,7 @@ function getParser(lang) {
 }
 
 const MAX_BODY = 6000; // chars stored/embedded per symbol
+export const BODY_TRUNCATION_MARKER = "\n/* …truncated */";
 
 // WordPress hook APIs
 const WP_REGISTER = new Set(["add_action", "add_filter", "add_shortcode"]);
@@ -170,7 +171,7 @@ export function parseFile(lang, source) {
       doc: leadingDoc(node),
       startLine: line(node),
       endLine: node.endPosition.row + 1,
-      body: body.length > MAX_BODY ? body.slice(0, MAX_BODY) + "\n/* …truncated */" : body,
+      body: body.length > MAX_BODY ? body.slice(0, MAX_BODY) + BODY_TRUNCATION_MARKER : body,
     });
     return name;
   }

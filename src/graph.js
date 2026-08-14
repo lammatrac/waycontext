@@ -1,6 +1,7 @@
 import { pool, toVector, getProject } from "./db.js";
 import { embedQuery, embeddingsEnabled } from "./embeddings.js";
 import { fuseRankedLists, DEFAULT_K } from "./rrf.js";
+import { BODY_TRUNCATION_MARKER } from "./parser.js";
 
 const SYMBOL_COLUMNS = "s.id, s.name, s.kind, s.signature, s.doc, s.start_line, s.end_line, f.path";
 
@@ -97,11 +98,12 @@ export async function searchCode(projectName, query, limit = 10) {
   for (const row of [...ftsRows, ...vectorRows]) byId.set(row.id, row);
 
   const fused = fuseRankedLists(rankedLists, DEFAULT_K);
-  return fused.slice(0, limit).map(({ id, score, sources }) => ({
-    ...byId.get(id),
-    score,
-    matched_via: sources,
-  }));
+  return fused.slice(0, limit).map(({ id, score, sources }) => {
+    // s.id only exists to key byId/rankedLists during fusion -- the caller
+    // addresses symbols by name, not by internal row id, so drop it here.
+    const { id: _id, ...row } = byId.get(id);
+    return { ...row, score, matched_via: sources };
+  });
 }
 
 const CHUNK_COLUMNS = `
@@ -232,8 +234,33 @@ export async function getSymbol(projectName, name, limit = 5) {
   // classes. Only the best-ranked candidate is worth its full source body;
   // the rest come back as stubs so an ambiguous name doesn't pull N full
   // bodies. Re-query with the qualified "Class::method" name to get another
-  // candidate's body.
-  return res.rows.map(({ embedding, body, ...r }, i) => (i === 0 ? { ...r, body } : r));
+  // candidate's body. embedding/fts_vector/body_fingerprint/entity_id/
+  // symbol_key/id/project_id/file_id are internal bookkeeping, never useful
+  // to the caller — drop them all.
+  return res.rows.map(
+    ({ name, kind, signature, doc, start_line, end_line, path, body }, i) => ({
+      name,
+      kind,
+      signature,
+      doc,
+      start_line,
+      end_line,
+      path,
+      // Truncation at index time (parser.js MAX_BODY) leaves a dead-end
+      // marker with no way back to the rest of the function, which pushes
+      // the caller into blind-grepping the file. Point at the exact lines
+      // instead — start_line/end_line above are the untruncated symbol's
+      // real range, so Read(path, offset=start_line) gets the rest directly.
+      ...(i === 0
+        ? {
+            body: body?.endsWith(BODY_TRUNCATION_MARKER)
+              ? body.slice(0, -BODY_TRUNCATION_MARKER.length) +
+                `\n/* …truncated — full body is ${path}:${start_line}-${end_line}, read that range directly */`
+              : body,
+          }
+        : {}),
+    })
+  );
 }
 
 export async function getCallers(projectName, name, limit = 10) {
@@ -332,7 +359,14 @@ export async function getSubgraph(projectName, name, depth = 2, maxNodes = 60) {
     seen.add(k);
     return true;
   });
-  return { root: seed.rows[0].name, nodes: [...nodes.values()], edges: uniqEdges };
+  // `id` on each node is only the BFS visited-set key (see nodes.has(id)
+  // above); edges already address nodes by name, so it never reaches the
+  // caller.
+  return {
+    root: seed.rows[0].name,
+    nodes: [...nodes.values()].map(({ name, kind }) => ({ name, kind })),
+    edges: uniqEdges,
+  };
 }
 
 export async function getFileOutline(projectName, filePath, limit = 10) {

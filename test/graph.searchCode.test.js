@@ -38,7 +38,7 @@ test(
     const doc = "Issues a fresh signing key and revokes the previous one.";
     const body = "function rotateSecretKey() { keystore.issue(); keystore.revokePrevious(); }";
     const [vector] = await embed([`${doc}\n${body}`], "document");
-    const vectorOnlyId = await insertTestSymbol(project.id, fileId, {
+    await insertTestSymbol(project.id, fileId, {
       name: "rotateSecretKey",
       doc,
       body,
@@ -46,7 +46,7 @@ test(
     });
 
     const results = await searchCode(project.name, "replace the credential used to sign tokens", 10);
-    const match = results.find((r) => r.id === vectorOnlyId);
+    const match = results.find((r) => r.name === "rotateSecretKey");
     assert.ok(match, "expected the semantically-related symbol to appear in results");
     assert.deepEqual(match.matched_via, ["vector"]);
   }
