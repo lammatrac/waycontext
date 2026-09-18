@@ -1,0 +1,7 @@
+msgid ""
+msgstr ""
+"Language: vi\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "Sync members"
+msgstr "Đồng bộ thành viên"

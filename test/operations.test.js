@@ -49,10 +49,11 @@ test("every declared CLI positional maps to a real input field", () => {
   }
 });
 
-test("every input field is reachable from the CLI", () => {
+test("every input field is reachable from the CLI, or explicitly declared hidden", () => {
   for (const op of operations) {
     for (const key of Object.keys(op.input)) {
-      assert.ok(op.cli.args.includes(key), `${op.name}: input "${key}" is unreachable from the CLI`);
+      const reachable = op.cli.args.includes(key) || op.cli.hidden?.includes(key);
+      assert.ok(reachable, `${op.name}: input "${key}" is unreachable from the CLI and not declared hidden`);
     }
   }
 });
@@ -105,8 +106,14 @@ test("reasoning graph operations are reachable by name and alias, unlike knowled
 
 test("usage lines are generated from the schema, marking optionals with brackets", () => {
   assert.equal(usageLine(findOperation("search_code")), "search_code <project> <query> [limit]");
-  assert.equal(usageLine(findOperation("get_graph")), "get_graph <project> <name> [depth]");
-  assert.equal(usageLine(findOperation("get_symbol")), "get_symbol <project> <name> [limit]");
+  // `name` reads as optional on every one of these because it has a `symbol`
+  // alias that also satisfies the lookup -- the handler, not the schema,
+  // enforces that one of the two is present.
+  assert.equal(usageLine(findOperation("get_graph")), "get_graph <project> [name] [depth]");
+  assert.equal(usageLine(findOperation("get_symbol")), "get_symbol <project> [name] [limit]");
+  assert.equal(usageLine(findOperation("get_callers")), "get_callers <project> [name] [limit]");
+  assert.equal(usageLine(findOperation("get_callees")), "get_callees <project> [name] [limit]");
+  assert.equal(usageLine(findOperation("find_related")), "find_related <project> [name] [limit]");
   assert.equal(usageLine(findOperation("list_projects")), "list_projects");
 });
 
@@ -140,8 +147,41 @@ test("out-of-range numeric arguments are rejected on the CLI, not silently accep
 });
 
 test("missing required arguments are rejected", () => {
-  assert.throws(() => parseCliArgs(findOperation("get_symbol"), ["proj"]), /Required/);
+  assert.throws(() => parseCliArgs(findOperation("search_code"), ["proj"]), /Required/);
   assert.throws(() => parseCliArgs(findOperation("index_project"), []), /Required/);
+});
+
+// get_symbol's `name` is schema-optional because `symbol` is an accepted
+// alias (see the MCP alias test below) -- so the "you gave me nothing to
+// look up" case is enforced by the handler, with a clearer message than
+// zod's "Required", not by parseCliArgs.
+// Every "by symbol name" tool shares this trap: it's named after the concept
+// it operates on (get_symbol, get_callers, ...), which invites a model to
+// guess the parameter is called "symbol" rather than the documented `name`.
+// That used to be a hard schema validation error before the handler ever
+// ran (the bug get_symbol's alias was originally added for) -- confirm the
+// fix, and the friendly fallback error, are wired identically on every
+// sibling that takes a bare symbol name.
+const SYMBOL_NAME_OPS = ["get_symbol", "get_callers", "get_callees", "get_graph", "find_related"];
+
+test("every symbol-name tool's handler rejects a call with neither name nor symbol", () => {
+  for (const opName of SYMBOL_NAME_OPS) {
+    const op = findOperation(opName);
+    assert.throws(
+      () => op.handler({ project: "proj" }),
+      /requires a `name` argument/,
+      `${opName}: did not reject a call missing both name and symbol`
+    );
+  }
+});
+
+test("every symbol-name tool accepts `symbol` as an alias for `name`", () => {
+  for (const opName of SYMBOL_NAME_OPS) {
+    const op = findOperation(opName);
+    const parsed = z.object(op.input).parse({ project: "proj", symbol: "Foo::bar" });
+    assert.equal(parsed.symbol, "Foo::bar", `${opName}: symbol not accepted`);
+    assert.equal(parsed.name, undefined, `${opName}: name should stay unset`);
+  }
 });
 
 test("extra positional arguments are ignored rather than misassigned", () => {

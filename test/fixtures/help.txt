@@ -16,12 +16,12 @@ Getting started:
 Search & navigate:
   search_knowledge <project> <query> [limit]
                                             search code and docs together (the 'why') (alias: knowledge)
-  get_symbol <project> <name> [limit]       full source and signature of one symbol
-  get_callers <project> <name> [limit]      what references this — the blast radius
-  get_callees <project> <name> [limit]      what this depends on
-  get_graph <project> <name> [depth]        dependency subgraph, both directions
+  get_symbol <project> [name] [limit]       full source and signature of one symbol
+  get_callers <project> [name] [limit]      what references this — the blast radius
+  get_callees <project> [name] [limit]      what this depends on
+  get_graph <project> [name] [depth]        dependency subgraph, both directions
   get_file_outline <project> <path> [limit] every symbol defined in one file
-  find_related <project> <name> [limit]     semantically similar symbols
+  find_related <project> [name] [limit]     semantically similar symbols
 
 Architecture & history:
   get_history <project> [target] [limit]    commits that touched this, newest first (alias: history)
@@ -49,6 +49,14 @@ Context for a task:
                                             start a decision graph for a feature (alias: reasoning-init)
   update_reasoning_graph <project> <slug> <patch>
                                             patch a decision graph, re-render HTML (alias: reasoning-update)
+
+WordPress UI (Increment 1A):
+  resolve_ui_reference <project> [task_text] [screen] [text] [role]
+                                            resolve a task description to a UI element (alias: ui-resolve)
+  find_ui_element <project> <text> [screen] find a UI element by visible text/screen (alias: ui-find)
+  get_ui_context <project> <element_id>     component, screen, handler for a UI element (alias: ui-context)
+  trace_ui_action <project> <element_id>    element -> hook -> callback -> call graph (alias: ui-trace)
+  find_ui_source <project> <element_id>     where a UI element/screen/field is defined (alias: ui-source)
 
 Setup & administration:
   init-db                                   create the schema (same as migrate)

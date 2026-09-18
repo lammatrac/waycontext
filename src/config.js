@@ -177,6 +177,21 @@ export const config = {
   serviceHost: setting("WAYCONTEXT_SERVICE_HOST", "127.0.0.1"),
   servicePort: numeric("WAYCONTEXT_SERVICE_PORT", 4747),
 
+  // UI intelligence (Increment 1A). Static extraction of UI elements (PHP
+  // literal HTML today; JSX/TSX is a later increment) into entities/entity_links.
+  // Additive-only: a project with no UI artifacts indexes ui_elements=0, not
+  // a warning. Off entirely costs nothing -- the extraction pass is skipped.
+  uiEnabled: setting("UI_ENABLED", "1") !== "0",
+  // Phase 1A-4 (REQ-003/REQ-004): which locale's catalog translation backs
+  // ui_element.data.text when a key resolves in more than one locale. Unset
+  // by default -- pickPrimaryLocale() then falls back to the
+  // lexicographically smallest available locale (a deterministic but
+  // arbitrary tiebreak; see src/ui/i18nCatalog.js doc comment). The full
+  // per-locale map is always kept on the i18n_key entity regardless of this
+  // setting, so it only affects which single value is surfaced as "the"
+  // element text at index time.
+  uiI18nLocale: setting("UI_I18N_LOCALE", "") || null,
+
   // Derived intelligence (Phase 4). Everything here is recomputed from the
   // planes below it and skipped entirely when its inputs haven't moved, so the
   // cost of leaving it on is a watermark comparison per index run.

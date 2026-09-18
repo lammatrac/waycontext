@@ -7,7 +7,7 @@ import { NAME, VERSION } from "./version.js";
 /**
  * The hand-written half of the CLI surface, declared once.
  *
- * The 22 registry operations in operations.js already generate their own help
+ * The registry operations in operations.js already generate their own help
  * and completion. These ~17 do not live there on purpose -- `rule confirm`,
  * `serve` and friends are human-only and deliberately off the MCP/HTTP
  * allow-list -- but they were previously restated as literal strings inside
@@ -47,6 +47,7 @@ export const SECTIONS = [
   { key: "arch", title: "Architecture & history" },
   { key: "knowledge", title: "Rules & engineering memory" },
   { key: "context", title: "Context for a task" },
+  { key: "ui", title: "WordPress UI (Increment 1A)" },
   { key: "admin", title: "Setup & administration" },
 ];
 
@@ -90,6 +91,12 @@ export const OP_HELP = {
   review_context: { section: "context", short: "what to know before reviewing a change" },
   create_reasoning_graph: { section: "context", short: "start a decision graph for a feature" },
   update_reasoning_graph: { section: "context", short: "patch a decision graph, re-render HTML" },
+
+  resolve_ui_reference: { section: "ui", short: "resolve a task description to a UI element" },
+  find_ui_element: { section: "ui", short: "find a UI element by visible text/screen" },
+  get_ui_context: { section: "ui", short: "component, screen, handler for a UI element" },
+  trace_ui_action: { section: "ui", short: "element -> hook -> callback -> call graph" },
+  find_ui_source: { section: "ui", short: "where a UI element/screen/field is defined" },
 };
 
 export const MANUAL_COMMANDS = [

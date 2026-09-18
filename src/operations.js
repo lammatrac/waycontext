@@ -38,12 +38,39 @@ import {
 } from "./knowledge/architecture.js";
 import { composeContext } from "./context/compose.js";
 import { createReasoningGraph, updateReasoningGraph } from "./reasoning/store.js";
+import {
+  resolveUiReferenceOp, findUiElementOp, getUiContextOp, traceUiActionOp, findUiSourceOp,
+} from "./ui/uiQueries.js";
 
 const project = z.string().describe("Indexed project name (see list_projects)");
 const limit = z.coerce.number().int().min(1).max(30).default(10);
 // get_symbol's rows carry a full source body, not a one-line summary, so its
 // cap stays lower than the generic result-list limit above.
 const symbolLimit = z.coerce.number().int().min(1).max(10).default(5);
+
+/**
+ * get_symbol, get_callers, get_callees, get_graph and find_related all take
+ * one symbol name as their primary argument, and are all named after the
+ * concept they operate on -- which invites a model to guess the parameter
+ * is called "symbol" (echoing the tool name) rather than the documented
+ * `name`. That guess used to be a hard schema validation error before the
+ * handler ever ran (see get_symbol's bug history). Accept it as an alias on
+ * every one of these tools, resolved identically, instead of fixing it once
+ * and leaving the same trap live on its four siblings.
+ */
+function nameArg() {
+  return {
+    name: z.string().optional(),
+    symbol: z.string().optional().describe("Alias for `name`"),
+  };
+}
+function resolveNameArg(opName, a) {
+  const name = a.name ?? a.symbol;
+  if (!name) throw new Error(`${opName} requires a \`name\` argument (the symbol to look up).`);
+  return name;
+}
+// Every op below spreading nameArg() must also hide "symbol" from the CLI
+// (it's a JSON-keyword-only alias) via `cli: { hidden: ["symbol"], ... }`.
 
 export const operations = [
   {
@@ -125,36 +152,52 @@ export const operations = [
     readOnly: true,
     description:
       "Read one symbol's actual source, by name — function, class or method. Accepts 'Class::method' or a bare method name, so you do not need its file path first; use this rather than locating the file and reading it when you already know what the thing is called. Returns signature, docblock, file location and source body for the best match; a bare name that is ambiguous across classes returns additional candidates as stubs (no body) — re-call with 'Class::method' to read one of those. A very long body is truncated with a pointer naming the exact file and line range holding the rest — read that range directly instead of grepping the file.",
-    input: { project, name: z.string(), limit: symbolLimit },
-    cli: { args: ["project", "name", "limit"], label: (a) => `Fetching "${a.name}"` },
-    handler: (a) => getSymbol(a.project, a.name, a.limit),
+    input: { project, ...nameArg(), limit: symbolLimit },
+    cli: {
+      args: ["project", "name", "limit"],
+      hidden: ["symbol"],
+      label: (a) => `Fetching "${a.name ?? a.symbol}"`,
+    },
+    handler: (a) => getSymbol(a.project, resolveNameArg("get_symbol", a), a.limit),
   },
   {
     name: "get_callers",
     readOnly: true,
     description:
       "What references this — the blast radius. Returns inbound edges (CALLS, INSTANTIATES, EXTENDS, hook registrations), capped at `limit`. Call it before changing or deleting any function: these are resolved graph edges, so it catches subclass and hook callers that a text search for the name would miss. A widely-used symbol can have thousands of callers; raise `limit` only when you actually need to enumerate them.",
-    input: { project, name: z.string(), limit },
-    cli: { args: ["project", "name", "limit"], label: (a) => `Finding callers of "${a.name}"` },
-    handler: (a) => getCallers(a.project, a.name, a.limit),
+    input: { project, ...nameArg(), limit },
+    cli: {
+      args: ["project", "name", "limit"],
+      hidden: ["symbol"],
+      label: (a) => `Finding callers of "${a.name ?? a.symbol}"`,
+    },
+    handler: (a) => getCallers(a.project, resolveNameArg("get_callers", a), a.limit),
   },
   {
     name: "get_callees",
     readOnly: true,
     description:
       "What does this symbol call / depend on? Returns outbound edges including WordPress hooks it registers or fires, capped at `limit`. These are resolved graph edges, so unlike reading the body you also get calls made through inherited methods and hook indirection.",
-    input: { project, name: z.string(), limit },
-    cli: { args: ["project", "name", "limit"], label: (a) => `Finding callees of "${a.name}"` },
-    handler: (a) => getCallees(a.project, a.name, a.limit),
+    input: { project, ...nameArg(), limit },
+    cli: {
+      args: ["project", "name", "limit"],
+      hidden: ["symbol"],
+      label: (a) => `Finding callees of "${a.name ?? a.symbol}"`,
+    },
+    handler: (a) => getCallees(a.project, resolveNameArg("get_callees", a), a.limit),
   },
   {
     name: "get_graph",
     readOnly: true,
     description:
       "See how a feature is wired together: the dependency subgraph around a symbol, BFS in both directions up to `depth` hops, as nodes + labeled edges. Use it when 'who calls this' (get_callers) is one hop short of the answer and you need the shape of the neighbourhood — there is no way to get this by reading files one at a time.",
-    input: { project, name: z.string(), depth: z.coerce.number().int().min(1).max(4).default(2) },
-    cli: { args: ["project", "name", "depth"], label: (a) => `Building graph around "${a.name}"` },
-    handler: (a) => getSubgraph(a.project, a.name, a.depth),
+    input: { project, ...nameArg(), depth: z.coerce.number().int().min(1).max(4).default(2) },
+    cli: {
+      args: ["project", "name", "depth"],
+      hidden: ["symbol"],
+      label: (a) => `Building graph around "${a.name ?? a.symbol}"`,
+    },
+    handler: (a) => getSubgraph(a.project, resolveNameArg("get_graph", a), a.depth),
   },
   {
     name: "get_file_outline",
@@ -170,9 +213,13 @@ export const operations = [
     readOnly: true,
     description:
       "Find the rest of a feature: symbols semantically similar to one you already have. Use it after search_code or get_symbol to sweep up the code that belongs to the same feature but is named differently and shares no call edge — the pieces a grep on the first symbol's name would never surface. Requires embeddings.",
-    input: { project, name: z.string(), limit },
-    cli: { args: ["project", "name", "limit"], label: (a) => `Finding symbols related to "${a.name}"` },
-    handler: (a) => findRelated(a.project, a.name, a.limit),
+    input: { project, ...nameArg(), limit },
+    cli: {
+      args: ["project", "name", "limit"],
+      hidden: ["symbol"],
+      label: (a) => `Finding symbols related to "${a.name ?? a.symbol}"`,
+    },
+    handler: (a) => findRelated(a.project, resolveNameArg("find_related", a), a.limit),
   },
   {
     name: "get_history",
@@ -394,6 +441,82 @@ export const operations = [
       { slug: a.slug, patch: a.patch },
       { log: ctx?.log }
     ),
+  },
+  {
+    name: "resolve_ui_reference",
+    readOnly: true,
+    description:
+      "Resolve a free-text task description (and/or structured hints) to the WordPress UI element(s) it's talking about — e.g. 'the Save button on the Settings page is missing'. Ranks candidates by a deterministic text/route/role/context match_score (floor 0.45, cap 5). Requires `task_text` or at least one of `screen`/`text`/`role`. Increment 1A, PHP-emitted UI only. `enabled: false` means UI indexing is off project-wide, distinct from `status: \"not_found\"` (indexed, but nothing matched).",
+    input: {
+      project,
+      task_text: z.string().optional().describe("Free-text description of the task/bug, e.g. \"the Save button on the Settings page is missing\""),
+      screen: z.string().optional().describe("Structured hint: screen/page/route name"),
+      text: z.string().optional().describe("Structured hint: visible text on the element"),
+      role: z.string().optional().describe("Structured hint: element type/role, e.g. button, link, textbox"),
+    },
+    cli: {
+      args: ["project", "task_text", "screen", "text", "role"],
+      aliases: ["ui-resolve"],
+      label: (a) => `Resolving UI reference for "${a.task_text || a.text || a.screen || ""}"`,
+    },
+    handler: (a, ctx) => resolveUiReferenceOp(
+      a.project,
+      { taskText: a.task_text, screen: a.screen, text: a.text, role: a.role },
+      ctx?.log
+    ),
+  },
+  {
+    name: "find_ui_element",
+    readOnly: true,
+    description:
+      "Find WordPress UI elements by structured hints only — visible text and/or screen — no free-text NL parsing. Same ranked-candidate shape and match_score rules as resolve_ui_reference; use this when you already know the exact text/screen rather than describing a task.",
+    input: {
+      project,
+      text: z.string().describe("Visible text on the element to find"),
+      screen: z.string().optional().describe("Screen/page/route name to scope the search to"),
+    },
+    cli: {
+      args: ["project", "text", "screen"],
+      aliases: ["ui-find"],
+      label: (a) => `Finding UI element "${a.text}"`,
+    },
+    handler: (a, ctx) => findUiElementOp(a.project, a.text, a.screen, ctx?.log),
+  },
+  {
+    name: "get_ui_context",
+    readOnly: true,
+    description:
+      "Everything already known about one UI element from the resolved graph: its own data, the component that renders it, the screen(s) it appears on, its component's resolved hook/callback handler (if any), and its i18n translation key (if any). One hop out from the element — for the deeper 'what does clicking this actually run' chain, use trace_ui_action instead.",
+    input: {
+      project,
+      element_id: z.string().describe("An element_id/screen_id/settings_id/component_id from resolve_ui_reference, find_ui_element, or another UI tool"),
+    },
+    cli: { args: ["project", "element_id"], aliases: ["ui-context"], label: (a) => `Reading UI context for "${a.element_id}"` },
+    handler: (a) => getUiContextOp(a.project, a.element_id),
+  },
+  {
+    name: "trace_ui_action",
+    readOnly: true,
+    description:
+      "Trace what happens when a UI element fires: element -> hook (WordPress add_action/do_action graph) or Settings Field/Section renderer -> resolved callback -> onward through the existing call graph (2 hops). Increment 1A only — does not reach API endpoints/backend services/tests, that chain is a later increment.",
+    input: {
+      project,
+      element_id: z.string().describe("An element_id/screen_id/settings_id/component_id from resolve_ui_reference, find_ui_element, or another UI tool"),
+    },
+    cli: { args: ["project", "element_id"], aliases: ["ui-trace"], label: (a) => `Tracing UI action for "${a.element_id}"` },
+    handler: (a) => traceUiActionOp(a.project, a.element_id),
+  },
+  {
+    name: "find_ui_source",
+    readOnly: true,
+    description:
+      "Where a UI element/screen/field actually comes from: file, line, owning component, the WordPress primitive it was created via (submit_button/add_menu_page/Settings API), how it was registered and the entry hook, and — when it resolves to WordPress core/vendor code — an explicit not_relevant marker instead of pointing you at framework internals (REQ-013).",
+    input: {
+      project,
+      element_id: z.string().describe("An element_id/screen_id/settings_id/component_id from resolve_ui_reference, find_ui_element, or another UI tool"),
+    },
+    cli: { args: ["project", "element_id"], aliases: ["ui-source"], label: (a) => `Finding UI source for "${a.element_id}"` },
+    handler: (a) => findUiSourceOp(a.project, a.element_id),
   },
 ];
 
