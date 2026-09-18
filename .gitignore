@@ -27,3 +27,5 @@ __pycache__/
 
 # WayContext gate hook
 waycontext-tasks/
+
+.worktrees/
