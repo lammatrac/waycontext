@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import fg from "fast-glob";
+import { glob } from "tinyglobby";
 import ignore from "ignore";
 import picomatch from "picomatch";
 import { pool, toVector, getOrCreateProject } from "./db.js";
@@ -211,7 +211,13 @@ async function runIndex(project, root, log) {
   } else {
     const patterns = Object.keys(EXT_LANG).map((ext) => `**/*${ext}`);
     if (config.docsEnabled) patterns.push(...config.docsGlobs);
-    const found = await fg(patterns, { cwd: root, dot: false, ignore: loadGlobIgnores(root) });
+    const found = await glob(patterns, {
+      cwd: root,
+      dot: false,
+      ignore: loadGlobIgnores(root),
+      // Do not auto-expand a bare directory pattern (e.g. "docs") to "docs/**".
+      expandDirectories: false,
+    });
     filePaths = found.filter((p) => !ig.ignores(p));
     log(`Found ${filePaths.length} source files`);
 

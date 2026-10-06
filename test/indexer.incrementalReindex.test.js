@@ -200,7 +200,7 @@ test("a failed file on the very first (full) scan leaves last_indexed_sha unset"
     writeRepoFile(dir, "ok.js", "function ok() { return 1; }");
     commitAll(dir, "first");
     // noperm.js is added after the commit (untracked, unreadable) so the
-    // full scan (fast-glob) still discovers it on disk without needing git
+    // full scan (tinyglobby) still discovers it on disk without needing git
     // to be able to read its contents.
     writeRepoFile(dir, "noperm.js", "function bad() { return 0; }");
     fs.chmodSync(noPermPath, 0o000);
