@@ -26,6 +26,11 @@ import { proposeRules } from "./knowledge/rules.js";
 import { importKnowledge } from "./knowledge/knowledgeFiles.js";
 import { deriveIntelligence } from "./knowledge/derive.js";
 
+// Bump when the parser's edge output changes shape, so files whose content is
+// unchanged still get their edges re-derived on the next run (see
+// refreshEdges). 1: PHP member/scoped calls carry a receiver (0012).
+const EDGES_VERSION = 1;
+
 const DEFAULT_IGNORES = [
   "node_modules/**", "vendor/**", ".git/**", "dist/**", "build/**",
   "*.min.js", "*.min.css", "coverage/**", ".next/**", "__pycache__/**",
@@ -150,13 +155,25 @@ async function runIndex(project, root, log) {
   // Existing hashes for incremental indexing
   const existing = new Map();
   const exRes = await pool.query(
-    `SELECT id, path, hash FROM files WHERE project_id = $1`,
+    `SELECT id, path, hash, language, edges_version FROM files WHERE project_id = $1`,
     [project.id]
   );
   for (const r of exRes.rows) existing.set(r.path, r);
 
+  // A git-diff run only visits changed files, so files whose edges predate
+  // EDGES_VERSION would otherwise never be refreshed. Pull them in; the
+  // hash-skip below sends them down the edges-only path.
+  if (diffResult) {
+    const queued = new Set(filePaths);
+    for (const r of exRes.rows) {
+      if (r.edges_version >= EDGES_VERSION || !EXT_LANG[path.extname(r.path)]) continue;
+      if (queued.has(r.path) || gitDeletedPaths.includes(r.path)) continue;
+      if (fs.existsSync(path.join(root, r.path))) filePaths.push(r.path);
+    }
+  }
+
   const seen = new Set();
-  let changed = 0, skipped = 0, failed = 0;
+  let changed = 0, skipped = 0, failed = 0, refreshed = 0;
   const pendingEmbeds = []; // { symbolId, text }
 
   // Identity bookkeeping for the whole run. Every symbol key that went away
@@ -185,7 +202,21 @@ async function runIndex(project, root, log) {
 
     const hash = sha256(content);
     const prev = existing.get(rel);
-    if (prev && prev.hash === hash) { skipped++; continue; }
+    if (prev && prev.hash === hash) {
+      const lang = EXT_LANG[path.extname(rel)];
+      if (lang && prev.edges_version < EDGES_VERSION) {
+        try {
+          await refreshEdges(project, prev, lang, content);
+          refreshed++;
+        } catch (e) {
+          log(`Edge refresh failed: ${rel} (${e.message})`);
+          failed++;
+        }
+      } else {
+        skipped++;
+      }
+      continue;
+    }
 
     // Docs branch away from parse->symbols->edges but keep everything above
     // this line: the same git-diff scoping, the same hash-skip, and below, the
@@ -284,14 +315,7 @@ async function runIndex(project, root, log) {
       }
 
       // insert edges (dst resolved later, cross-file)
-      for (const r of parsed.relations) {
-        const srcId = r.srcName === "@file" ? null : nameToId.get(r.srcName) || null;
-        await client.query(
-          `INSERT INTO edges (project_id, src, dst_name, relation, file_id, line)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-          [project.id, srcId, r.dstName, r.relation, fileId, r.line]
-        );
-      }
+      await writeEdges(client, project, fileId, parsed.relations, nameToId);
 
       // Give every symbol in this file its durable entity, in two statements
       // regardless of how many symbols there are. Immaterial next to the
@@ -492,25 +516,18 @@ async function runIndex(project, root, log) {
     }
   }
 
-  // resolve edges: match dst_name against symbol names (exact, then method suffix)
+  if (refreshed) log(`Rebuilt edges for ${refreshed} unchanged file(s) indexed by an older parser`);
+
+  // resolve edges: match dst_name against symbol names (exact, then namespace
+  // forms, then PHP method calls by receiver). Edges with a receiver are PHP
+  // member/scoped calls and only ever target a method, so the name-only passes
+  // skip them -- `$this->total()` must not land on a free function `total`.
   log("Resolving graph edges…");
   await pool.query(
     `UPDATE edges e SET dst = s.id
      FROM symbols s
      WHERE e.project_id = $1 AND s.project_id = $1
-       AND e.dst IS NULL AND e.dst_name = s.name`,
-    [project.id]
-  );
-  // "$this->foo(...)" parsed as bare method name → match "Class::foo" suffix.
-  // An equality on the stripped name, not `LIKE '%::' || dst_name`: that
-  // can't use an index (hours on a WordPress install) and treats `_` as a
-  // wildcard. Served by symbols_method_short_idx (0011).
-  await pool.query(
-    `UPDATE edges e SET dst = s.id
-     FROM symbols s
-     WHERE e.project_id = $1 AND s.project_id = $1
-       AND e.dst IS NULL AND s.kind = 'method'
-       AND regexp_replace(s.name, '^.*::', '') = e.dst_name`,
+       AND e.dst IS NULL AND e.receiver IS NULL AND e.dst_name = s.name`,
     [project.id]
   );
   // PHP fully-qualified reference ("\App\Domain\Invoice") against a symbol
@@ -519,7 +536,7 @@ async function runIndex(project, root, log) {
     `UPDATE edges e SET dst = s.id
      FROM symbols s
      WHERE e.project_id = $1 AND s.project_id = $1
-       AND e.dst IS NULL AND e.dst_name LIKE '\\\\%'
+       AND e.dst IS NULL AND e.receiver IS NULL AND e.dst_name LIKE '\\\\%'
        AND ltrim(e.dst_name, '\\') = s.name`,
     [project.id]
   );
@@ -543,7 +560,7 @@ async function runIndex(project, root, log) {
         AND s.kind <> 'method'
         AND s.name LIKE '%\\\\%'
         AND regexp_replace(s.name, '^.*\\\\', '') = e.dst_name
-       WHERE e.project_id = $1 AND e.dst IS NULL
+       WHERE e.project_id = $1 AND e.dst IS NULL AND e.receiver IS NULL
        GROUP BY e.id
      )
      UPDATE edges e SET dst = c.symbol_id
@@ -551,6 +568,8 @@ async function runIndex(project, root, log) {
      WHERE e.id = c.edge_id AND c.matches = 1`,
     [project.id]
   );
+  // After the namespace passes: walking parents needs EXTENDS edges resolved.
+  await resolveMethodCalls(project);
 
   // UI intelligence, phases 1A-3/1A-4 (REQ-014, REQ-003/REQ-004): the
   // project-wide hook (LISTENS_TO/FIRED_BY) and i18n (TRANSLATION_OF/
@@ -2684,6 +2703,154 @@ async function resolveUiRelations(project, identityPreflight, log) {
  * `language` is updated on the way through, so a path that changes kind (or an
  * old row written before docs were indexed) converges instead of lying.
  */
+// Receivers that mean "the calling method's own class" (parent: its parent).
+const SELF_RECEIVERS = ["$this", "self", "static", "parent"];
+
+/**
+ * Resolve PHP method calls (`edges.receiver IS NOT NULL`) to a `Class::name`
+ * method, by what the call is made on.
+ *
+ * 1. `$this->` / `self::` / `static::` look in the caller's own class, then
+ *    up its EXTENDS chain; `parent::` starts one level up; `Foo::bar()` starts
+ *    at class Foo. The nearest class that defines the method wins, and only if
+ *    exactly one class at that depth does -- several same-named `Foo` classes
+ *    leave the call unresolved rather than guessed.
+ * 2. Anything still open, except calls on an explicitly named class (whose
+ *    class is presumably outside the index), links only when exactly one
+ *    method in the project has that name.
+ *
+ * The bare-name lookups compare against regexp_replace(name, '^.*::', ''),
+ * served by symbols_method_short_idx (0011) -- not `LIKE '%::' || dst_name`,
+ * which no index can serve (hours on a WordPress install) and which treats
+ * `_` as a wildcard.
+ */
+async function resolveMethodCalls(project) {
+  await pool.query(
+    `WITH RECURSIVE start AS (
+       -- The caller's own class: the non-method symbol in the caller's file
+       -- whose name is the caller's "Class::" prefix.
+       SELECT e.id AS edge_id, e.dst_name, cls.id AS class_id,
+              CASE WHEN e.receiver = 'parent' THEN 1 ELSE 0 END AS min_depth
+         FROM edges e
+         JOIN symbols src ON src.id = e.src AND src.name LIKE '%::%'
+         JOIN symbols cls
+           ON cls.file_id = src.file_id AND cls.kind IN ('class', 'trait', 'interface')
+          AND cls.name = regexp_replace(src.name, '::[^:]*$', '')
+        WHERE e.project_id = $1 AND e.dst IS NULL AND e.receiver = ANY($2)
+       UNION ALL
+       -- Foo::bar() / \App\Foo::bar(): a qualified name must match exactly;
+       -- an unqualified one matches by the class's short name.
+       SELECT e.id, e.dst_name, cls.id, 0
+         FROM edges e
+         JOIN symbols cls
+           ON cls.project_id = $1 AND cls.kind IN ('class', 'trait', 'interface')
+          AND cls.name = ltrim(e.receiver, '\\')
+        WHERE e.project_id = $1 AND e.dst IS NULL
+          AND e.receiver <> '?' AND e.receiver <> ALL($2)
+       UNION ALL
+       SELECT e.id, e.dst_name, cls.id, 0
+         FROM edges e
+         JOIN symbols cls
+           ON cls.project_id = $1 AND cls.kind IN ('class', 'trait', 'interface')
+          AND cls.name LIKE '%\\\\%'
+          AND regexp_replace(cls.name, '^.*\\\\', '') = e.receiver
+        WHERE e.project_id = $1 AND e.dst IS NULL
+          AND e.receiver <> '?' AND e.receiver <> ALL($2)
+          AND e.receiver NOT LIKE '%\\\\%'
+     ),
+     anc AS (
+       SELECT edge_id, dst_name, class_id, min_depth, 0 AS depth FROM start
+       UNION ALL
+       SELECT a.edge_id, a.dst_name, x.dst, a.min_depth, a.depth + 1
+         FROM anc a
+         JOIN edges x ON x.src = a.class_id AND x.relation = 'EXTENDS' AND x.dst IS NOT NULL
+        WHERE a.depth < 10
+     ),
+     cand AS (
+       SELECT a.edge_id, a.depth, s.id AS sym_id
+         FROM anc a
+         JOIN symbols c ON c.id = a.class_id
+         JOIN symbols s
+           ON s.project_id = $1 AND s.kind = 'method'
+          AND s.name = c.name || '::' || a.dst_name
+        WHERE a.depth >= a.min_depth
+     ),
+     nearest AS (
+       SELECT edge_id, min(depth) AS depth FROM cand GROUP BY edge_id
+     ),
+     pick AS (
+       SELECT c.edge_id, min(c.sym_id) AS sym_id, count(DISTINCT c.sym_id) AS matches
+         FROM cand c JOIN nearest n ON n.edge_id = c.edge_id AND n.depth = c.depth
+        GROUP BY c.edge_id
+     )
+     UPDATE edges e SET dst = p.sym_id
+       FROM pick p
+      WHERE e.id = p.edge_id AND p.matches = 1`,
+    [project.id, SELF_RECEIVERS]
+  );
+  await pool.query(
+    `WITH candidate AS (
+       SELECT e.id AS edge_id, min(s.id) AS sym_id, count(*) AS matches
+         FROM edges e
+         JOIN symbols s
+           ON s.project_id = e.project_id AND s.kind = 'method'
+          AND regexp_replace(s.name, '^.*::', '') = e.dst_name
+        WHERE e.project_id = $1 AND e.dst IS NULL
+          AND (e.receiver = '?' OR e.receiver = ANY($2))
+        GROUP BY e.id
+     )
+     UPDATE edges e SET dst = c.sym_id
+       FROM candidate c
+      WHERE e.id = c.edge_id AND c.matches = 1`,
+    [project.id, SELF_RECEIVERS]
+  );
+}
+
+/**
+ * Insert a file's parsed relations as unresolved edges and stamp the file
+ * with EDGES_VERSION, so a later run knows these edges came from the current
+ * parser. `nameToId` maps the file's symbol names to their ids.
+ */
+async function writeEdges(client, project, fileId, relations, nameToId) {
+  for (const r of relations) {
+    const srcId = r.srcName === "@file" ? null : nameToId.get(r.srcName) || null;
+    await client.query(
+      `INSERT INTO edges (project_id, src, dst_name, relation, file_id, line, receiver)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [project.id, srcId, r.dstName, r.relation, fileId, r.line, r.receiver ?? null]
+    );
+  }
+  await client.query(`UPDATE files SET edges_version = $1 WHERE id = $2`, [EDGES_VERSION, fileId]);
+}
+
+/**
+ * Re-derive edges for a file whose content is unchanged but whose edges were
+ * written by an older parser (files.edges_version < EDGES_VERSION). Symbols --
+ * and so their embeddings and identity -- are left untouched; only this
+ * file's outgoing edges are replaced, then resolved with the rest of the run.
+ */
+async function refreshEdges(project, prev, lang, content) {
+  const parsed = parseFile(lang, content);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Ordered by id so a name defined twice in the file maps to the later
+    // row -- the same "last wins" the full write path's Map produces.
+    const syms = await client.query(
+      `SELECT id, name FROM symbols WHERE file_id = $1 ORDER BY id`, [prev.id]
+    );
+    const nameToId = new Map(syms.rows.map((s) => [s.name, s.id]));
+    await client.query(`DELETE FROM edges WHERE file_id = $1`, [prev.id]);
+    await writeEdges(client, project, prev.id, parsed.relations, nameToId);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function upsertFileRow(client, project, prev, rel, language, hash, content) {
   const loc = content.split("\n").length;
   if (prev) {

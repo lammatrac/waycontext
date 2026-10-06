@@ -65,7 +65,7 @@ const WP_FIRE = new Set(["do_action", "apply_filters", "do_shortcode"]);
  * Parse one file.
  * @returns {{ symbols: Array, relations: Array }}
  *  symbol:   { name, kind, signature, doc, startLine, endLine, body }
- *  relation: { srcName, relation, dstName, line }
+ *  relation: { srcName, relation, dstName, line, receiver? } -- receiver only on PHP member/scoped calls
  */
 export function parseFile(lang, source) {
   const parser = getParser(lang);
@@ -233,11 +233,20 @@ export function parseFile(lang, source) {
           }
           break;
         }
+        // The receiver is what lets the indexer pick `Child::save` over every
+        // other class's `save`: "$this" / "self" / "static" / "parent", a
+        // class name for `Foo::bar()`, or "?" for a call on any other object
+        // or `$cls::bar()` (type unknown without inference).
         case "member_call_expression":
         case "scoped_call_expression": {
           const name = n.childForFieldName("name");
           if (name) {
-            relations.push({ srcName: owner, relation: "CALLS", dstName: text(name).slice(0, 200), line: line(n) });
+            const recv = n.childForFieldName(n.type === "member_call_expression" ? "object" : "scope");
+            const recvText = recv ? text(recv) : "";
+            const receiver = n.type === "member_call_expression"
+              ? (recvText === "$this" ? "$this" : "?")
+              : (!recvText || recvText.startsWith("$") ? "?" : recvText.slice(0, 200));
+            relations.push({ srcName: owner, relation: "CALLS", dstName: text(name).slice(0, 200), line: line(n), receiver });
           }
           break;
         }

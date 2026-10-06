@@ -215,6 +215,36 @@ function build() {
   assert.ok(rels(r).includes("build -CALLS-> register"));
 });
 
+test("php: member and scoped calls record their receiver; plain calls don't", () => {
+  const r = parseFile("php", `<?php
+class Child extends Base {
+  public function run($obj) {
+    $this->save();
+    $obj->save();
+    self::save();
+    static::save();
+    parent::save();
+    \\App\\Other::save();
+    $cls::save();
+    helper();
+  }
+}
+`);
+  const receivers = r.relations
+    .filter((e) => e.relation === "CALLS")
+    .map((e) => [e.dstName, e.receiver]);
+  assert.deepEqual(receivers, [
+    ["save", "$this"],
+    ["save", "?"],
+    ["save", "self"],
+    ["save", "static"],
+    ["save", "parent"],
+    ["save", "\\App\\Other"],
+    ["save", "?"],
+    ["helper", undefined],
+  ]);
+});
+
 // --- WordPress hooks ---------------------------------------------------
 
 test("php: add_action registers a hook and links a string callback", () => {

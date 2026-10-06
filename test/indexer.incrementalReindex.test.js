@@ -221,3 +221,39 @@ test("a failed file on the very first (full) scan leaves last_indexed_sha unset"
     cleanupGitRepo(dir);
   }
 });
+
+test("a diff-mode run rebuilds edges of unchanged files written by an older parser", async () => {
+  const STALE_PROJECT = "incremental_reindex_stale_edges";
+  await cleanupTestProject(STALE_PROJECT);
+  const dir = createGitRepo();
+  try {
+    writeRepoFile(dir, "a.js", "function a() { return b(); }");
+    writeRepoFile(dir, "b.js", "function b() { return 2; }");
+    commitAll(dir, "first");
+    await indexProject(STALE_PROJECT, dir);
+
+    // As left by an index from before edges_version existed.
+    await pool.query(
+      `UPDATE files f SET edges_version = 0 FROM projects p
+        WHERE p.id = f.project_id AND p.name = $1 AND f.path = 'a.js'`,
+      [STALE_PROJECT]
+    );
+
+    const stats = await indexProject(STALE_PROJECT, dir);
+    assert.equal(stats.mode, "diff");
+    assert.equal(stats.changed, 0, "a.js's content didn't change");
+
+    const res = await pool.query(
+      `SELECT f.edges_version, s.name AS resolved_to
+         FROM files f JOIN projects p ON p.id = f.project_id
+         JOIN edges e ON e.file_id = f.id AND e.relation = 'CALLS'
+         LEFT JOIN symbols s ON s.id = e.dst
+        WHERE p.name = $1 AND f.path = 'a.js'`,
+      [STALE_PROJECT]
+    );
+    assert.deepEqual(res.rows, [{ edges_version: 1, resolved_to: "b" }]);
+  } finally {
+    await cleanupTestProject(STALE_PROJECT);
+    cleanupGitRepo(dir);
+  }
+});
