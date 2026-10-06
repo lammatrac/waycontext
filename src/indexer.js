@@ -116,7 +116,87 @@ export async function indexProject(projectName, rootPath, log = () => {}) {
   }
 }
 
+/**
+ * Embed `items` (each with a `.text`) in batches, `concurrency` batches in
+ * flight at once, handing each batch's vectors to `write`. A batch that fails
+ * is logged and counted, not thrown: its rows keep a NULL embedding and the
+ * next run's `embedding IS NULL` sweep picks them back up. Rate-limit and 5xx
+ * failures are retried first, since running batches concurrently is exactly
+ * what makes a provider push back.
+ */
+export async function embedPending(items, {
+  embedFn, write, batchSize = 64, concurrency = 1,
+  retries = 3, retryDelayMs = 2000, log = () => {}, label = "Embedding",
+}) {
+  const batches = [];
+  for (let i = 0; i < items.length; i += batchSize) batches.push(items.slice(i, i + batchSize));
+
+  let embedded = 0, failed = 0, next = 0;
+  const runBatch = async (batch) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await embedFn(batch.map((b) => b.text));
+      } catch (e) {
+        if (attempt >= retries || !/\b(429|5\d\d)\b/.test(e.message)) throw e;
+        await new Promise((r) => setTimeout(r, retryDelayMs * 2 ** attempt));
+      }
+    }
+  };
+  const worker = async () => {
+    while (next < batches.length) {
+      const batch = batches[next++];
+      let vectors;
+      try {
+        vectors = await runBatch(batch);
+      } catch (e) {
+        log(`${label} batch failed (${batch.length} items): ${e.message}`);
+        failed += batch.length;
+        continue;
+      }
+      await write(batch, vectors);
+      embedded += vectors.filter(Boolean).length;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, batches.length)) }, worker));
+  return { embedded, failed };
+}
+
+/**
+ * Store a batch of vectors in one UPDATE. `rows` is `[{ id, vector }]`; null
+ * vectors are skipped. `table` is a fixed identifier from this module, never
+ * user input.
+ */
+export async function writeEmbeddings(table, rows) {
+  const present = rows.filter((r) => r.vector);
+  if (!present.length) return;
+  await pool.query(
+    `UPDATE ${table} t SET embedding = v.vec::vector
+       FROM unnest($1::bigint[], $2::text[]) AS v(id, vec)
+      WHERE t.id = v.id`,
+    [present.map((r) => r.id), present.map((r) => toVector(r.vector))]
+  );
+}
+
+/** Records elapsed time per phase; each `mark` closes the phase since the last one. */
+function phaseTimer() {
+  const timings = {};
+  let last = performance.now();
+  return {
+    timings,
+    mark(name) {
+      const now = performance.now();
+      timings[name] = Math.round(now - last);
+      last = now;
+    },
+    summary() {
+      return "Timings: " + Object.entries(timings)
+        .map(([k, ms]) => `${k} ${(ms / 1000).toFixed(1)}s`).join(", ");
+    },
+  };
+}
+
 async function runIndex(project, root, log) {
+  const timer = phaseTimer();
   const ig = loadGitignore(root);
 
   const diffResult = await getChangedFiles(root, project.last_indexed_sha);
@@ -171,6 +251,8 @@ async function runIndex(project, root, log) {
       if (fs.existsSync(path.join(root, r.path))) filePaths.push(r.path);
     }
   }
+
+  timer.mark("scan");
 
   const seen = new Set();
   let changed = 0, skipped = 0, failed = 0, refreshed = 0;
@@ -517,6 +599,7 @@ async function runIndex(project, root, log) {
   }
 
   if (refreshed) log(`Rebuilt edges for ${refreshed} unchanged file(s) indexed by an older parser`);
+  timer.mark("files");
 
   // resolve edges: match dst_name against symbol names (exact, then namespace
   // forms, then PHP method calls by receiver). Edges with a receiver are PHP
@@ -632,6 +715,7 @@ async function runIndex(project, root, log) {
   }
 
   const identity = await reconcileIdentity(project, retired, appeared, log);
+  timer.mark("edges");
 
   // UI intelligence, Increment 1A, phase 1A-5 (REQ-027): project-level
   // identity preflight, once per index_project job (never per file) --
@@ -776,6 +860,7 @@ async function runIndex(project, root, log) {
       uiRelations = { error: e.message };
     }
   }
+  if (config.uiEnabled) timer.mark("ui");
 
   let history = null;
   if (config.historyEnabled) {
@@ -788,6 +873,7 @@ async function runIndex(project, root, log) {
       log(`Git history skipped: ${e.message}`);
       history = { mode: "failed", commits: 0, error: e.message };
     }
+    timer.mark("history");
   }
 
   // Rule candidates from this run's docs and fix commits. Only ever writes
@@ -812,6 +898,7 @@ async function runIndex(project, root, log) {
       log(`Rule extraction skipped: ${e.message}`);
       rules = { proposed: 0, candidates: 0, error: e.message };
     }
+    timer.mark("rules");
   }
 
   // embeddings
@@ -840,29 +927,17 @@ async function runIndex(project, root, log) {
 
   if (pendingEmbeds.length) {
     log(`Embedding ${pendingEmbeds.length} symbols…`);
-    const EMBED_CHUNK = 64;
-    let embedFailed = 0;
-    for (let i = 0; i < pendingEmbeds.length; i += EMBED_CHUNK) {
-      const chunk = pendingEmbeds.slice(i, i + EMBED_CHUNK);
-      let vectors;
-      try {
-        vectors = await embed(chunk.map((p) => p.text), "document", project.id);
-      } catch (e) {
-        // Leave this chunk's embeddings NULL rather than losing already-
-        // fetched vectors from earlier chunks; the recovery query above
-        // will pick these symbols back up on the next index run.
-        log(`Embedding batch failed (${chunk.length} symbols): ${e.message}`);
-        embedFailed += chunk.length;
-        continue;
-      }
-      for (let j = 0; j < vectors.length; j++) {
-        if (!vectors[j]) continue;
-        await pool.query(`UPDATE symbols SET embedding = $1 WHERE id = $2`, [
-          toVector(vectors[j]),
-          chunk[j].symbolId,
-        ]);
-      }
-    }
+    // A failed batch leaves its embeddings NULL rather than losing vectors
+    // already fetched for other batches; the recovery query above picks those
+    // symbols back up on the next index run.
+    const { failed: embedFailed } = await embedPending(pendingEmbeds, {
+      embedFn: (texts) => embed(texts, "document", project.id),
+      write: (batch, vectors) =>
+        writeEmbeddings("symbols", batch.map((p, j) => ({ id: p.symbolId, vector: vectors[j] }))),
+      batchSize: 64,
+      concurrency: config.embedConcurrency,
+      log,
+    });
     if (embedFailed) {
       log(`${embedFailed} symbols left without embeddings; will retry on next index run`);
     }
@@ -889,33 +964,25 @@ async function runIndex(project, root, log) {
     );
     if (pending.rows.length) {
       log(`Embedding ${pending.rows.length} chunk(s)…`);
-      const CHUNK_BATCH = 32;
-      for (let i = 0; i < pending.rows.length; i += CHUNK_BATCH) {
-        const batch = pending.rows.slice(i, i + CHUNK_BATCH);
-        let vectors;
-        try {
-          vectors = await embed(
-            batch.map((r) =>
-              [`// ${r.label} (${r.sublabel})`, r.heading_path || "", r.content].join("\n")
-            ),
-            "document",
-            project.id
-          );
-        } catch (e) {
-          log(`Chunk embedding batch failed (${batch.length} chunks): ${e.message}`);
-          continue;
+      const { embedded } = await embedPending(
+        pending.rows.map((r) => ({
+          id: r.id,
+          text: [`// ${r.label} (${r.sublabel})`, r.heading_path || "", r.content].join("\n"),
+        })),
+        {
+          embedFn: (texts) => embed(texts, "document", project.id),
+          write: (batch, vectors) =>
+            writeEmbeddings("chunks", batch.map((r, j) => ({ id: r.id, vector: vectors[j] }))),
+          batchSize: 32,
+          concurrency: config.embedConcurrency,
+          log,
+          label: "Chunk embedding",
         }
-        for (let j = 0; j < vectors.length; j++) {
-          if (!vectors[j]) continue;
-          await pool.query(`UPDATE chunks SET embedding = $1 WHERE id = $2`, [
-            toVector(vectors[j]),
-            batch[j].id,
-          ]);
-          docStats.embedded++;
-        }
-      }
+      );
+      docStats.embedded += embedded;
     }
   }
+  timer.mark("embeddings");
 
   // Only advance last_indexed_sha when the whole run succeeded. If any file
   // failed (transient read/parse/DB error), leave the stored sha where it
@@ -948,6 +1015,8 @@ async function runIndex(project, root, log) {
     log(`Derivation skipped: ${e.message}`);
     derived = { error: e.message };
   }
+  timer.mark("derive");
+  log(timer.summary());
 
   return {
     mode: diffResult ? "diff" : "full",
@@ -964,6 +1033,7 @@ async function runIndex(project, root, log) {
     i18n,
     shortcodes,
     blocks,
+    timings: timer.timings,
   };
 }
 

@@ -134,6 +134,9 @@ export const config = {
   // column exists now so adding tenants later isn't a data migration.
   orgSlug: setting("ORG_SLUG", "default"),
   embeddingDim: numeric("EMBEDDING_DIM", 1024),
+  // Embedding batches in flight at once during indexing. Provider round trips
+  // dominate a first index; raise it on a paid tier, lower it on a 429-prone one.
+  embedConcurrency: numeric("EMBED_CONCURRENCY", 4),
   maxFileSize: numeric("MAX_FILE_SIZE", 1048576),
 
   // Git history ingestion (Phase 1). Bounds apply to the FIRST pass over a
