@@ -257,3 +257,37 @@ test("a diff-mode run rebuilds edges of unchanged files written by an older pars
     cleanupGitRepo(dir);
   }
 });
+
+test("editing a callee's file keeps call edges from unchanged files, re-linked to the new symbol", async () => {
+  const CALLEE_PROJECT = "incremental_reindex_callee_edit";
+  await cleanupTestProject(CALLEE_PROJECT);
+  const dir = createGitRepo();
+  const callersOfB = () => pool.query(
+    `SELECT src.name AS caller, s.name AS resolved_to
+       FROM edges e
+       JOIN projects p ON p.id = e.project_id
+       JOIN symbols src ON src.id = e.src
+       LEFT JOIN symbols s ON s.id = e.dst
+      WHERE p.name = $1 AND e.relation = 'CALLS' AND e.dst_name = 'b'`,
+    [CALLEE_PROJECT]
+  ).then((r) => r.rows);
+  try {
+    writeRepoFile(dir, "a.js", "function a() { return b(); }");
+    writeRepoFile(dir, "b.js", "function b() { return 2; }");
+    commitAll(dir, "first");
+    await indexProject(CALLEE_PROJECT, dir);
+    assert.deepEqual(await callersOfB(), [{ caller: "a", resolved_to: "b" }]);
+
+    // Only b.js changes, so b's symbol row is deleted and re-created while
+    // a.js is hash-skipped -- its edge must outlive the old row.
+    writeRepoFile(dir, "b.js", "function b() { return 3; }");
+    commitAll(dir, "edit b");
+    const stats = await indexProject(CALLEE_PROJECT, dir);
+    assert.equal(stats.changed, 1);
+
+    assert.deepEqual(await callersOfB(), [{ caller: "a", resolved_to: "b" }]);
+  } finally {
+    await cleanupTestProject(CALLEE_PROJECT);
+    cleanupGitRepo(dir);
+  }
+});
