@@ -22,7 +22,7 @@ async function symbolsFor(rel) {
     `SELECT s.name, s.kind FROM symbols s
        JOIN files f ON f.id = s.file_id
       WHERE f.project_id = $1 AND f.path = $2
-      ORDER BY s.start_line`,
+      ORDER BY s.start_line, s.id`,
     [project.id, rel]
   );
   return res.rows;
