@@ -116,6 +116,29 @@ test("a doc mention matching exactly one symbol becomes a MENTIONS link", async 
   assert.ok(!titles.includes("handle"), "ambiguous match does not");
 });
 
+test("a doc mention of a bare method name links to Class::method, with `_` literal", async () => {
+  const name = projectName("method_mentions");
+  const root = tmpRepo({
+    "src/Cfg.php": "<?php\nclass Cfg {\n  public function getXoption() { return 1; }\n  public function load_all() { return 2; }\n}\n",
+    "docs/notes.md": "Call `load_all` first; `get_option` is WordPress core.\n",
+  });
+
+  await indexProject(name, root);
+  const titles = (
+    await q(
+      `SELECT dst.title FROM entity_links l
+         JOIN entities src ON src.id = l.src_id AND src.kind = 'document'
+         JOIN entities dst ON dst.id = l.dst_id
+         JOIN projects p ON p.id = src.project_id
+        WHERE p.name = $1 AND l.relation = 'MENTIONS'`,
+      [name]
+    )
+  ).map((r) => r.title);
+
+  assert.ok(titles.includes("Cfg::load_all"), `suffix match links: ${titles}`);
+  assert.ok(!titles.includes("Cfg::getXoption"), `underscore is not a wildcard: ${titles}`);
+});
+
 test("path mentions are queryable from the documents row", async () => {
   const name = projectName("paths");
   const root = tmpRepo({

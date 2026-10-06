@@ -69,6 +69,20 @@ class Consumer {
 }
 `);
 
+  // Method names full of underscores, as in any WordPress codebase. `_` is a
+  // LIKE wildcard, so a suffix match written as LIKE would pair the call to
+  // the undefined `get_option()` with the unrelated `Cfg::getXoption`.
+  fs.writeFileSync(path.join(dir, "Cfg.php"), `<?php
+class Cfg {
+  public function getXoption() { return 1; }
+  public function load_all() { return 2; }
+  public function boot() {
+    $this->load_all();
+    return get_option('x');
+  }
+}
+`);
+
   await indexProject(PROJECT, dir);
 });
 
@@ -112,6 +126,23 @@ test("a method call still resolves through the namespaced class", async () => {
   assert.ok(
     rows.some((r) => r.resolved_to === "App\\Domain\\Invoice::total"),
     `unresolved: ${JSON.stringify(rows)}`
+  );
+});
+
+test("a bare method call with underscores resolves to its Class::method", async () => {
+  const rows = await edgesFor("load_all");
+  assert.ok(
+    rows.some((r) => r.resolved_to === "Cfg::load_all"),
+    `unresolved: ${JSON.stringify(rows)}`
+  );
+});
+
+test("an underscore in a call name is literal, not a single-character wildcard", async () => {
+  const rows = await edgesFor("get_option");
+  assert.ok(rows.length > 0, "expected an edge for `get_option()`");
+  assert.ok(
+    rows.every((r) => r.resolved_to === null),
+    `get_option is not defined here, so nothing should resolve: ${JSON.stringify(rows)}`
   );
 });
 

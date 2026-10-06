@@ -501,13 +501,16 @@ async function runIndex(project, root, log) {
        AND e.dst IS NULL AND e.dst_name = s.name`,
     [project.id]
   );
-  // "$this->foo(...)" parsed as bare method name → match "Class::foo" suffix
+  // "$this->foo(...)" parsed as bare method name → match "Class::foo" suffix.
+  // An equality on the stripped name, not `LIKE '%::' || dst_name`: that
+  // can't use an index (hours on a WordPress install) and treats `_` as a
+  // wildcard. Served by symbols_method_short_idx (0011).
   await pool.query(
     `UPDATE edges e SET dst = s.id
      FROM symbols s
      WHERE e.project_id = $1 AND s.project_id = $1
        AND e.dst IS NULL AND s.kind = 'method'
-       AND s.name LIKE '%::' || e.dst_name`,
+       AND regexp_replace(s.name, '^.*::', '') = e.dst_name`,
     [project.id]
   );
   // PHP fully-qualified reference ("\App\Domain\Invoice") against a symbol
@@ -578,13 +581,28 @@ async function runIndex(project, root, log) {
            FROM documents d
           WHERE d.project_id = $1
        ),
-       resolved AS (
-         SELECT m.doc_id, min(e.id) AS sym_id, count(*) AS matches
+       -- Exact title, or a bare name against "Class::name". Two indexed
+       -- branches rather than one OR'd LIKE, for the same reasons as the
+       -- method-suffix edge pass; the branches are disjoint, so count(*)
+       -- below still counts distinct symbols.
+       matched AS (
+         SELECT m.doc_id, m.ident, e.id
            FROM mention m
            JOIN entities e
              ON e.project_id = $1 AND e.kind = 'symbol' AND e.deleted_at IS NULL
-            AND (e.title = m.ident OR e.title LIKE '%::' || m.ident)
-          GROUP BY m.doc_id, m.ident
+            AND e.title = m.ident
+         UNION ALL
+         SELECT m.doc_id, m.ident, e.id
+           FROM mention m
+           JOIN entities e
+             ON e.project_id = $1 AND e.kind = 'symbol' AND e.deleted_at IS NULL
+            AND e.title LIKE '%::%'
+            AND regexp_replace(e.title, '^.*::', '') = m.ident
+       ),
+       resolved AS (
+         SELECT doc_id, min(id) AS sym_id, count(*) AS matches
+           FROM matched
+          GROUP BY doc_id, ident
        )
        INSERT INTO entity_links (org_id, src_id, dst_id, relation)
        SELECT $2, doc_id, sym_id, 'MENTIONS' FROM resolved WHERE matches = 1
