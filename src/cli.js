@@ -24,9 +24,10 @@ import { findProjectMarker, needsProjectName, fillArgs } from "./projectResolve.
 import { upsertHook, removeHook } from "./hookInit.js";
 import { mergeGateSettings, removeGateSettings, mergeGitignore } from "./gateInit.js";
 import {
-  writeProjectCache, cachePath, HOOK_MODES, DEFAULT_MODE, DEFAULT_MCP_NAME,
+  writeProjectCache, readProjectCache, cachePath, cacheDir, HOOK_MODES, DEFAULT_MODE, DEFAULT_MCP_NAME,
 } from "./projectCache.js";
-import { ensureService, serviceStatus, stopService } from "./serviceManager.js";
+import { ensureService, serviceStatus, stopService, serviceStateDir } from "./serviceManager.js";
+import { removeUpdateCron, removeUpdateCheckFiles, removeIfEmpty } from "./uninstall.js";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
 import os from "node:os";
@@ -924,6 +925,22 @@ async function main() {
       // Reverse everything WayContext put outside its own directory. Cheap to
       // provide, and a product that can't be cleanly removed doesn't get installed.
       const globalDir = path.join(os.homedir(), ".claude");
+
+      // Stop the background service before its state goes, or the daemon
+      // keeps running with nothing left that knows its pid.
+      const service = await stopService();
+      if (service.stopped) console.log(`Stopped the background service (pid ${service.pid}).`);
+      if (fs.existsSync(serviceStateDir())) {
+        fs.rmSync(serviceStateDir(), { recursive: true, force: true });
+        console.log(`Removed ${serviceStateDir()}.`);
+      }
+
+      try {
+        if (removeUpdateCron()) console.log("Removed the update-check cron entry.");
+      } catch (e) {
+        console.log(`Could not remove the update-check cron entry (${e.message}); run ./check-update.sh --uninstall.`);
+      }
+      for (const file of removeUpdateCheckFiles()) console.log(`Removed ${file}.`);
       for (const settingsPath of [
         path.join(process.cwd(), ".claude", "settings.json"),
         path.join(globalDir, "settings.json"),
@@ -956,11 +973,15 @@ async function main() {
         }
       }
 
+      // Read before deleting: it is the only list of repos init may have written to.
+      const indexedRoots = readProjectCache().projects.map((p) => p.root_path).filter(Boolean);
       const cache = cachePath();
       if (fs.existsSync(cache)) {
         fs.rmSync(cache, { force: true });
         console.log(`Removed ${cache}.`);
       }
+      removeIfEmpty(path.dirname(serviceStateDir()));
+      removeIfEmpty(cacheDir());
 
       const completion = removeCompletion();
       if (completion.removed) console.log(`Removed ${completion.path}.`);
@@ -969,6 +990,18 @@ async function main() {
       console.log("  claude mcp remove --scope user waycontext");
       console.log("  npm unlink -g waycontext   # or: code-context-mcp, if installed before v0.2.0");
       console.log("  the codectx Postgres database (waycontext db, then DROP DATABASE)");
+      const userConfig = process.env.WAYCONTEXT_CONFIG
+        || path.join(os.homedir(), ".config", "waycontext", "config.json");
+      if (fs.existsSync(userConfig)) {
+        console.log(`  ${userConfig}   # your own config; holds DATABASE_URL`);
+      }
+      if (indexedRoots.length) {
+        // Left alone on purpose: these files are committed, and the section
+        // may have been edited since init wrote it.
+        console.log("\nRepos that may still have a ## WayContext section from `waycontext init`");
+        console.log("(CLAUDE.md, AGENTS.md, .github/copilot-instructions.md, .vscode/mcp.json):");
+        for (const root of indexedRoots) console.log(`  ${root}`);
+      }
       break;
     }
     case "delete_project": {

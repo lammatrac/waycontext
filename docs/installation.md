@@ -323,7 +323,7 @@ Project roots come from a small JSON cache (`~/.cache/waycontext/projects.json`)
 waycontext uninstall
 ```
 
-It removes the hook (project and global), the global CLAUDE.md section, and the cache, leaving your own content and any unrelated hooks intact. It prints — but does not run — the commands to unregister the MCP server, unlink the CLI, and drop the database.
+It stops the background service, removes the update-check cron entry, the hooks (project and global), the global CLAUDE.md section, the caches and tab completion, leaving your own content and any unrelated hooks intact. It prints — but does not run — the commands to unregister the MCP server, unlink the CLI, and drop the database.
 
 ## Why an embedding provider?
 

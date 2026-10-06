@@ -130,7 +130,7 @@ export const MANUAL_COMMANDS = [
       { usage: "gate uninstall", help: "remove the hook script and its settings.json entries" },
     ] },
   { name: "uninstall", section: "admin", usage: "uninstall",
-    help: "remove the hook, the global CLAUDE.md section and the project cache" },
+    help: "stop the service; remove hooks, cron entry, caches and completion" },
   { name: "rule", section: "knowledge", usage: "rule candidates [project] [--json]",
     subVerbs: ["candidates", "confirm", "reject"], flags: ["--json"],
     // No `args`: the project slot differs by sub-verb (`candidates [project]`

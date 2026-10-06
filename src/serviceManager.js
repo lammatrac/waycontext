@@ -13,6 +13,10 @@ const stateDir = path.join(os.homedir(), ".cache", "waycontext", "service");
 const statePath = path.join(stateDir, "state.json");
 const lockPath = path.join(stateDir, "ensure.lock");
 
+export function serviceStateDir() {
+  return stateDir;
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

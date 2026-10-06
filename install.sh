@@ -22,12 +22,12 @@ err()  { printf '\033[1;31mERROR:\033[0m %s\n' "$1" >&2; }
 # without Node the script died at that line with bash's own "node: command not
 # found" and this message, written for exactly that audience, never printed.
 if ! command -v node >/dev/null 2>&1; then
-  err "Node.js not found. Install Node.js >= 18 first: https://nodejs.org/en/download"
+  err "Node.js not found. Install Node.js >= 20 first: https://nodejs.org/en/download"
   exit 1
 fi
 NODE_MAJOR="$(node -v | sed 's/^v//' | cut -d. -f1)"
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  err "Node.js >= 18 required, found $(node -v)."
+if [ "$NODE_MAJOR" -lt 20 ]; then
+  err "Node.js >= 20 required, found $(node -v)."
   exit 1
 fi
 log "Node.js $(node -v) OK"

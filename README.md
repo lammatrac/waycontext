@@ -2,55 +2,15 @@
 
 MCP server that scans and indexes an entire codebase — not just listing symbols, but building a **relationship graph** (calls, imports, inheritance, WordPress hooks) plus **vector embeddings** in PostgreSQL/pgvector — so AI agents get comprehensive project context.
 
-## What it does
-
-- **Hybrid code search.** Postgres full-text and pgvector semantic search, fused with Reciprocal Rank Fusion — "purge cache after cron match update" finds the right function whether or not it shares words with your query.
-- **A real relationship graph.** `CALLS`, `INSTANTIATES`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, plus WordPress `REGISTERS_HOOK`/`FIRES_HOOK`. Ask for a symbol's blast radius before refactoring, not after.
-- **Git history, with no integration to configure.** Commits, per-file churn, `.mailmap` identities and issue references, indexed straight from the repo. `who_owns` decays by recency, so it answers who to ask *today*.
-- **Docs & ADRs alongside code.** `search_knowledge` ranks prose and code in one list, so an agent can answer *why* the code is shaped this way, not only where it lives.
-- **Rules an agent can't invent.** Normative sentences are extracted from ADRs and fix commits as *candidates*; nothing reaches an agent until a human confirms it by CLI.
-- **Engineering memory.** `remember`/`recall` so a gotcha debugged once outlives the session.
-- **Architecture as modules.** Churn, defect density and a risk score per module, plus co-change coupling and recurring bug clusters.
-- **One call that fuses all of it.** `compose_context` returns rules, code, docs, memory and past fixes for a task — cited, and packed into a token budget.
-- **Incremental by default.** SHA-256 per file, `git diff` scoping since the last indexed commit, deleted files pruned.
-- **Languages:** JavaScript, TypeScript, JSX/TSX, PHP, Python, Go — plus full
-  symbol extraction for CSS/SCSS, HTML, JSON, and XML.
-- **Every surface reads one registry.** MCP tools, CLI subcommands and HTTP routes are generated from the same operation list, so they cannot drift apart.
-
-## What it looks like
-
-Ask in English, with none of the words the code uses:
-
-```console
-$ waycontext search_code waycontext "how does it avoid re-indexing files that did not change" 3
-[
-  { "name": "runIndex",       "path": "src/indexer.js", "matched_via": ["vector"] },
-  { "name": "indexProject",   "path": "src/indexer.js", "matched_via": ["vector"] },
-  { "name": "upsertFileRow",  "path": "src/indexer.js", "matched_via": ["vector"],
-    "doc": "Shared by the code and doc branches: `files.hash` is what makes the
-            incremental skip work…" }
-]
-```
-
-Not one of those names contains "re-index", "change", or "avoid" — a grep for any of those
-words finds nothing useful. Then check the blast radius before touching something:
-
-```console
-$ waycontext get_callers waycontext embed
-[
-  { "caller": "embedFixCommits", "path": "src/knowledge/clusters.js", "relation": "CALLS", "line": 209 },
-  { "caller": "embedQuery",      "path": "src/embeddings.js",         "relation": "CALLS", "line": 125 }
-]
-```
-
-Both are real output from WayContext indexing its own repository. Every one of these is
-also an MCP tool, which is the point — your agent calls them itself instead of grepping.
-
-## Quick start
+## Installation
 
 **You need:** Node.js ≥ 20, and a PostgreSQL with the pgvector extension. Docker is the
 easiest way to get the latter. Budget a few hundred MB for the Postgres image and a couple of
 minutes for a first index; an embedding API key is optional (see the end of this section).
+
+Before you start, see [What gets written to your machine](#what-gets-written-to-your-machine)
+for every file and setting these steps touch, and [Uninstallation](#uninstallation) for how
+to reverse them.
 
 **1. Start a database.** The `pgvector/pgvector:pg16` image already contains the extension, so
 nothing is compiled:
@@ -143,6 +103,124 @@ See [Retrieval quality](docs/evaluation.md) and
 Full setup, per-OS notes and configuration: [Installation & configuration](docs/installation.md).
 Something broken? [Troubleshooting](docs/troubleshooting.md) is organised by symptom.
 
+## What gets written to your machine
+
+Everything WayContext creates or changes outside the directory it's installed in, which
+command does it, and how it comes back out. Nothing is written to a repo you index unless
+you run `waycontext init` (or one of the opt-in commands) in it.
+
+### Created or changed by installation
+
+| Path | What it is | Written by | Removed by |
+|---|---|---|---|
+| `waycontext-postgres` container + `waycontext-pgdata` Docker volume | The `codectx` database | `docker compose up` (step 1), or `install.sh` | `docker compose -f docker/docker-compose.yml down -v` |
+| `postgresql`, `postgresql-16-pgvector` packages; `codectx` role and database | Same, without Docker | `install.sh`, only when no database is reachable and Docker is unavailable (uses `sudo apt`) | By hand: `DROP DATABASE codectx; DROP ROLE codectx;` |
+| Global npm package / link (`waycontext`, `waycontext-mcp` binaries) | The CLI and MCP server | `npm install -g waycontext`, or `npm link` in `install.sh` | `npm uninstall -g waycontext` (or `npm unlink -g waycontext` for a clone) |
+| `~/.claude.json` → `mcpServers.waycontext` | MCP registration with Claude Code (user scope) | `claude mcp add` (step 4), or `install.sh` | `claude mcp remove --scope user waycontext` |
+| `~/.claude/hooks/waycontext_gate.py` | Pipeline gate hook — inert until a directory opts in | `install.sh` (`waycontext gate install`) | `waycontext uninstall` |
+| `~/.claude/settings.json` → `env.CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS` and the gate's `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` entries | Wires the gate hook into Claude Code; unrelated settings and hooks are left alone | `install.sh` (`waycontext gate install`) | `waycontext uninstall` |
+| `~/.cache/waycontext/service/` (`state.json`, `ensure.lock`) + a detached background process | Local HTTP service on `127.0.0.1` that serves review pages | `install.sh`, `npm install` (postinstall), `waycontext service ensure` | `waycontext uninstall` (or `waycontext service stop` to just stop it) |
+| `~/.cache/waycontext/projects.json` | Indexed-project list read by the MCP handshake, hook and tab completion | `index_project`, `waycontext hook install` / `hook refresh` | `waycontext uninstall` |
+| `<clone>/.env` (mode `600`) and `<clone>/.gitignore` | Generated DB password; gate ignore rules | `install.sh` — clone installs only, inside the clone | Deleting the clone |
+
+### Created only when you opt in
+
+| Path | Written by | Removed by |
+|---|---|---|
+| `~/.config/waycontext/config.json` (or `$WAYCONTEXT_CONFIG`) | You, by hand | You, by hand |
+| `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md` — a `## WayContext` section | `waycontext init`, in that repo, confirmed per file | Delete the section by hand |
+| `.vscode/mcp.json` → `servers.waycontext` | `waycontext init` | Delete the entry by hand |
+| `.claude/settings.json` (project) or `~/.claude/settings.json` (`--global`) — `PreToolUse` search hook | `waycontext hook install` | `waycontext hook uninstall` or `waycontext uninstall` |
+| `${XDG_DATA_HOME:-~/.local/share}/bash-completion/completions/waycontext` | `waycontext completion install` (`install.sh` refreshes it only if it already exists) | `waycontext completion uninstall` or `waycontext uninstall` |
+| A crontab line, plus `~/.cache/waycontext/status`, `last-notified-date`, `update-check.log` | `./check-update.sh --install` | `waycontext uninstall` or `./check-update.sh --uninstall` |
+| `docs/waycontext/<slug>/` (`graph.json`, `waycontext-review.html`) in the indexed repo | `create_reasoning_graph` / `update_reasoning_graph` | Delete the directory |
+| `.waycontext/knowledge/` (`rules.yaml`, `candidates.yaml`, `memories.yaml`) in the indexed repo | Knowledge export | Delete the directory |
+
+`install.sh` never edits `~/.claude/CLAUDE.md`. Versions before the current one did, and
+installed a global grep-blocking hook; `waycontext uninstall` cleans up both.
+
+## Uninstallation
+
+**1. Remove what WayContext wrote into your home directory.**
+
+```bash
+waycontext uninstall
+```
+
+`waycontext uninstall` stops the background service and deletes its state, removes the
+update-check cron entry and its status/log files, the search hook (from the current
+directory's `.claude/settings.json` and from `~/.claude/settings.json`), the gate hook script
+and its settings entries, the legacy `## WayContext Workflow` section in
+`~/.claude/CLAUDE.md`, `~/.cache/waycontext/projects.json`, and the tab-completion script.
+Your own content, other cron entries and unrelated hooks are kept. Run it from a repo where
+you used `waycontext hook install` to clear that repo's project-scoped hook too. It finishes
+by listing the indexed repos that may still carry a `## WayContext` section from
+`waycontext init` (step 3).
+
+**2. Remove the pieces `uninstall` deliberately leaves to you** — it prints these rather
+than running them:
+
+```bash
+claude mcp remove --scope user waycontext
+npm uninstall -g waycontext            # clone install: npm unlink -g waycontext
+docker compose -f docker/docker-compose.yml down -v   # drops the container AND its data
+rm -rf ~/.config/waycontext           # your own config file, if you created one
+```
+
+On an apt-provisioned database, drop it instead with
+`sudo -u postgres psql -c 'DROP DATABASE codectx;' -c 'DROP ROLE codectx;'`.
+
+**3. Per repo, if you ran `waycontext init`** (`uninstall` lists them, but leaves committed
+files alone): delete the `## WayContext` section from
+`CLAUDE.md`, `AGENTS.md` and `.github/copilot-instructions.md`, the `waycontext` entry in
+`.vscode/mcp.json`, and any `docs/waycontext/` or `.waycontext/` directories you don't want
+to keep. To drop one project's index without uninstalling, use
+`waycontext delete_project <project>`.
+
+## What it does
+
+- **Hybrid code search.** Postgres full-text and pgvector semantic search, fused with Reciprocal Rank Fusion — "purge cache after cron match update" finds the right function whether or not it shares words with your query.
+- **A real relationship graph.** `CALLS`, `INSTANTIATES`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, plus WordPress `REGISTERS_HOOK`/`FIRES_HOOK`. Ask for a symbol's blast radius before refactoring, not after.
+- **Git history, with no integration to configure.** Commits, per-file churn, `.mailmap` identities and issue references, indexed straight from the repo. `who_owns` decays by recency, so it answers who to ask *today*.
+- **Docs & ADRs alongside code.** `search_knowledge` ranks prose and code in one list, so an agent can answer *why* the code is shaped this way, not only where it lives.
+- **Rules an agent can't invent.** Normative sentences are extracted from ADRs and fix commits as *candidates*; nothing reaches an agent until a human confirms it by CLI.
+- **Engineering memory.** `remember`/`recall` so a gotcha debugged once outlives the session.
+- **Architecture as modules.** Churn, defect density and a risk score per module, plus co-change coupling and recurring bug clusters.
+- **One call that fuses all of it.** `compose_context` returns rules, code, docs, memory and past fixes for a task — cited, and packed into a token budget.
+- **Incremental by default.** SHA-256 per file, `git diff` scoping since the last indexed commit, deleted files pruned.
+- **Languages:** JavaScript, TypeScript, JSX/TSX, PHP, Python, Go — plus full
+  symbol extraction for CSS/SCSS, HTML, JSON, and XML.
+- **Every surface reads one registry.** MCP tools, CLI subcommands and HTTP routes are generated from the same operation list, so they cannot drift apart.
+
+## What it looks like
+
+Ask in English, with none of the words the code uses:
+
+```console
+$ waycontext search_code waycontext "how does it avoid re-indexing files that did not change" 3
+[
+  { "name": "runIndex",       "path": "src/indexer.js", "matched_via": ["vector"] },
+  { "name": "indexProject",   "path": "src/indexer.js", "matched_via": ["vector"] },
+  { "name": "upsertFileRow",  "path": "src/indexer.js", "matched_via": ["vector"],
+    "doc": "Shared by the code and doc branches: `files.hash` is what makes the
+            incremental skip work…" }
+]
+```
+
+Not one of those names contains "re-index", "change", or "avoid" — a grep for any of those
+words finds nothing useful. Then check the blast radius before touching something:
+
+```console
+$ waycontext get_callers waycontext embed
+[
+  { "caller": "embedFixCommits", "path": "src/knowledge/clusters.js", "relation": "CALLS", "line": 209 },
+  { "caller": "embedQuery",      "path": "src/embeddings.js",         "relation": "CALLS", "line": 125 }
+]
+```
+
+Both are real output from WayContext indexing its own repository. Every one of these is
+also an MCP tool, which is the point — your agent calls them itself instead of grepping.
+
 ## Documentation
 
 | Document | What's in it |
@@ -206,6 +284,13 @@ Claude Code only, three escalating modes. See
 - `waycontext serve` has **no authentication** and binds to `127.0.0.1` only. Auth, rate limiting and multi-tenancy are deliberately absent rather than half-present.
 
 ## Changes
+
+- 2026-10-06: `waycontext uninstall` now also stops the background service and deletes
+  `~/.cache/waycontext/service/`, removes the `check-update.sh` cron entry (other entries
+  untouched) with its status/log files, and ends by listing indexed repos that may still
+  carry a `waycontext init` section. `install.sh` now requires Node.js >= 20, matching
+  `engines.node`. The README leads with installation, a full list of what gets written to
+  the machine, and uninstallation.
 
 - 2026-08-08: Added automatic local background service management for `waycontext serve` workflows (`service ensure|status|stop`, install/update/postinstall auto-ensure, duplicate-start protection, version-aware restart, and worker recovery), integrated reasoning review hosting at `GET /reviews/:project/:slug`, and returned `review_url` from reasoning graph create/update responses so CLI/MCP/agent flows can open reviews directly.
 

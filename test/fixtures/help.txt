@@ -68,7 +68,7 @@ Setup & administration:
   hook refresh                              rebuild the hook's project cache from the database
   gate install                              copy the hook script, merge settings.json, merge .gitignore
   gate uninstall                            remove the hook script and its settings.json entries
-  uninstall                                 remove the hook, the global CLAUDE.md section and the project cache
+  uninstall                                 stop the service; remove hooks, cron entry, caches and completion
   serve [--port=4747] [--host=…]            HTTP API + web knowledge graph on localhost (no auth)
   service ensure [--quiet]                  start or reuse the managed local service
   service status                            show service health, pid and version
