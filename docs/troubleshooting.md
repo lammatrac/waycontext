@@ -220,12 +220,15 @@ waycontext reembed --all --dry-run
 waycontext reembed <project>          # or --all; spends embedding tokens
 ```
 
-`reembed` clears the stale vectors and runs an index pass, whose embedding sweep re-embeds
-them. Text that any project in the org has already embedded with the current model is
-copied rather than sent to the provider (`embed_hash`, migration 0017), so sites sharing
-the same plugins pay for that code once — the dry run's counts are rows, not tokens, and
-overstate the bill on a multi-site install. Fix-commit message vectors are re-embedded the next time bug clusters are derived
-(after the next commit); until then clustering uses the terms-only grouping.
+`reembed` clears the stale vectors and re-embeds exactly those rows — it does not index code
+that changed since the project's last index (it lists those files instead; `waycontext index`
+picks them up, and embeds their new symbols, when you choose to). Fix-commit message
+vectors are re-embedded in the same run.
+
+Text that any project in the org has already embedded with the current model is copied
+rather than sent to the provider (`embed_hash`, migration 0017), so sites sharing the same
+plugins pay for that code once — the dry run's counts are rows, not tokens, and overstate
+the bill on a multi-site install.
 
 ### Multi-word queries miss a camelCase symbol
 

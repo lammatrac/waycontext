@@ -269,6 +269,89 @@ export async function embedWithReuse(table, items, {
   return { embedded: embedded + reusedIds.size, reused: reusedIds.size, failed };
 }
 
+/**
+ * Embed every symbol and chunk in `project` that has no vector: the rows this
+ * run just wrote (`pending`), plus any left NULL by an earlier crash, a failed
+ * provider batch, or `waycontext reembed` clearing a stale model's vectors.
+ *
+ * Touches embeddings only -- no parsing, no git diff, no new rows -- which is
+ * what lets `reembed` replace vectors without also indexing (and paying to
+ * embed) every code change made since the project was last indexed.
+ */
+export async function embedMissing(project, { pending = [], embedFn, log = () => {} } = {}) {
+  embedFn ??= (texts) => embed(texts, "document", project.id);
+  const result = {
+    symbols: { embedded: 0, reused: 0, failed: 0 },
+    chunks: { embedded: 0, reused: 0, failed: 0 },
+  };
+
+  // Heal symbols left without an embedding by an earlier crash or a failed
+  // Voyage batch: their file's hash already matched on this run (they were
+  // fully committed before whatever interrupted embedding), so the
+  // hash-skip above never re-queues them. Re-checking embedding IS NULL
+  // directly means a plain re-run of index/reindex retries them, without
+  // needing a full reindex or a separate resume command.
+  const items = pending.map((p) => ({ id: p.symbolId, text: p.text }));
+  const pendingIds = new Set(items.map((p) => p.id));
+  const missing = await pool.query(
+    `SELECT s.id, f.path, s.kind, s.name, s.doc, s.body
+     FROM symbols s JOIN files f ON f.id = s.file_id
+     WHERE s.project_id = $1 AND s.embedding IS NULL`,
+    [project.id]
+  );
+  for (const r of missing.rows) {
+    if (pendingIds.has(r.id)) continue;
+    items.push({ id: r.id, text: [`// ${r.path} (${r.kind} ${r.name})`, r.doc || "", r.body].join("\n") });
+  }
+
+  if (items.length) {
+    log(`Embedding ${items.length} symbols…`);
+    // A failed batch leaves its embeddings NULL rather than losing vectors
+    // already fetched for other batches; the recovery query above picks those
+    // symbols back up on the next run.
+    result.symbols = await embedWithReuse("symbols", items, {
+      embedFn, orgId: project.org_id, batchSize: 64, concurrency: config.embedConcurrency, log,
+    });
+    if (result.symbols.failed) {
+      log(`${result.symbols.failed} symbols left without embeddings; will retry on next index run`);
+    }
+  }
+
+  // Chunks, on exactly the same terms as symbols: the query is the whole pending
+  // set (new, edited, or left over from a crashed run), because whoever wrote
+  // the chunk nulled the embedding of any row whose content changed.
+  //
+  // Joined on entities rather than documents so every chunk-bearing kind is
+  // covered -- documents in Phase 2, memories in Phase 3 -- and gated on
+  // embeddings alone, since a memory must still embed when doc ingestion is off.
+  const chunks = await pool.query(
+    `SELECT c.id, c.heading_path, c.content,
+            COALESCE(d.path, e.natural_key) AS label,
+            COALESCE(d.doc_type, e.kind)    AS sublabel
+       FROM chunks c
+       JOIN entities e ON e.id = c.entity_id
+       LEFT JOIN documents d ON d.entity_id = c.entity_id
+      WHERE c.project_id = $1 AND c.embedding IS NULL
+      ORDER BY c.id`,
+    [project.id]
+  );
+  if (chunks.rows.length) {
+    log(`Embedding ${chunks.rows.length} chunk(s)…`);
+    result.chunks = await embedWithReuse(
+      "chunks",
+      chunks.rows.map((r) => ({
+        id: r.id,
+        text: [`// ${r.label} (${r.sublabel})`, r.heading_path || "", r.content].join("\n"),
+      })),
+      {
+        embedFn, orgId: project.org_id, batchSize: 32, concurrency: config.embedConcurrency,
+        log, label: "Chunk embedding",
+      }
+    );
+  }
+  return result;
+}
+
 /** Records elapsed time per phase; each `mark` closes the phase since the last one. */
 function phaseTimer() {
   const timings = {};
@@ -1001,87 +1084,8 @@ async function runIndex(project, root, log) {
 
   // embeddings
   if (embeddingsEnabled()) {
-    // Heal symbols left without an embedding by an earlier crash or a failed
-    // Voyage batch: their file's hash already matched on this run (they were
-    // fully committed before whatever interrupted embedding), so the
-    // hash-skip above never re-queues them. Re-checking embedding IS NULL
-    // directly means a plain re-run of index/reindex retries them, without
-    // needing a full reindex or a separate resume command.
-    const pendingIds = new Set(pendingEmbeds.map((p) => p.symbolId));
-    const missing = await pool.query(
-      `SELECT s.id, f.path, s.kind, s.name, s.doc, s.body
-       FROM symbols s JOIN files f ON f.id = s.file_id
-       WHERE s.project_id = $1 AND s.embedding IS NULL`,
-      [project.id]
-    );
-    for (const r of missing.rows) {
-      if (pendingIds.has(r.id)) continue;
-      pendingEmbeds.push({
-        symbolId: r.id,
-        text: [`// ${r.path} (${r.kind} ${r.name})`, r.doc || "", r.body].join("\n"),
-      });
-    }
-  }
-
-  if (pendingEmbeds.length) {
-    log(`Embedding ${pendingEmbeds.length} symbols…`);
-    // A failed batch leaves its embeddings NULL rather than losing vectors
-    // already fetched for other batches; the recovery query above picks those
-    // symbols back up on the next index run.
-    const { failed: embedFailed } = await embedWithReuse(
-      "symbols",
-      pendingEmbeds.map((p) => ({ id: p.symbolId, text: p.text })),
-      {
-        embedFn: (texts) => embed(texts, "document", project.id),
-        orgId: project.org_id,
-        batchSize: 64,
-        concurrency: config.embedConcurrency,
-        log,
-      }
-    );
-    if (embedFailed) {
-      log(`${embedFailed} symbols left without embeddings; will retry on next index run`);
-    }
-  }
-
-  // Chunks, on exactly the same terms as symbols: the query is the whole pending
-  // set (new, edited, or left over from a crashed run), because whoever wrote
-  // the chunk nulled the embedding of any row whose content changed.
-  //
-  // Joined on entities rather than documents so every chunk-bearing kind is
-  // covered -- documents in Phase 2, memories in Phase 3 -- and gated on
-  // embeddings alone, since a memory must still embed when doc ingestion is off.
-  if (embeddingsEnabled()) {
-    const pending = await pool.query(
-      `SELECT c.id, c.heading_path, c.content,
-              COALESCE(d.path, e.natural_key) AS label,
-              COALESCE(d.doc_type, e.kind)    AS sublabel
-         FROM chunks c
-         JOIN entities e ON e.id = c.entity_id
-         LEFT JOIN documents d ON d.entity_id = c.entity_id
-        WHERE c.project_id = $1 AND c.embedding IS NULL
-        ORDER BY c.id`,
-      [project.id]
-    );
-    if (pending.rows.length) {
-      log(`Embedding ${pending.rows.length} chunk(s)…`);
-      const { embedded } = await embedWithReuse(
-        "chunks",
-        pending.rows.map((r) => ({
-          id: r.id,
-          text: [`// ${r.label} (${r.sublabel})`, r.heading_path || "", r.content].join("\n"),
-        })),
-        {
-          embedFn: (texts) => embed(texts, "document", project.id),
-          orgId: project.org_id,
-          batchSize: 32,
-          concurrency: config.embedConcurrency,
-          log,
-          label: "Chunk embedding",
-        }
-      );
-      docStats.embedded += embedded;
-    }
+    const { chunks } = await embedMissing(project, { pending: pendingEmbeds, log });
+    docStats.embedded += chunks.embedded;
   }
   timer.mark("embeddings");
 

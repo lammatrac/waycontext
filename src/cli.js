@@ -5,7 +5,9 @@ import { spawn } from "node:child_process";
 import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
 import { migrationStatus } from "./migrate.js";
 import { embeddingModelId, clearStaleEmbeddings } from "./embeddings.js";
-import { indexProject } from "./indexer.js";
+import { embedMissing } from "./indexer.js";
+import { embedFixCommits } from "./knowledge/clusters.js";
+import { getChangedFiles } from "./gitDiff.js";
 import { backfillProjectIdentity, identityBackfillStatus } from "./backfillIdentity.js";
 import { listCandidates, setRuleState } from "./knowledge/rules.js";
 import { exportKnowledge, importKnowledge } from "./knowledge/knowledgeFiles.js";
@@ -1048,7 +1050,8 @@ async function main() {
     case "reembed": {
       // Explicit rather than automatic on every index run: re-embedding a
       // WordPress install costs tens of millions of tokens, which switching
-      // VOYAGE_MODEL should not spend behind the user's back.
+      // VOYAGE_MODEL should not spend behind the user's back. Embeddings only:
+      // it never indexes code changes (see below).
       const dryRun = args.includes("--dry-run");
       const all = args.includes("--all");
       const name = args.find((a) => !a.startsWith("--"));
@@ -1076,14 +1079,44 @@ async function main() {
           `${p.name}: ${stale.symbols} symbols, ${stale.chunks} chunks, ${stale.commits} commit messages ` +
           (dryRun ? "would be re-embedded" : "cleared")
         );
-        if (dryRun || !total) continue;
-        if (!p.root_path || !fs.existsSync(p.root_path)) {
-          console.log(`  · root ${p.root_path ?? "(none)"} not found; run \`waycontext index ${p.name} <path>\` to embed them`);
-          continue;
+        // Code changed since the last index is deliberately left alone: a
+        // full index pass here once embedded ~50M tokens of new code that
+        // nobody had asked to pay for. Say so, so it is a choice, not a surprise.
+        const changes = p.root_path && fs.existsSync(p.root_path)
+          ? await getChangedFiles(p.root_path, p.last_indexed_sha).catch(() => null)
+          : null;
+        if (changes?.changed.length || changes?.deleted.length) {
+          console.log(
+            `  · ${changes.changed.length} changed / ${changes.deleted.length} deleted file(s) since the last ` +
+            `index are not included; \`waycontext index ${p.name}\` indexes (and embeds) them`
+          );
         }
-        // The index run's `embedding IS NULL` sweep picks the cleared rows up;
-        // commit messages are re-embedded the next time clusters are derived.
-        await indexProject(p.name, p.root_path, (m) => console.log("  ·", m));
+        if (dryRun || !total) continue;
+
+        // Same per-project lock as indexProject, so an index started meanwhile
+        // can't embed the same NULL rows twice.
+        const lock = await pool.connect();
+        try {
+          const got = await lock.query("SELECT pg_try_advisory_lock($1) AS ok", [p.id]);
+          if (!got.rows[0].ok) {
+            console.log("  · an index run holds this project; its embedding sweep will re-embed the cleared rows");
+            continue;
+          }
+          try {
+            const log = (m) => console.log("  ·", m);
+            const { symbols, chunks } = await embedMissing(p, { log });
+            const commits = await embedFixCommits(p, log);
+            console.log(
+              `  · done: ${symbols.embedded} symbols (${symbols.reused} reused), ` +
+              `${chunks.embedded} chunks (${chunks.reused} reused), ${commits} commit messages` +
+              (symbols.failed + chunks.failed ? `; ${symbols.failed + chunks.failed} failed, re-run to retry` : "")
+            );
+          } finally {
+            await lock.query("SELECT pg_advisory_unlock($1)", [p.id]);
+          }
+        } finally {
+          lock.release();
+        }
       }
       break;
     }

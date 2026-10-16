@@ -191,7 +191,7 @@ function parseVector(raw) {
  * same embed-on-NULL terms as chunks: only is_fix, only NULL, so a re-derive
  * costs nothing and an interrupted run heals on the next one.
  */
-async function embedFixCommits(project, log) {
+export async function embedFixCommits(project, log = () => {}) {
   const pending = await pool.query(
     `SELECT entity_id, subject, body FROM commits
       WHERE project_id = $1 AND is_fix AND message_embedding IS NULL`,
