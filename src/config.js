@@ -12,7 +12,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  *
  * Precedence, highest first:
  *   1. process.env                          (explicit, and what CI uses)
- *   2. ./.env                               (the project you're working in)
+ *   2. ./.env                               (the project you're working in;
+ *                                            its plain DATABASE_URL is ignored)
  *   3. <install dir>/.env                   (a git clone -- the original layout)
  *   4. ~/.config/waycontext/config.json     (or $WAYCONTEXT_CONFIG)
  *   5. built-in defaults
@@ -28,26 +29,53 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // configuration only from the environment (and the JSON file). Useful in
 // containers and CI, where a stray .env inherited from a bind-mounted source
 // tree would otherwise silently override the intended settings.
-// Which .env file each key came from, so an error can name it. dotenv folds
-// both files into process.env indistinguishably, and "check your environment"
-// is unhelpful advice when the value actually came from a .env two directories
-// away that the user forgot existed.
-const dotenvSources = {};
+// Keys that a project's own .env routinely sets for its *own* app. Run from such
+// a project, `./.env` would otherwise hand WayContext the app's database -- a
+// plain Postgres without pgvector, or a SQLAlchemy-style URL pg can't parse --
+// and every command fails against a server that was never WayContext's. These
+// are skipped from `./.env` only; the namespaced WAYCONTEXT_DATABASE_URL is the
+// way to point WayContext at a database from a project .env.
+const PROJECT_DOTENV_IGNORED = new Set(["DATABASE_URL"]);
 
-if (process.env.WAYCONTEXT_IGNORE_DOTENV !== "1") {
-  for (const file of [
-    path.join(process.cwd(), ".env"),
-    path.join(__dirname, "..", ".env"),
-  ]) {
-    const preexisting = new Set(Object.keys(process.env));
-    const { parsed } = dotenv.config({ path: file });
-    if (!parsed) continue;
-    // dotenv never overwrites, so a key absent beforehand is one this file set.
-    for (const key of Object.keys(parsed)) {
-      if (!preexisting.has(key)) dotenvSources[key] = file;
+/**
+ * Fold the .env files into `env`, earlier files winning (dotenv never overwrites).
+ *
+ * `files[0]` is the project's `./.env`, where PROJECT_DOTENV_IGNORED keys are
+ * skipped. Returns which file set each key -- dotenv folds them into process.env
+ * indistinguishably, and "check your environment" is unhelpful advice when the
+ * value actually came from a .env two directories away that the user forgot
+ * existed -- plus which project keys were skipped, so an error can say so.
+ */
+export function loadDotenvFiles(files, env = process.env) {
+  const sources = {};
+  const ignored = {};
+  files.forEach((file, i) => {
+    let parsed;
+    try {
+      parsed = dotenv.parse(fs.readFileSync(file));
+    } catch {
+      return;
     }
-  }
+    for (const [key, value] of Object.entries(parsed)) {
+      if (i === 0 && PROJECT_DOTENV_IGNORED.has(key)) {
+        ignored[key] = file;
+        continue;
+      }
+      if (Object.hasOwn(env, key)) continue;
+      env[key] = value;
+      sources[key] = file;
+    }
+  });
+  return { sources, ignored };
 }
+
+const { sources: dotenvSources, ignored: ignoredDotenv } =
+  process.env.WAYCONTEXT_IGNORE_DOTENV === "1"
+    ? { sources: {}, ignored: {} }
+    : loadDotenvFiles([path.join(process.cwd(), ".env"), path.join(__dirname, "..", ".env")]);
+
+/** Project `./.env` keys that were deliberately not applied, keyed by name. */
+export { ignoredDotenv };
 
 const configFilePath =
   process.env.WAYCONTEXT_CONFIG ||
@@ -117,8 +145,23 @@ function optionalNumber(envKey) {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * WAYCONTEXT_DATABASE_URL first, then DATABASE_URL. The namespaced key exists so
+ * a project .env can configure WayContext without colliding with the app's own
+ * DATABASE_URL; the winner's source is recorded under DATABASE_URL, which is the
+ * key every error message asks about.
+ */
+function databaseUrl() {
+  const namespaced = setting("WAYCONTEXT_DATABASE_URL", null);
+  if (namespaced !== null) {
+    sources.DATABASE_URL = `WAYCONTEXT_DATABASE_URL, ${describeSource("WAYCONTEXT_DATABASE_URL")}`;
+    return namespaced;
+  }
+  return setting("DATABASE_URL", "postgres://codectx:codectx@localhost:5432/codectx");
+}
+
 export const config = {
-  databaseUrl: setting("DATABASE_URL", "postgres://codectx:codectx@localhost:5432/codectx"),
+  databaseUrl: databaseUrl(),
   embeddingProvider: setting("EMBEDDING_PROVIDER", "none"),
   voyage: {
     apiKey: setting("VOYAGE_API_KEY", ""),

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { config, describeSource } from "./config.js";
+import { config, describeSource, ignoredDotenv } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,7 +42,15 @@ export function redactUrl(url) {
 
 function databaseHint() {
   const url = redactUrl(config.databaseUrl);
-  return `WayContext used ${url} (from: ${describeSource("DATABASE_URL")}).`;
+  const lines = [`WayContext used ${url} (from: ${describeSource("DATABASE_URL")}).`];
+  const skipped = ignoredDotenv.DATABASE_URL;
+  if (skipped) {
+    lines.push(
+      `DATABASE_URL in ${skipped} was ignored: a project's .env describes its own app's database.`,
+      "Set WAYCONTEXT_DATABASE_URL there instead if you meant it for WayContext.",
+    );
+  }
+  return lines.join("\n");
 }
 
 function providerKeyMissing(provider) {
@@ -120,14 +128,21 @@ export function friendlyError(e) {
     };
   }
 
-  // 42704 = undefined_object, which is what CREATE EXTENSION vector raises when
-  // pgvector isn't installed in the server.
-  if (code === "42704" && /vector/i.test(msg)) {
+  // 42704 = undefined_object, which is what CREATE EXTENSION vector raises on
+  // some servers when pgvector isn't installed; 0A000 = feature_not_supported,
+  // which is what PostgreSQL 13+ raises ("extension "vector" is not available").
+  // Either way it is far more often the wrong server -- a project's own Postgres
+  // -- than a broken WayContext one, so say which server it was.
+  if ((code === "42704" || code === "0A000") && /vector/i.test(msg)) {
     return {
       message: "This PostgreSQL doesn't have the pgvector extension available.",
       hint: [
-        "Use the pgvector/pgvector:pg16 image (docker/docker-compose.yml does),",
-        "or install the extension package for your server -- see docs/installation.md.",
+        databaseHint(),
+        "",
+        "If that isn't WayContext's database, set WAYCONTEXT_DATABASE_URL (or DATABASE_URL in",
+        "the environment) to the right one. Otherwise use the pgvector/pgvector:pg16 image",
+        "(docker/docker-compose.yml does), or install the extension package for your server --",
+        "see docs/installation.md.",
       ].join("\n"),
     };
   }
