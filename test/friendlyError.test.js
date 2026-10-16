@@ -78,6 +78,18 @@ test("missing pgvector is distinguished from other undefined objects", () => {
   assert.equal(friendlyError(other), null, "an unrelated 42704 should not be claimed");
 });
 
+test("a server without the pgvector package installed is explained, with the URL used", () => {
+  const e = Object.assign(new Error('extension "vector" is not available'), { code: "0A000" });
+  const out = friendlyError(e);
+  assert.match(out.message, /pgvector/);
+  // Usually the wrong server rather than a broken one, so name the one it tried.
+  assert.match(out.hint, /WayContext used postgres:\/\//);
+  assert.match(out.hint, /WAYCONTEXT_DATABASE_URL/);
+
+  const other = Object.assign(new Error("feature not supported"), { code: "0A000" });
+  assert.equal(friendlyError(other), null, "an unrelated 0A000 should not be claimed");
+});
+
 test("a rejected embedding key points at the provider's env var", () => {
   const e = new Error('Voyage API 401: {"detail":"invalid key"}');
   const out = friendlyError(e);

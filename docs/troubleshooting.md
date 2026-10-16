@@ -18,6 +18,12 @@ Set `WAYCONTEXT_IGNORE_DOTENV=1` to skip the `.env` files entirely and configure
 the environment. If a value isn't taking effect, check for a `.env` in your current working
 directory shadowing the one you edited.
 
+The one exception: a plain `DATABASE_URL` in `./.env` is **ignored**, because in a project's
+own `.env` it is that app's database, not WayContext's. Running `waycontext index` from such a
+project used to connect to the app's Postgres and fail with `extension "vector" is not
+available`. To point WayContext at a database from a project `.env`, use
+`WAYCONTEXT_DATABASE_URL`, which takes precedence over `DATABASE_URL` from any source.
+
 > **Every command takes `--debug`** (or `WAYCONTEXT_DEBUG=1`), which prints the underlying
 > stack trace instead of the one-line explanation. Worth reaching for when a message here
 > doesn't match what you're seeing.

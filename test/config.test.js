@@ -113,4 +113,45 @@ test("config file values of the wrong type are coerced to strings", async () => 
   assert.equal(cfg.orgSlug, "42");
 });
 
+test("a project's own DATABASE_URL in ./.env does not override WayContext's", async () => {
+  const { loadDotenvFiles } = await import(`../src/config.js?case=${counter++}`);
+  const projectFile = path.join(dir, `project-${counter}.env`);
+  const installFile = path.join(dir, `install-${counter}.env`);
+  fs.writeFileSync(projectFile, "DATABASE_URL=postgresql+psycopg://app@localhost:55432/app\nORG_SLUG=from-project\n");
+  fs.writeFileSync(installFile, "DATABASE_URL=postgres://codectx@localhost:5432/codectx\n");
+
+  const env = {};
+  const { sources, ignored } = loadDotenvFiles([projectFile, installFile], env);
+  assert.equal(env.DATABASE_URL, "postgres://codectx@localhost:5432/codectx");
+  assert.equal(sources.DATABASE_URL, installFile);
+  assert.deepEqual(ignored, { DATABASE_URL: projectFile });
+  // Only the generic key is skipped; WayContext's own settings still apply.
+  assert.equal(env.ORG_SLUG, "from-project");
+});
+
+test("WAYCONTEXT_DATABASE_URL in ./.env is honoured and wins over DATABASE_URL", async () => {
+  const { loadDotenvFiles } = await import(`../src/config.js?case=${counter++}`);
+  const projectFile = path.join(dir, `project-${counter}.env`);
+  fs.writeFileSync(projectFile, "WAYCONTEXT_DATABASE_URL=postgres://wc@localhost:5432/wc\n");
+  const env = {};
+  loadDotenvFiles([projectFile, path.join(dir, "missing.env")], env);
+  assert.equal(env.WAYCONTEXT_DATABASE_URL, "postgres://wc@localhost:5432/wc");
+
+  const cfg = await loadConfig({
+    WAYCONTEXT_DATABASE_URL: "postgres://wc@localhost:5432/wc",
+    DATABASE_URL: "postgres://app@localhost:5432/app",
+    WAYCONTEXT_CONFIG: undefined,
+  });
+  assert.equal(cfg.databaseUrl, "postgres://wc@localhost:5432/wc");
+});
+
+test("a DATABASE_URL already in the environment is still used as before", async () => {
+  const cfg = await loadConfig({
+    WAYCONTEXT_DATABASE_URL: undefined,
+    DATABASE_URL: "postgres://env@localhost/envdb",
+    WAYCONTEXT_CONFIG: undefined,
+  });
+  assert.equal(cfg.databaseUrl, "postgres://env@localhost/envdb");
+});
+
 process.on("exit", () => fs.rmSync(dir, { recursive: true, force: true }));

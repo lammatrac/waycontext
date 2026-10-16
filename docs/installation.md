@@ -82,7 +82,7 @@ It runs every 5 minutes rather than at a fixed time of day — a personal laptop
 
 ## 1. PostgreSQL + pgvector
 
-> **Configuration sources.** Settings are read, highest precedence first, from: the environment, `./.env` in the directory you run from, `.env` next to the install, `~/.config/waycontext/config.json` (override the path with `$WAYCONTEXT_CONFIG`), then built-in defaults. Set `WAYCONTEXT_IGNORE_DOTENV=1` to skip the `.env` files and configure purely from the environment.
+> **Configuration sources.** Settings are read, highest precedence first, from: the environment, `./.env` in the directory you run from (except a plain `DATABASE_URL`, which there belongs to the project's own app -- use `WAYCONTEXT_DATABASE_URL` instead), `.env` next to the install, `~/.config/waycontext/config.json` (override the path with `$WAYCONTEXT_CONFIG`), then built-in defaults. Set `WAYCONTEXT_IGNORE_DOTENV=1` to skip the `.env` files and configure purely from the environment.
 >
 > **No compiler needed.** The tree-sitter packages ship prebuilt binaries — every grammar covers linux-x64, darwin-x64, darwin-arm64 and win32-x64, and the Python/Go grammars add linux-arm64 and win32-arm64. Only platforms with no prebuild (musl/Alpine, BSD, and linux-arm64 for the older grammars) compile from source and need `build-essential` + `python3`; `install.sh` offers those there and nowhere else.
 
