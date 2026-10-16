@@ -116,11 +116,13 @@ test("a budget too small for even one item still keeps the rules", async () => {
 });
 
 test("a budget that fits the rules and little else drops the expensive items first", async () => {
-  const r = await composeContext(PROJECT, "change `charge` in src/payments/api.js", { budget: 40 });
+  // 25 fits the rule but not the one-line body of charge() (~20 tokens more),
+  // which full-text search now finds from the task's single word "charge".
+  const r = await composeContext(PROJECT, "change `charge` in src/payments/api.js", { budget: 25 });
   assert.ok(r.context.some((i) => i.type === "rule"));
   assert.equal(r.context.some((i) => i.snippet), false, "nothing carrying a body survived");
   assert.ok(r.meta.dropped_count > 0);
-  assert.ok(r.meta.used_tokens <= 40 || r.meta.over_budget);
+  assert.ok(r.meta.used_tokens <= 25 || r.meta.over_budget);
 });
 
 test("paths the project does not have are reported rather than swallowed", async () => {

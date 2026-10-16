@@ -16,7 +16,7 @@ import { extractPhpBlocks } from "./ui/phpBlocks.js";
 import { readBlockManifest } from "./ui/blockManifest.js";
 import { discoverCatalogs, resolveKey, resolveKeyAnyDomain } from "./ui/i18nCatalog.js";
 import { identityBackfillStatus, backfillProjectIdentity } from "./backfillIdentity.js";
-import { embed, embeddingsEnabled } from "./embeddings.js";
+import { embed, embeddingsEnabled, embeddingModelId } from "./embeddings.js";
 import { config } from "./config.js";
 import { getChangedFiles, getHeadSha } from "./gitDiff.js";
 import { assignSymbolKeys, matchRenames } from "./identity.js";
@@ -171,18 +171,18 @@ export async function embedPending(items, {
 }
 
 /**
- * Store a batch of vectors in one UPDATE. `rows` is `[{ id, vector }]`; null
- * vectors are skipped. `table` is a fixed identifier from this module, never
- * user input.
+ * Store a batch of vectors in one UPDATE, stamped with the model that made
+ * them. `rows` is `[{ id, vector }]`; null vectors are skipped. `table` is a
+ * fixed identifier from this module, never user input.
  */
 export async function writeEmbeddings(table, rows) {
   const present = rows.filter((r) => r.vector);
   if (!present.length) return;
   await pool.query(
-    `UPDATE ${table} t SET embedding = v.vec::vector
+    `UPDATE ${table} t SET embedding = v.vec::vector, embedding_model = $3
        FROM unnest($1::bigint[], $2::text[]) AS v(id, vec)
       WHERE t.id = v.id`,
-    [present.map((r) => r.id), present.map((r) => toVector(r.vector))]
+    [present.map((r) => r.id), present.map((r) => toVector(r.vector)), embeddingModelId()]
   );
 }
 

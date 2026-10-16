@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import { recordEmbeddingUsage } from "./db.js";
+import { pool, recordEmbeddingUsage } from "./db.js";
 
 const BATCH_SIZE = 64;
 
@@ -46,6 +46,52 @@ async function openaiEmbed(texts) {
 
 export function embeddingsEnabled() {
   return config.embeddingProvider !== "none";
+}
+
+/**
+ * "provider:model" for the configured embedding model, or null when off.
+ *
+ * Stamped on every stored vector and compared on every read: vectors from two
+ * models live in unrelated spaces, so a query must only ever be ranked
+ * against vectors its own model produced.
+ */
+export function embeddingModelId() {
+  if (!embeddingsEnabled()) return null;
+  const model =
+    config.embeddingProvider === "voyage" ? config.voyage.model : config.openai.model;
+  return `${config.embeddingProvider}:${model}`;
+}
+
+/**
+ * Null every vector in `project` that the configured model did not produce,
+ * so the next index run's `embedding IS NULL` sweep re-embeds it.
+ *
+ * A row's model is its own stamp, or for rows written before stamping
+ * existed, the project's legacy_embedding_model (see migration 0014). A row
+ * with neither is of unknown provenance and counts as stale.
+ *
+ * Returns the number of rows affected per table; `dryRun` only counts them.
+ */
+export async function clearStaleEmbeddings(project, { dryRun = false } = {}) {
+  const current = embeddingModelId();
+  if (!current) throw new Error("Embeddings are disabled (EMBEDDING_PROVIDER=none); nothing to re-embed with.");
+  const params = [project.id, current, project.legacy_embedding_model ?? null];
+  const stale = (vector, model) =>
+    `project_id = $1 AND ${vector} IS NOT NULL AND COALESCE(${model}, $3::text) IS DISTINCT FROM $2`;
+
+  const run = (table, vector, model) =>
+    pool.query(
+      dryRun
+        ? `SELECT count(*)::int AS n FROM ${table} WHERE ${stale(vector, model)}`
+        : `UPDATE ${table} SET ${vector} = NULL WHERE ${stale(vector, model)}`,
+      params
+    ).then((r) => (dryRun ? r.rows[0].n : r.rowCount));
+
+  return {
+    symbols: await run("symbols", "embedding", "embedding_model"),
+    chunks: await run("chunks", "embedding", "embedding_model"),
+    commits: await run("commits", "message_embedding", "message_embedding_model"),
+  };
 }
 
 /**

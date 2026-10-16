@@ -20,9 +20,13 @@ so perfect recall is neither achievable nor the goal. It is for comparing WayCon
 WayContext across a retrieval change.
 
 > **Finding from the first run:** with `EMBEDDING_PROVIDER=none`, recall@10 on this
-> repository's own history is **0.00** — `plainto_tsquery` ANDs every term, so a
-> natural-language query returns nothing at all unless one symbol happens to contain all
-> of its words. With embeddings on, the same 26 commits score recall@10 **0.66**, hit rate
-> **0.92**, MRR **0.73**. The "degrades gracefully to full-text" story does not currently
-> hold for natural-language queries.
+> repository's own history was **0.00** — `plainto_tsquery` ANDed every term, so a
+> natural-language query returned nothing at all unless one symbol happened to contain all
+> of its words. With embeddings on, the same 26 commits scored recall@10 **0.66**, hit rate
+> **0.92**, MRR **0.73**.
+>
+> **After switching full-text to OR-of-terms (migration 0015):** with embeddings off, 93
+> commits score recall@10 **0.47**, hit rate **0.67**, MRR **0.40** — against **0.00** on
+> all three for the same 93 commits before the change. Full-text alone now degrades
+> gracefully for natural-language queries.
 

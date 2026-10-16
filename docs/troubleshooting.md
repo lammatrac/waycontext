@@ -159,7 +159,7 @@ commands to unregister the MCP server, unlink the CLI, and drop the database.
 
 `EMBEDDING_DIM` must match the model you picked (see the comments in `.env.example`).
 Changing it after the fact requires re-running `init-db` and reindexing — the stored vectors
-have the old width and the HNSW index is built for it.
+have the old width.
 
 ### Markdown docs aren't showing up in `search_knowledge`
 
@@ -199,15 +199,30 @@ architecture graph. See [Notes & limits](../README.md#notes--limits).
 
 ### `search_code` returns nothing for natural-language queries
 
-Check whether `EMBEDDING_PROVIDER=none`. Without embeddings, only the full-text half runs,
-and `plainto_tsquery` **ANDs every term** — so a sentence-shaped query returns nothing at all
-unless one symbol happens to contain all of its words. Measured on this repository's own
-history: recall@10 is **0.00** with embeddings off versus **0.66** with them on. See
-[Retrieval quality](evaluation.md).
+Full-text matches **any** of the query's words (English stopwords dropped) and ranks by how
+many and where they match, so a sentence-shaped query only comes back empty when none of
+its meaningful words appears in the project. Check:
 
-Workarounds without a provider: query with one or two distinctive identifiers rather than a
-sentence, or use the graph tools (`get_graph`, `get_callers`, `get_file_outline`), which
-don't depend on embeddings at all.
+- **The database is migrated.** Before migration 0015, full-text ANDed every word, and a
+  ten-word query matched nothing. `waycontext migrate` (or any index run) applies it; a
+  long-running MCP server must be restarted to pick up the new code.
+- **`matched_via` never shows `vector`.** Either `EMBEDDING_PROVIDER=none`, or the project's
+  vectors were made by a different model than the one configured — see below.
+
+### Vector matches disappeared after changing `VOYAGE_MODEL` (or the provider)
+
+Vectors from two embedding models live in unrelated spaces, so search only compares a
+query against vectors its own model produced; the rest are skipped and the project falls
+back to full-text until they are replaced. See how many would be replaced, then do it:
+
+```bash
+waycontext reembed --all --dry-run
+waycontext reembed <project>          # or --all; spends embedding tokens
+```
+
+`reembed` clears the stale vectors and runs an index pass, whose embedding sweep re-embeds
+them. Fix-commit message vectors are re-embedded the next time bug clusters are derived
+(after the next commit); until then clustering uses the terms-only grouping.
 
 ### Multi-word queries miss a camelCase symbol
 

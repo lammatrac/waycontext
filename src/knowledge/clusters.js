@@ -14,7 +14,7 @@
  */
 import { pool, toVector } from "../db.js";
 import { config } from "../config.js";
-import { embed, embeddingsEnabled } from "../embeddings.js";
+import { embed, embeddingsEnabled, embeddingModelId } from "../embeddings.js";
 
 // Conventional-commit prefixes and the words every commit message contains.
 // Without these, every cluster in a well-disciplined repo is labelled "fix".
@@ -219,9 +219,10 @@ async function embedFixCommits(project, log) {
     }
     for (let j = 0; j < vectors.length; j++) {
       if (!vectors[j]) continue;
-      await pool.query(`UPDATE commits SET message_embedding = $1 WHERE entity_id = $2`, [
-        toVector(vectors[j]), batch[j].entity_id,
-      ]);
+      await pool.query(
+        `UPDATE commits SET message_embedding = $1, message_embedding_model = $3 WHERE entity_id = $2`,
+        [toVector(vectors[j]), batch[j].entity_id, embeddingModelId()]
+      );
       done++;
     }
   }
@@ -275,12 +276,19 @@ export async function writeBugClusters(project, log = () => {}) {
 
   // Ordered by entity_id, because greedyCluster is order-dependent and a
   // re-derive must produce the same clusters as the last one.
+  // A vector from another model is no vector at all for clustering: cosine
+  // across two embedding spaces is noise, so those commits fall back to the
+  // terms-only grouping until `waycontext reembed` replaces them. With the
+  // provider off there is no current model to compare against, and stored
+  // vectors are only ever compared with each other, so they are all kept.
   const fixes = await pool.query(
-    `SELECT entity_id, subject, body, authored_at, message_embedding::text AS vec
+    `SELECT entity_id, subject, body, authored_at,
+            CASE WHEN $2::text IS NULL OR COALESCE(message_embedding_model, $3::text) = $2
+                 THEN message_embedding::text END AS vec
        FROM commits
       WHERE project_id = $1 AND is_fix
       ORDER BY entity_id`,
-    [project.id]
+    [project.id, embeddingModelId(), project.legacy_embedding_model ?? null]
   );
   const commits = fixes.rows;
 

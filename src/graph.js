@@ -1,5 +1,5 @@
 import { pool, toVector, getProject } from "./db.js";
-import { embedQuery, embeddingsEnabled } from "./embeddings.js";
+import { embedQuery, embeddingsEnabled, embeddingModelId } from "./embeddings.js";
 import { fuseRankedLists, DEFAULT_K } from "./rrf.js";
 import { BODY_TRUNCATION_MARKER } from "./parser.js";
 
@@ -55,22 +55,43 @@ async function ftsCandidates(projectId, query, poolSize) {
   const res = await pool.query(
     `SELECT ${SYMBOL_COLUMNS}
      FROM symbols s JOIN files f ON f.id = s.file_id
-     WHERE s.project_id = $1 AND s.fts_vector @@ plainto_tsquery('simple', $2)
-     ORDER BY ts_rank(s.fts_vector, plainto_tsquery('simple', $2)) DESC
+     WHERE s.project_id = $1 AND s.fts_vector @@ wc_any_tsquery($2)
+     ORDER BY ts_rank(s.fts_vector, wc_any_tsquery($2)) DESC
      LIMIT $3`,
     [projectId, query, poolSize]
   );
   return res.rows;
 }
 
-async function vectorCandidates(projectId, queryVector, poolSize) {
+/**
+ * SQL predicate: the row's vector came from the model the query was embedded
+ * with. `$3` is the current model id, `$4` the project's legacy model -- the
+ * one every row written before per-row stamping used (see migration 0014).
+ * Comparing vectors across two models ranks on noise, so a stale row is left
+ * out rather than ranked; full-text still finds it until `waycontext reembed`.
+ */
+const sameModel = (alias) => `COALESCE(${alias}.embedding_model, $4::text) = $3`;
+
+/**
+ * Exact nearest-neighbour ranking within one project.
+ *
+ * `+ 0` on the distance is deliberate: it keeps the planner off any HNSW
+ * index on `embedding`. Such an index spans every project in the database, and
+ * pgvector applies the `project_id` filter only after the walk -- which visits
+ * hnsw.ef_search (40) candidates -- so for any project that wasn't the nearest
+ * one globally, the index scan returned zero rows. Migration 0016 dropped those
+ * indexes; this keeps re-adding one from silently breaking search again. An
+ * exact scan over one project's rows (via the project_id btree) is a few
+ * hundred ms on 150k symbols and is never wrong.
+ */
+export async function vectorCandidates(project, queryVector, poolSize) {
   const res = await pool.query(
     `SELECT ${SYMBOL_COLUMNS}
      FROM symbols s JOIN files f ON f.id = s.file_id
-     WHERE s.project_id = $1 AND s.embedding IS NOT NULL
-     ORDER BY s.embedding <=> $2
-     LIMIT $3`,
-    [projectId, toVector(queryVector), poolSize]
+     WHERE s.project_id = $1 AND s.embedding IS NOT NULL AND ${sameModel("s")}
+     ORDER BY (s.embedding <=> $2) + 0
+     LIMIT $5`,
+    [project.id, toVector(queryVector), embeddingModelId(), project.legacy_embedding_model ?? null, poolSize]
   );
   return res.rows;
 }
@@ -90,7 +111,7 @@ export async function searchCode(projectName, query, limit = 10) {
   let vectorRows = [];
   if (embeddingsEnabled()) {
     const qv = await embedQuery(query, project.id);
-    vectorRows = await vectorCandidates(project.id, qv, poolSize);
+    vectorRows = await vectorCandidates(project, qv, poolSize);
     rankedLists.vector = vectorRows.map((r) => r.id);
   }
 
@@ -123,22 +144,23 @@ async function chunkFtsCandidates(projectId, query, poolSize) {
   const res = await pool.query(
     `SELECT ${CHUNK_COLUMNS}
      FROM ${CHUNK_SOURCE}
-     WHERE c.project_id = $1 AND c.fts_vector @@ plainto_tsquery('simple', $2)
-     ORDER BY ts_rank(c.fts_vector, plainto_tsquery('simple', $2)) DESC
+     WHERE c.project_id = $1 AND c.fts_vector @@ wc_any_tsquery($2)
+     ORDER BY ts_rank(c.fts_vector, wc_any_tsquery($2)) DESC
      LIMIT $3`,
     [projectId, query, poolSize]
   );
   return res.rows;
 }
 
-async function chunkVectorCandidates(projectId, queryVector, poolSize) {
+/** Same exact, same-model ranking as vectorCandidates, over chunks. */
+async function chunkVectorCandidates(project, queryVector, poolSize) {
   const res = await pool.query(
     `SELECT ${CHUNK_COLUMNS}
      FROM ${CHUNK_SOURCE}
-     WHERE c.project_id = $1 AND c.embedding IS NOT NULL
-     ORDER BY c.embedding <=> $2
-     LIMIT $3`,
-    [projectId, toVector(queryVector), poolSize]
+     WHERE c.project_id = $1 AND c.embedding IS NOT NULL AND ${sameModel("c")}
+     ORDER BY (c.embedding <=> $2) + 0
+     LIMIT $5`,
+    [project.id, toVector(queryVector), embeddingModelId(), project.legacy_embedding_model ?? null, poolSize]
   );
   return res.rows;
 }
@@ -176,8 +198,8 @@ export async function searchKnowledge(projectName, query, limit = 10) {
   if (embeddingsEnabled()) {
     const qv = await embedQuery(query, project.id);
     [symVec, chunkVec] = await Promise.all([
-      vectorCandidates(project.id, qv, poolSize),
-      chunkVectorCandidates(project.id, qv, poolSize),
+      vectorCandidates(project, qv, poolSize),
+      chunkVectorCandidates(project, qv, poolSize),
     ]);
     rankedLists.symbol_vector = symVec.map((r) => `sym:${r.id}`);
     rankedLists.chunk_vector = chunkVec.map((r) => `chunk:${r.id}`);
@@ -439,9 +461,11 @@ export async function findRelated(projectName, name, limit = 10) {
      WHERE s1.project_id = $1
        AND (s1.name = $2 OR s1.name LIKE '%::' || $2)
        AND s1.embedding IS NOT NULL AND s2.embedding IS NOT NULL
-     ORDER BY s2.embedding <=> s1.embedding
+       -- Neighbours only within one embedding space (see sameModel).
+       AND COALESCE(s2.embedding_model, $4::text) = COALESCE(s1.embedding_model, $4::text)
+     ORDER BY (s2.embedding <=> s1.embedding) + 0
      LIMIT $3`,
-    [project.id, name, limit]
+    [project.id, name, limit, project.legacy_embedding_model ?? null]
   );
   return res.rows;
 }

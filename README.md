@@ -95,8 +95,8 @@ and no account: the graph tools and the full-text half of `search_code` are full
 Semantic matching and `find_related` need vector embeddings, which means an API key —
 WayContext doesn't run a local embedding model. Set `EMBEDDING_PROVIDER=voyage` (recommended,
 `voyage-code-3` is trained on code) or `openai`, plus the matching key. It's worth it if you
-want natural-language queries: measured recall@10 is **0.66** with embeddings against **0.00**
-without, on this repo's own commit-replay harness. Indexing this repo costs well under a cent.
+want natural-language queries: measured recall@10 is **0.66** with embeddings against **0.47**
+full-text only, on this repo's own commit-replay harness. Indexing this repo costs well under a cent.
 See [Retrieval quality](docs/evaluation.md) and
 [token usage & cost](docs/installation.md#tracking-token-usage--cost).
 
@@ -175,7 +175,8 @@ files alone): delete the `## WayContext` section from
 `CLAUDE.md`, `AGENTS.md` and `.github/copilot-instructions.md`, the `waycontext` entry in
 `.vscode/mcp.json`, and any `docs/waycontext/` or `.waycontext/` directories you don't want
 to keep. To drop one project's index without uninstalling, use
-`waycontext delete_project <project>`.
+`waycontext delete_project <project>`. After changing the embedding model, `waycontext reembed`
+replaces the vectors the old model made ([details](docs/troubleshooting.md#vector-matches-disappeared-after-changing-voyage_model-or-the-provider)).
 
 ## What it does
 

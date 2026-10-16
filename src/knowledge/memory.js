@@ -8,14 +8,14 @@
  * something nobody ever said.
  *
  * The text is stored in `chunks` instead of getting its own embedding column,
- * which means memories inherit the HNSW index, the generated fts_vector, the
+ * which means memories inherit the vector column, the generated fts_vector, the
  * embed-on-NULL healing pass and the embeddings-off degradation already built
  * for documents in Phase 2.
  */
 import crypto from "node:crypto";
 import { pool, getProject, toVector } from "../db.js";
 import { config } from "../config.js";
-import { embedQuery, embeddingsEnabled } from "../embeddings.js";
+import { embedQuery, embeddingsEnabled, embeddingModelId } from "../embeddings.js";
 import { fuseRankedLists, DEFAULT_K } from "../rrf.js";
 import { chunkMarkdown } from "./chunker.js";
 
@@ -162,8 +162,8 @@ export async function recall(projectName, query, limit = 10) {
        JOIN memories m ON m.entity_id = c.entity_id
        JOIN entities e ON e.id = m.entity_id
       WHERE c.project_id = $1 AND e.deleted_at IS NULL AND ${NOT_SUPERSEDED}
-        AND c.fts_vector @@ plainto_tsquery('simple', $2)
-      ORDER BY ts_rank(c.fts_vector, plainto_tsquery('simple', $2)) DESC
+        AND c.fts_vector @@ wc_any_tsquery($2)
+      ORDER BY ts_rank(c.fts_vector, wc_any_tsquery($2)) DESC
       LIMIT $3`,
     [project.id, query, poolSize]
   );
@@ -178,10 +178,11 @@ export async function recall(projectName, query, limit = 10) {
          JOIN memories m ON m.entity_id = c.entity_id
          JOIN entities e ON e.id = m.entity_id
         WHERE c.project_id = $1 AND c.embedding IS NOT NULL
+          AND COALESCE(c.embedding_model, $5::text) = $4
           AND e.deleted_at IS NULL AND ${NOT_SUPERSEDED}
-        ORDER BY c.embedding <=> $2
+        ORDER BY (c.embedding <=> $2) + 0
         LIMIT $3`,
-      [project.id, toVector(qv), poolSize]
+      [project.id, toVector(qv), poolSize, embeddingModelId(), project.legacy_embedding_model ?? null]
     );
     rankedLists.vector = vec.rows.map((r) => r.id);
   }

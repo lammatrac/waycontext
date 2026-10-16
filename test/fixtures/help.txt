@@ -74,6 +74,7 @@ Setup & administration:
   service status                            show service health, pid and version
   service stop                              stop the managed local background service
   delete_project <project> [--yes]          delete a project and all its indexed data
+  reembed <project>|--all [--dry-run]       re-embed vectors made by a different model than the configured one
   stats                                     (alias for list_projects, table output)
   db                                        interactive psql session
   tables [table] [limit]                    list tables, or browse rows of one table (default limit 20)

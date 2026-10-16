@@ -60,6 +60,8 @@ Small angle (θ ≈ 0°) → cosine distance ≈ 0 → very similar meaning, eve
 
 ## HNSW — the approximate nearest-neighbor index
 
+> WayContext no longer uses one: migration 0016 dropped it, because a single HNSW graph over every project can't filter by project (see [How `search_code` works](#how-search_code-works)). Vector search ranks a project's rows exactly instead. The explanation is kept for context.
+
 Comparing a query's embedding against every single stored embedding one by one would be too slow at scale. Postgres instead uses an **HNSW** (Hierarchical Navigable Small World) index: a multi-layer graph where the top layer has a few nodes with long "highway" connections, and each layer below is denser, until the bottom layer connects every vector to its close neighbors.
 
 ![Hierarchical Navigable Small World](https://raw.githubusercontent.com/lammatrac/waycontext/main/src/images/hierarchical-navigable-small-world.png)
@@ -90,8 +92,8 @@ A symbol found by *both* searches — even at a middling rank in each — usuall
 
 `search_code` is a hybrid search: it always runs a Postgres full-text query, and — when an embedding provider is configured — also runs a pgvector nearest-neighbor query, then merges the two ranked lists with Reciprocal Rank Fusion (RRF). (New to any of these terms? See the sections above.)
 
-1. **Full-text candidates** — every indexed symbol has a generated `fts_vector` column (`name` weighted highest, then `doc`, then `body`), so a query like `"purge cache after match update"` matches on literal words. This always runs, with no API key required.
-2. **Vector candidates** (only if `EMBEDDING_PROVIDER` isn't `none`) — the query is embedded and compared against each symbol's stored embedding by cosine distance, surfacing matches by *meaning* even when the wording differs from the code (e.g. a query about "revoking a signing key" finding a function named `rotateSecretKey`).
+1. **Full-text candidates** — every indexed symbol has a generated `fts_vector` column (`name` weighted highest, then `doc`, then `body`), so a query like `"purge cache after match update"` matches on literal words. The query matches symbols containing **any** of its words — English stopwords dropped (`wc_any_tsquery`, migration 0015) — and `ts_rank` puts those matching more of them, in heavier fields, first. This always runs, with no API key required.
+2. **Vector candidates** (only if `EMBEDDING_PROVIDER` isn't `none`) — the query is embedded and compared against each symbol's stored embedding by cosine distance, surfacing matches by *meaning* even when the wording differs from the code (e.g. a query about "revoking a signing key" finding a function named `rotateSecretKey`). Only vectors produced by the configured model take part (each row records its `embedding_model`), and the ranking is an exact scan of the project's rows rather than the shared HNSW index, whose post-filter by project returned nothing for any project that wasn't globally nearest.
 3. **Fusion** — both ranked lists are combined via RRF: a symbol ranked highly in *both* lists outranks one that only appears in a single list. Each result includes a `score` (the fused RRF score, not a raw similarity) and `matched_via` (`["fts"]`, `["vector"]`, or `["fts","vector"]`) showing which signal(s) found it.
 
 With `EMBEDDING_PROVIDER=none`, step 2 is skipped and results are full-text only — still better than a plain substring search, just without the semantic/meaning-based matches.

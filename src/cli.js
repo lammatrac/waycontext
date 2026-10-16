@@ -4,6 +4,8 @@
 import { spawn } from "node:child_process";
 import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
 import { migrationStatus } from "./migrate.js";
+import { embeddingModelId, clearStaleEmbeddings } from "./embeddings.js";
+import { indexProject } from "./indexer.js";
 import { backfillProjectIdentity, identityBackfillStatus } from "./backfillIdentity.js";
 import { listCandidates, setRuleState } from "./knowledge/rules.js";
 import { exportKnowledge, importKnowledge } from "./knowledge/knowledgeFiles.js";
@@ -1041,6 +1043,48 @@ async function main() {
 
       await deleteProject(project);
       console.log(`Deleted project "${project}".`);
+      break;
+    }
+    case "reembed": {
+      // Explicit rather than automatic on every index run: re-embedding a
+      // WordPress install costs tens of millions of tokens, which switching
+      // VOYAGE_MODEL should not spend behind the user's back.
+      const dryRun = args.includes("--dry-run");
+      const all = args.includes("--all");
+      const name = args.find((a) => !a.startsWith("--"));
+      if (!all && !name) usageAndExit("Usage: reembed <project>|--all [--dry-run]");
+      if (!embeddingModelId()) usageAndExit("Embeddings are disabled (EMBEDDING_PROVIDER=none); nothing to re-embed with.");
+      await initDb();
+
+      let targets;
+      if (all) {
+        targets = await Promise.all((await listProjects()).map((p) => getProject(p.name)));
+      } else {
+        const p = await getProject(name);
+        if (!p) {
+          console.error(`Project "${name}" not found.`);
+          process.exit(1);
+        }
+        targets = [p];
+      }
+
+      console.log(`Current embedding model: ${embeddingModelId()}`);
+      for (const p of targets) {
+        const stale = await clearStaleEmbeddings(p, { dryRun });
+        const total = stale.symbols + stale.chunks + stale.commits;
+        console.log(
+          `${p.name}: ${stale.symbols} symbols, ${stale.chunks} chunks, ${stale.commits} commit messages ` +
+          (dryRun ? "would be re-embedded" : "cleared")
+        );
+        if (dryRun || !total) continue;
+        if (!p.root_path || !fs.existsSync(p.root_path)) {
+          console.log(`  · root ${p.root_path ?? "(none)"} not found; run \`waycontext index ${p.name} <path>\` to embed them`);
+          continue;
+        }
+        // The index run's `embedding IS NULL` sweep picks the cleared rows up;
+        // commit messages are re-embedded the next time clusters are derived.
+        await indexProject(p.name, p.root_path, (m) => console.log("  ·", m));
+      }
       break;
     }
     case "stats": {

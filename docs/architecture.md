@@ -67,9 +67,10 @@ One row per function, method, class, interface, or trait found inside a file —
 | `start_line` / `end_line` | `int` | Where the symbol's body starts/ends in the file — what `get_symbol` uses to show source, and what an editor jump-to-definition would use. |
 | `body` | `text` | The symbol's source code, truncated to 6 KB (see [Notes & limits](../README.md#notes--limits)). |
 | `embedding` | `vector(EMBEDDING_DIM)` | The symbol's semantic embedding (from Voyage/OpenAI), used by the vector half of `search_code` and by `find_related`. `NULL` when `EMBEDDING_PROVIDER=none`. |
+| `embedding_model` | `text` | `provider:model` that produced `embedding`. Search only compares vectors from the configured model; `NULL` on rows written before migration 0014, which fall back to `projects.legacy_embedding_model`. |
 | `fts_vector` | `tsvector` (generated) | Auto-computed full-text index over `name` (weight A) + `doc` (weight B) + `body` (weight C) — the full-text half of `search_code`. You never write this column directly; Postgres regenerates it whenever the row changes. |
 
-Indexed on `(project_id, name)` for exact/fuzzy symbol lookups, on `file_id` for `get_file_outline`, on `embedding` (HNSW) for ANN search, and on `fts_vector` (GIN) for full-text search.
+Indexed on `(project_id, name)` for exact/fuzzy symbol lookups, on `file_id` for `get_file_outline`, and on `fts_vector` (GIN) for full-text search. `embedding` has no index: vector search ranks one project's rows exactly (migration 0016 dropped the HNSW index, which could not filter by project).
 
 ### `edges`
 
@@ -165,7 +166,7 @@ Observational knowledge — what this project has learned. A 1:1 satellite of
 | `pinned` | `boolean` | Always returned first by `recall`. |
 
 Memories deliberately have **no embedding column of their own**: their text goes through the
-Phase 2 chunker into `chunks`, inheriting the HNSW index, the generated `fts_vector`, the
+Phase 2 chunker into `chunks`, inheriting the vector column, the generated `fts_vector`, the
 embed-on-`NULL` healing pass and the embeddings-off degradation already built for
 documents. Rules get neither chunks nor embeddings, because they are selected by scope
 match and never by similarity — a rule can't be pulled into context just for sounding
