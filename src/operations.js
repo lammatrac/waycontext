@@ -80,7 +80,10 @@ export const operations = [
       "Scan and index a project directory: extracts all functions/classes/methods, builds a relationship graph (calls, imports, inheritance, WordPress hooks) and vector embeddings. Incremental: unchanged files are skipped. Run this first, and re-run after code changes.",
     input: {
       project: z.string().describe("Short project name, e.g. 'sports-wc-2026'"),
-      path: z.string().describe("Absolute path to the project root on this machine"),
+      path: z
+        .string()
+        .optional()
+        .describe("Absolute path to the project root on this machine. Required the first time; omit to re-index an already-indexed project from its stored root"),
     },
     cli: {
       args: ["project", "path"],
@@ -88,8 +91,10 @@ export const operations = [
       // Names the last positional as fillable from the repo the CLI was run
       // in, so `waycontext index` inside an initialized checkout needs no
       // arguments at all. Declared here rather than special-cased in cli.js,
-      // which knows nothing about any individual command. The MCP schema keeps
-      // `path` required -- an MCP client has no working directory.
+      // which knows nothing about any individual command. `path` is optional
+      // in the schema only for MCP, which has no working directory: there an
+      // omitted path falls back to the root stored by the previous run.
+      // requiredArgs() still counts it, so the CLI keeps filling it from cwd.
       rootDefault: "path",
       label: (a) => `Indexing "${a.project}"`,
       // Its own log() output only fires at a handful of milestones (git diff,
@@ -529,9 +534,11 @@ export function findOperation(nameOrAlias) {
   );
 }
 
-/** Which positional arguments are required (i.e. have no schema default). */
+/** Which positional arguments are required (no schema default, or filled by the CLI via rootDefault). */
 export function requiredArgs(op) {
-  return (op.cli?.args ?? []).filter((key) => !op.input[key]?.isOptional?.());
+  return (op.cli?.args ?? []).filter(
+    (key) => key === op.cli.rootDefault || !op.input[key]?.isOptional?.()
+  );
 }
 
 /** `search_code <project> <query> [limit]` — generated, never hand-maintained. */

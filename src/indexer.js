@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { glob } from "tinyglobby";
 import ignore from "ignore";
 import picomatch from "picomatch";
-import { pool, toVector, getOrCreateProject } from "./db.js";
+import { pool, toVector, getOrCreateProject, getProject } from "./db.js";
 import { parseFile, EXT_LANG } from "./parser.js";
 import { extractPhpUiElements } from "./ui/phpElements.js";
 import { extractPhpWpPrimitives } from "./ui/phpWpPrimitives.js";
@@ -89,10 +89,19 @@ function isDocPath(rel) {
 /**
  * Index (or incrementally re-index) a project directory.
  * @param {string} projectName
- * @param {string} rootPath absolute path
+ * @param {string} [rootPath] absolute path; omitted, the root recorded by the
+ *   project's previous run is reused
  * @param {(msg:string)=>void} log
  */
 export async function indexProject(projectName, rootPath, log = () => {}) {
+  if (!rootPath) {
+    rootPath = (await getProject(projectName))?.root_path;
+    if (!rootPath) {
+      throw new Error(
+        `Project "${projectName}" is not indexed yet, so there is no stored root to reuse -- pass \`path\` (the absolute project root) on the first run.`
+      );
+    }
+  }
   const root = path.resolve(rootPath);
   if (!fs.existsSync(root)) throw new Error(`Path not found: ${root}`);
 

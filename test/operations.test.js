@@ -203,3 +203,14 @@ test("labels render without throwing for every operation", () => {
     assert.equal(typeof op.cli.label(args), "string", `${op.name}: label did not return a string`);
   }
 });
+
+// index_project used to require `path` over MCP, so a model re-indexing an
+// already-indexed project by name alone (as the after-commit rule reads) got
+// a bare "Required at path" validation error. The CLI still fills `path`
+// from the working tree, so it keeps counting it as a required positional.
+test("index_project accepts a call without path over MCP, but the CLI still fills it", () => {
+  const op = findOperation("index_project");
+  assert.deepEqual(z.object(op.input).parse({ project: "p" }), { project: "p" });
+  assert.deepEqual(requiredArgs(op), ["project", "path"]);
+  assert.equal(usageLine(op), "index_project <project> <path>");
+});

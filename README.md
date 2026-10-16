@@ -285,6 +285,12 @@ Claude Code only, three escalating modes. See
 
 ## Changes
 
+- 2026-10-16: `index_project`'s `path` is now optional over MCP. Re-indexing an
+  already-indexed project by name alone reuses the root stored by its previous run,
+  instead of failing schema validation with `Required at path`; a project that was
+  never indexed gets an error asking for `path`. The CLI is unchanged and still fills
+  `path` from the working tree.
+
 - 2026-10-06: `waycontext uninstall` now also stops the background service and deletes
   `~/.cache/waycontext/service/`, removes the `check-update.sh` cron entry (other entries
   untouched) with its status/log files, and ends by listing indexed repos that may still
