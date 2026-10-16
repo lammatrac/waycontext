@@ -172,18 +172,101 @@ export async function embedPending(items, {
 
 /**
  * Store a batch of vectors in one UPDATE, stamped with the model that made
- * them. `rows` is `[{ id, vector }]`; null vectors are skipped. `table` is a
- * fixed identifier from this module, never user input.
+ * them and, when given, the hash of the text they were embedded from (see
+ * embedWithReuse). `rows` is `[{ id, vector, hash? }]`; null vectors are
+ * skipped. `table` is a fixed identifier from this module, never user input.
  */
 export async function writeEmbeddings(table, rows) {
   const present = rows.filter((r) => r.vector);
   if (!present.length) return;
   await pool.query(
-    `UPDATE ${table} t SET embedding = v.vec::vector, embedding_model = $3
-       FROM unnest($1::bigint[], $2::text[]) AS v(id, vec)
+    `UPDATE ${table} t SET embedding = v.vec::vector, embedding_model = $3, embed_hash = v.hash
+       FROM unnest($1::bigint[], $2::text[], $4::text[]) AS v(id, vec, hash)
       WHERE t.id = v.id`,
-    [present.map((r) => r.id), present.map((r) => toVector(r.vector)), embeddingModelId()]
+    [
+      present.map((r) => r.id), present.map((r) => toVector(r.vector)),
+      embeddingModelId(), present.map((r) => r.hash ?? null),
+    ]
   );
+}
+
+/**
+ * Hash of the exact text a vector is embedded from. md5 because this is a
+ * lookup key, not a security boundary: a collision would cost one wrong
+ * vector, and the key stays short across ~1.5M rows.
+ */
+export function embedTextHash(text) {
+  return crypto.createHash("md5").update(text).digest("hex");
+}
+
+/** Rows per reuse lookup: keeps each statement's parameter arrays bounded. */
+const REUSE_LOOKUP_CHUNK = 5000;
+
+/**
+ * Embed `items` (`[{ id, text }]`) into `table`, paying the provider only for
+ * text that has never been embedded by the current model.
+ *
+ * WordPress installs share most of their code, so the same plugin file at the
+ * same relative path produces byte-identical text on every site (migration
+ * 0017 has the numbers). Two savings, in order:
+ *
+ *   1. reuse -- a row anywhere in the org with the same embed_hash and the
+ *      current embedding_model already holds the vector; copy it in SQL.
+ *   2. dedupe -- among the misses, identical texts are sent once and the
+ *      vector is written to every row that has that text.
+ *
+ * Only the current model's vectors are reused: copying a vector from another
+ * model would carry the very cross-space mismatch the model stamp exists to
+ * prevent. Failure handling is embedPending's: a failed batch leaves its rows
+ * NULL for the next run's sweep.
+ */
+export async function embedWithReuse(table, items, {
+  embedFn, orgId, batchSize = 64, concurrency = 1, log = () => {}, label = "Embedding",
+}) {
+  const model = embeddingModelId();
+  const hashed = items.map((it) => ({ ...it, hash: embedTextHash(it.text) }));
+
+  const reusedIds = new Set();
+  for (let i = 0; i < hashed.length; i += REUSE_LOOKUP_CHUNK) {
+    const slice = hashed.slice(i, i + REUSE_LOOKUP_CHUNK);
+    const res = await pool.query(
+      `UPDATE ${table} t
+          SET embedding = src.embedding, embedding_model = src.embedding_model, embed_hash = v.hash
+         FROM unnest($1::bigint[], $2::text[]) AS v(id, hash)
+         CROSS JOIN LATERAL (
+           SELECT s.embedding, s.embedding_model
+             FROM ${table} s JOIN projects p ON p.id = s.project_id
+            WHERE s.embed_hash = v.hash AND s.embedding_model = $3
+              AND s.embedding IS NOT NULL AND p.org_id = $4
+            LIMIT 1
+         ) src
+        WHERE t.id = v.id
+       RETURNING t.id`,
+      [slice.map((h) => h.id), slice.map((h) => h.hash), model, orgId]
+    );
+    for (const r of res.rows) reusedIds.add(Number(r.id));
+  }
+
+  const byHash = new Map();
+  for (const h of hashed) {
+    if (reusedIds.has(Number(h.id))) continue;
+    const group = byHash.get(h.hash);
+    if (group) group.ids.push(h.id);
+    else byHash.set(h.hash, { hash: h.hash, text: h.text, ids: [h.id] });
+  }
+
+  let embedded = 0;
+  const { failed } = await embedPending([...byHash.values()], {
+    embedFn,
+    write: async (batch, vectors) => {
+      const rows = batch.flatMap((g, j) => g.ids.map((id) => ({ id, vector: vectors[j], hash: g.hash })));
+      await writeEmbeddings(table, rows);
+      embedded += rows.filter((r) => r.vector).length;
+    },
+    batchSize, concurrency, log, label,
+  });
+  if (reusedIds.size) log(`${label}: reused ${reusedIds.size} existing vector(s) for identical text`);
+  return { embedded: embedded + reusedIds.size, reused: reusedIds.size, failed };
 }
 
 /** Records elapsed time per phase; each `mark` closes the phase since the last one. */
@@ -945,14 +1028,17 @@ async function runIndex(project, root, log) {
     // A failed batch leaves its embeddings NULL rather than losing vectors
     // already fetched for other batches; the recovery query above picks those
     // symbols back up on the next index run.
-    const { failed: embedFailed } = await embedPending(pendingEmbeds, {
-      embedFn: (texts) => embed(texts, "document", project.id),
-      write: (batch, vectors) =>
-        writeEmbeddings("symbols", batch.map((p, j) => ({ id: p.symbolId, vector: vectors[j] }))),
-      batchSize: 64,
-      concurrency: config.embedConcurrency,
-      log,
-    });
+    const { failed: embedFailed } = await embedWithReuse(
+      "symbols",
+      pendingEmbeds.map((p) => ({ id: p.symbolId, text: p.text })),
+      {
+        embedFn: (texts) => embed(texts, "document", project.id),
+        orgId: project.org_id,
+        batchSize: 64,
+        concurrency: config.embedConcurrency,
+        log,
+      }
+    );
     if (embedFailed) {
       log(`${embedFailed} symbols left without embeddings; will retry on next index run`);
     }
@@ -979,15 +1065,15 @@ async function runIndex(project, root, log) {
     );
     if (pending.rows.length) {
       log(`Embedding ${pending.rows.length} chunk(s)…`);
-      const { embedded } = await embedPending(
+      const { embedded } = await embedWithReuse(
+        "chunks",
         pending.rows.map((r) => ({
           id: r.id,
           text: [`// ${r.label} (${r.sublabel})`, r.heading_path || "", r.content].join("\n"),
         })),
         {
           embedFn: (texts) => embed(texts, "document", project.id),
-          write: (batch, vectors) =>
-            writeEmbeddings("chunks", batch.map((r, j) => ({ id: r.id, vector: vectors[j] }))),
+          orgId: project.org_id,
           batchSize: 32,
           concurrency: config.embedConcurrency,
           log,

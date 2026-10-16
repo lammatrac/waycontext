@@ -221,7 +221,10 @@ waycontext reembed <project>          # or --all; spends embedding tokens
 ```
 
 `reembed` clears the stale vectors and runs an index pass, whose embedding sweep re-embeds
-them. Fix-commit message vectors are re-embedded the next time bug clusters are derived
+them. Text that any project in the org has already embedded with the current model is
+copied rather than sent to the provider (`embed_hash`, migration 0017), so sites sharing
+the same plugins pay for that code once — the dry run's counts are rows, not tokens, and
+overstate the bill on a multi-site install. Fix-commit message vectors are re-embedded the next time bug clusters are derived
 (after the next commit); until then clustering uses the terms-only grouping.
 
 ### Multi-word queries miss a camelCase symbol
