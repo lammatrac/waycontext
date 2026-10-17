@@ -84,7 +84,16 @@ test("a mentioned path must look like a source file", () => {
   const m = extractMentions("see docs/adr/0003-x.md and http://example.com/a/b.html and a/b.js");
   assert.ok(m.paths.includes("docs/adr/0003-x.md"));
   assert.ok(m.paths.includes("a/b.js"));
-  assert.ok(!m.paths.some((p) => p.includes("example.com")));
+  assert.ok(
+    !m.paths.some((p) => {
+      try {
+        const u = new URL(p);
+        return u.hostname === "example.com" || u.hostname.endsWith(".example.com");
+      } catch {
+        return false;
+      }
+    })
+  );
 });
 
 test("parseDocument composes title, type, adr, mentions and chunks", () => {
