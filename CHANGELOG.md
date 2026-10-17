@@ -2,6 +2,42 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-10-17 — v0.8.0: WordPress UI intelligence, faster and leaner indexing, search that actually returns results
+
+Since v0.7.0: a new family of WordPress UI tools, PHP call resolution that follows receivers,
+indexing that is hours faster on large WordPress trees, and a reworked `search_code` /
+embedding path that stops returning empty results and stops paying twice for identical text.
+
+- **Added WordPress UI intelligence indexing and MCP tools** (`find_ui_element`,
+  `find_ui_source`, `get_ui_context`, `resolve_ui_reference`, `trace_ui_action`), and name-based
+  lookup tools now accept a symbol alias.
+- **Added an EN/VI language switcher** to the Decision Review HTML page.
+- **Resolved PHP method calls by receiver** (own class, parents, named class), linking unknown
+  receivers only on a unique match.
+- **Made bare method-call and doc-mention resolution use indexed name equality** instead of a
+  leading-wildcard `LIKE` that took hours on WordPress and treated `_` as a wildcard.
+- **Kept caller edges when a target symbol is replaced** (`edges.dst` is set to NULL instead of
+  cascading).
+- **Logged per-phase index timings and embedded batches concurrently** with one bulk UPDATE per
+  batch.
+- **Reused an existing current-model vector for identical embedding text** instead of calling
+  the provider again.
+- **Fixed `search_code` returning nothing**: full-text terms are OR-matched, vectors are ranked
+  exactly per project and model, and the unusable HNSW indexes are dropped. Added `reembed`,
+  which re-embeds existing rows only.
+- **Made `index_project`'s `path` optional over MCP**, reusing the stored project root on
+  re-index.
+- **Ignored a project's own `DATABASE_URL` from `./.env`**, added `WAYCONTEXT_DATABASE_URL`, and
+  explained a missing pgvector (`0A000`) together with the database actually used.
+- **Capped `get_symbol`/`get_callers`/`get_callees`/`get_file_outline` output** and stripped
+  internal DB ids and dead-end truncation markers to stop wasting tokens.
+- **Made `uninstall` stop the service and remove the update cron**; `install.sh` now requires
+  Node 20; README leads with install, footprint and uninstall.
+- **Replaced fast-glob with tinyglobby** to drop vulnerable `braces` (GHSA-vfj7-8cjw-p6xm), and
+  escaped NUL key separators in `i18nCatalog`. Bumped `@modelcontextprotocol/sdk` and other
+  dependencies; added least-privilege workflow permissions.
+- **`.env.example` now recommends `voyage-code-4`.**
+
 ## 2026-08-11 — v0.7.0: a deterministic gate hook, and SCSS joins the languages
 
 Two additions: the CLAUDE.md spec→plan→gate→code→review pipeline now has a hook that actually
