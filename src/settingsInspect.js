@@ -51,7 +51,8 @@ export function inspectSettings({
     if (e.code !== "ENOENT") configError = e.message;
   }
 
-  const dotenvVals = readDotenv(installDotenv);
+  // config.js skips every .env file under WAYCONTEXT_IGNORE_DOTENV=1; so must we.
+  const dotenvVals = env.WAYCONTEXT_IGNORE_DOTENV === "1" ? {} : readDotenv(installDotenv);
   const skip = new Set(injected);
   const set = (v) => v !== undefined && v !== null && v !== "";
 

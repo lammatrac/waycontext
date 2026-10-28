@@ -122,6 +122,16 @@ test("project scan lists overriding keys only", () => {
   ]);
 });
 
+test("WAYCONTEXT_IGNORE_DOTENV=1 skips the install .env", () => {
+  const d = tmp();
+  const configPath = write(d, "config.json", JSON.stringify({ ORG_SLUG: "acme" }));
+  const installDotenv = write(d, ".env", "ORG_SLUG=y\n");
+  const r = row(inspectSettings({ env: { WAYCONTEXT_IGNORE_DOTENV: "1" }, configPath, installDotenv }), "ORG_SLUG");
+  assert.equal(r.value, "acme");
+  assert.equal(r.source, configPath);
+  assert.equal(r.shadowedBy, null);
+});
+
 test("project scan skips missing roots", () => {
   const root = path.join(tmp(), "gone");
   assert.deepEqual(scanProjectOverrides([{ name: "p", root_path: root }]), []);
