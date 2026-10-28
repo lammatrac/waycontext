@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   SETTINGS,
+  describeJsonError,
   installDotenvPath,
   normalizeFileValue,
   PROJECT_DOTENV_IGNORED,
@@ -19,19 +20,7 @@ export function currentConfigPath(env = process.env) {
   return env.WAYCONTEXT_CONFIG || path.join(os.homedir(), ".config", "waycontext", "config.json");
 }
 
-/**
- * A JSON.parse failure as "not valid JSON", plus where if the engine said so.
- * Node 22's own message quotes the source around the error, and the files read
- * here can hold API keys, so the raw message is never passed on.
- */
-export function describeJsonError(err) {
-  const msg = String(err?.message ?? "");
-  const lineCol = msg.match(/line \d+ column \d+/);
-  if (lineCol) return `not valid JSON (${lineCol[0]})`;
-  const pos = msg.match(/position \d+/);
-  if (pos) return `not valid JSON (at ${pos[0]})`;
-  return "not valid JSON";
-}
+export { describeJsonError };
 
 function readDotenv(file) {
   try {

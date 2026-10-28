@@ -91,6 +91,20 @@ export const configFilePath =
   process.env.WAYCONTEXT_CONFIG ||
   path.join(os.homedir(), ".config", "waycontext", "config.json");
 
+/**
+ * A JSON.parse failure as "not valid JSON", plus where if the engine said so.
+ * Node 22's own message quotes the source around the error, and the files read
+ * here can hold API keys, so the raw message is never passed on.
+ */
+export function describeJsonError(err) {
+  const msg = String(err?.message ?? "");
+  const lineCol = msg.match(/line \d+ column \d+/);
+  if (lineCol) return `not valid JSON (${lineCol[0]})`;
+  const pos = msg.match(/position \d+/);
+  if (pos) return `not valid JSON (at ${pos[0]})`;
+  return "not valid JSON";
+}
+
 function loadConfigFile() {
   const file = configFilePath;
   try {
@@ -100,7 +114,8 @@ function loadConfigFile() {
     // A missing file is the normal case. A malformed one is worth saying out
     // loud, since silently ignoring it looks like the setting had no effect.
     if (e.code !== "ENOENT" && process.env.WAYCONTEXT_CONFIG) {
-      console.error(`Warning: could not read ${file}: ${e.message}`);
+      const reason = e instanceof SyntaxError ? describeJsonError(e) : e.code || "unreadable";
+      console.error(`Warning: could not read ${file}: ${reason}`);
     }
     return {};
   }
