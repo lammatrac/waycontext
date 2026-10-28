@@ -35,7 +35,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // and every command fails against a server that was never WayContext's. These
 // are skipped from `./.env` only; the namespaced WAYCONTEXT_DATABASE_URL is the
 // way to point WayContext at a database from a project .env.
-const PROJECT_DOTENV_IGNORED = new Set(["DATABASE_URL"]);
+export const PROJECT_DOTENV_IGNORED =new Set(["DATABASE_URL"]);
 
 /**
  * Fold the .env files into `env`, earlier files winning (dotenv never overwrites).
