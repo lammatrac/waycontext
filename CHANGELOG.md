@@ -2,8 +2,16 @@
 
 Newest first. Dates are the day the change landed.
 
-## Unreleased
+## 2026-10-28 — v0.9.0: settings dashboard, hardened HTTP service, one look across the web UI
 
+Since v0.8.0: a settings dashboard to see, trace and edit every WayContext setting, write
+protection on the local HTTP service, honest boolean parsing, and a shared visual redesign of
+the knowledge graph, settings and Decision Review pages. Two breaking changes — read them before
+upgrading.
+
+- **Redesigned the knowledge graph, settings and Decision Review pages** in one shared visual
+  style (dark mode included). The Decision Review inspector now opens only when a graph node is
+  selected, and graph nodes are keyboard-focusable.
 - **Added settings dashboard** (`waycontext dashboard`).
 - **Added config, integrations and restart HTTP routes** (`GET`/`PUT /v1/config`, `GET /v1/integrations`, `POST /v1/service/restart`); restart is refused outside the managed service and while an index is running.
 - **Breaking: the managed service no longer reads a project `.env`.** It is spawned from your home directory, without the keys a `.env` folded into the launching process, so its `./.env` is `~/.env`. Put database and embedding settings in the shell environment, the MCP registration's `env`, the install `.env`, or `~/.config/waycontext/config.json`.
