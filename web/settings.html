@@ -1,0 +1,522 @@
+<!doctype html>
+<!--
+  The settings dashboard.
+
+  One self-contained file: no bundler, no CDN, no framework, no build step. It is
+  served by src/http.js next to index.html and talks to:
+    GET/PUT /v1/config          the resolution report and the config.json writer
+    GET     /v1/integrations    read-only install status
+    POST    /v1/ops/*           list_projects, index_project
+    POST    /v1/service/restart managed-service restart
+  Every string that comes from the server is inserted with textContent, never
+  innerHTML: setting values and integration details are user-controlled.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WayContext — settings</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfd; --fg: #17181c; --muted: #6b6f76; --line: #dfe1e6;
+    --panel: #fff; --accent: #2f6fed; --risk: #d1453b; --warm: #e0873a;
+    --ok: #2e9d5b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171b; --fg: #e9eaee; --muted: #9297a1; --line: #2c2e35;
+      --panel: #1e2025; --accent: #6c9bff; --risk: #f0685c; --warm: #edab6a;
+      --ok: #58c785;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 650; letter-spacing: -0.01em; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  select, input, button {
+    font: inherit; color: inherit; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tabs { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+  .tabs button { border-color: transparent; background: transparent; }
+  .tabs button[aria-selected=true] { border-color: var(--accent); color: var(--accent); }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  h2 { font-size: 13px; margin: 18px 0 6px; text-transform: uppercase;
+       letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  code { font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+         background: var(--bg); padding: 1px 4px; border-radius: 4px;
+         overflow-wrap: anywhere; }
+  .muted { color: var(--muted); }
+  .err { color: var(--risk); }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 999px;
+          font-size: 11px; border: 1px solid var(--line); color: var(--muted);
+          overflow-wrap: anywhere; }
+  .pill.ok { color: var(--ok); border-color: var(--ok); }
+  .pill.bad { color: var(--risk); border-color: var(--risk); }
+  details { border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
+            margin: 10px 0; }
+  summary { cursor: pointer; padding: 10px 14px; font-weight: 600; }
+  .row { padding: 10px 14px; border-top: 1px solid var(--line); }
+  .row.changed { box-shadow: inset 3px 0 0 var(--accent); }
+  .row .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row .key { font: 600 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
+  .row .desc { margin: 2px 0 6px; color: var(--muted); font-size: 13px; }
+  .row .ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row .ctl input[type=text], .row .ctl input[type=number], .row .ctl select { flex: 1; min-width: 0; max-width: 100%; }
+  .warn { margin: 6px 0 0; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+          border: 1px solid var(--risk); color: var(--risk); }
+  .warn.amber { border-color: var(--warm); color: var(--warm); }
+  .banner { margin: 12px 0; padding: 10px 14px; border-radius: 8px;
+            border: 1px solid var(--accent); background: var(--panel); }
+  .banner.err { border-color: var(--risk); }
+  .banner ul { margin: 4px 0; padding-left: 18px; }
+  .savebar { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center;
+             padding: 10px 0; background: var(--bg); border-top: 1px solid var(--line); margin-top: 12px; }
+  .card { border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
+          padding: 10px 14px; margin: 8px 0; }
+  .card .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .card .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line);
+          border-top-color: var(--accent); border-radius: 50%; animation: sp .8s linear infinite;
+          vertical-align: -2px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  @media (max-width: 480px) {
+    .tabs { margin-left: 0; width: 100%; }
+    main { padding: 12px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>WayContext settings</h1>
+  <a href="/">Knowledge graph</a>
+  <nav class="tabs" role="tablist" id="tabs"></nav>
+</header>
+<main id="main"><p class="muted">Loading…</p></main>
+
+<script type="module">
+// --- network: same-origin only, JSON on every request ----------------------
+async function call(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  let data = null;
+  try { data = await res.json(); } catch { /* empty or non-JSON body */ }
+  if (!res.ok) {
+    const err = new Error(data?.error || `${method} ${url} failed (${res.status})`);
+    err.key = data?.key;
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+const op = async (name, args) => (await call("POST", `/v1/ops/${name}`, args)).result;
+
+// --- tiny DOM helper: children are nodes or strings (strings become text) ---
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k in el && k !== "list") el[k] = v;
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+
+// --- state -----------------------------------------------------------------
+const TABS = ["Settings", "Projects", "Integrations"];
+const state = {
+  tab: "Settings",
+  report: null,            // GET /v1/config
+  integrations: null,      // GET /v1/integrations items
+  projects: null,          // list_projects rows
+  edits: new Map(),        // key -> string value to set
+  resets: new Set(),       // keys to unset
+  banner: null,            // { kind, nodes } shown after a save
+  loadError: null,
+  restarting: false,
+  restartError: null,
+  reindex: new Map(),      // project -> { busy, msg, isErr }
+  open: new Set(),         // expanded group names
+};
+
+const messages = {
+  "next-session": "Applies to new Claude sessions.",
+  "service-restart": ["Restart the service: ", "waycontext service restart", "."],
+  "next-index": "Applies on the next index.",
+};
+
+// The value the input shows: what config.json holds, else the effective value.
+const initialOf = (row) => row.fileValue ?? row.value ?? "";
+const currentOf = (row) => (state.edits.has(row.key) ? state.edits.get(row.key) : initialOf(row));
+const rowOf = (key) => state.report.settings.find((r) => r.key === key);
+const dirty = () => state.edits.size + state.resets.size;
+
+// --- loading ---------------------------------------------------------------
+async function loadConfig() {
+  state.report = await call("GET", "/v1/config");
+}
+async function loadAll() {
+  state.loadError = null;
+  try {
+    await loadConfig();
+  } catch (e) {
+    state.loadError = e.message;
+  }
+  render();
+}
+
+// --- settings tab ----------------------------------------------------------
+function sourceBadge(row) {
+  return h("span", { class: "pill", title: "where the effective value comes from" }, row.source);
+}
+
+function overrideNotes(row) {
+  const out = [];
+  if (row.shadowedBy) {
+    const where = row.shadowedBy === "environment" ? "the environment" : row.shadowedBy;
+    out.push(h("div", { class: "warn" },
+      `overridden by ${where} — this saved value will not be used`));
+  }
+  const projs = (state.report.projectOverrides ?? [])
+    .filter((p) => p.keys.includes(row.key)).map((p) => p.project);
+  if (projs.length) {
+    out.push(h("div", { class: "warn amber" }, `not used when working in: ${projs.join(", ")}`));
+  }
+  return out;
+}
+
+function control(row) {
+  const key = row.key;
+  const set = (v) => {
+    state.resets.delete(key);
+    if (v === initialOf(row)) state.edits.delete(key); else state.edits.set(key, v);
+    render({ keep: key });
+  };
+  const cur = currentOf(row);
+  if (row.type === "boolean") {
+    return h("input", { type: "checkbox", id: `f-${key}`, checked: cur === "1" || cur === "true",
+      onchange: (e) => set(e.target.checked ? "1" : "0") });
+  }
+  if (row.type === "enum") {
+    const opts = row.options.includes(cur) ? row.options : [cur, ...row.options];
+    return h("select", { id: `f-${key}`, onchange: (e) => set(e.target.value) },
+      opts.map((o) => h("option", { value: o, selected: o === cur }, o)));
+  }
+  return h("input", {
+    type: row.type === "number" ? "number" : "text", id: `f-${key}`, value: cur,
+    step: row.type === "number" ? "any" : undefined,
+    placeholder: row.default ?? "",
+    oninput: (e) => set(e.target.value),
+  });
+}
+
+function settingRow(row) {
+  const readOnly = row.secret || row.envOnly;
+  const changed = state.edits.has(row.key) || state.resets.has(row.key);
+  const fromFile = row.fileValue !== null && row.fileValue !== undefined;
+  const kids = [
+    h("div", { class: "top" }, h("span", { class: "key" }, row.key), sourceBadge(row),
+      row.appliesOn === "service-restart" && h("span", { class: "pill" }, "needs service restart")),
+    h("div", { class: "desc" }, row.description),
+  ];
+  if (row.secret) {
+    kids.push(h("div", { class: "ctl" },
+      h("span", { class: `pill ${row.isSet ? "ok" : ""}` }, row.isSet ? "set" : "not set"),
+      h("span", { class: "muted" }, "secret — value is never shown")));
+  } else if (row.envOnly) {
+    kids.push(h("div", { class: "ctl" }, h("code", {}, row.value ?? "(unset)"),
+      h("span", { class: "muted" }, "read-only — cannot be set from config.json")));
+  } else {
+    const ctl = h("div", { class: "ctl" }, control(row));
+    if (state.resets.has(row.key)) {
+      ctl.append(h("span", { class: "muted" }, "will be reset to default on save"));
+    }
+    if (fromFile || state.resets.has(row.key)) {
+      ctl.append(h("button", { type: "button", onclick: () => {
+        state.edits.delete(row.key);
+        if (state.resets.has(row.key)) state.resets.delete(row.key); else state.resets.add(row.key);
+        render({ keep: row.key });
+      } }, state.resets.has(row.key) ? "Undo reset" : "Reset to default"));
+    }
+    kids.push(ctl);
+  }
+  if (!readOnly) kids.push(...overrideNotes(row));
+  kids.push(h("div", { class: "muted", style: "font-size:12px;margin-top:4px" },
+    `default: ${row.secret ? "—" : (row.default ?? "(none)")}`));
+  return h("div", { class: `row${changed ? " changed" : ""}` }, kids);
+}
+
+function bannerFor(keys, report) {
+  const byApply = new Map();
+  for (const k of keys) {
+    const row = report.settings.find((r) => r.key === k);
+    const when = row?.appliesOn ?? "next-session";
+    if (!byApply.has(when)) byApply.set(when, []);
+    byApply.get(when).push(k);
+  }
+  const items = [];
+  for (const [when, ks] of byApply) {
+    const msg = messages[when] ?? messages["next-session"];
+    const text = Array.isArray(msg)
+      ? [msg[0], h("code", {}, msg[1]), msg[2]] : [msg];
+    items.push(h("li", {}, h("b", {}, ks.join(", ")), ": ", ...text));
+  }
+  const warns = [];
+  for (const k of keys) {
+    const row = report.settings.find((r) => r.key === k);
+    if (!row) continue;
+    if (row.shadowedBy) {
+      const where = row.shadowedBy === "environment" ? "the environment" : row.shadowedBy;
+      warns.push(h("div", { class: "warn" }, `${k}: overridden by ${where} — the saved value will not be used`));
+    }
+    const projs = (report.projectOverrides ?? []).filter((p) => p.keys.includes(k)).map((p) => p.project);
+    if (projs.length) warns.push(h("div", { class: "warn amber" }, `${k}: not used when working in: ${projs.join(", ")}`));
+  }
+  return h("div", { class: "banner" }, h("b", {}, "Saved."), h("ul", {}, items), warns);
+}
+
+async function save() {
+  const set = {};
+  for (const [k, v] of state.edits) set[k] = v;
+  const unset = [...state.resets];
+  const keys = [...Object.keys(set), ...unset];
+  try {
+    state.report = await call("PUT", "/v1/config", { set, unset });
+    state.edits.clear();
+    state.resets.clear();
+    state.banner = bannerFor(keys, state.report);
+  } catch (e) {
+    state.banner = h("div", { class: "banner err" },
+      h("b", { class: "err" }, "Not saved. "), e.key ? `${e.key}: ` : "", e.message);
+  }
+  render();
+}
+
+function settingsTab() {
+  const wrap = h("div");
+  const r = state.report;
+  wrap.append(h("p", { class: "muted" }, "Config file: ", h("code", {}, r.configFile)));
+  if (r.configError) wrap.append(h("div", { class: "banner err" }, `config.json problem: ${r.configError}`));
+  if (state.banner) wrap.append(state.banner);
+  const groups = new Map();
+  for (const row of r.settings) {
+    if (!groups.has(row.group)) groups.set(row.group, []);
+    groups.get(row.group).push(row);
+  }
+  for (const [name, rows] of groups) {
+    const d = h("details", { open: state.open.has(name) || rows.some((x) => dirty() && (state.edits.has(x.key) || state.resets.has(x.key))) },
+      h("summary", {}, `${name} `, h("span", { class: "muted" }, `(${rows.length})`)),
+      rows.map(settingRow));
+    d.addEventListener("toggle", () => { if (d.open) state.open.add(name); else state.open.delete(name); });
+    wrap.append(d);
+  }
+  const overrides = r.projectOverrides ?? [];
+  wrap.append(h("h2", {}, "Project overrides"));
+  if (!overrides.length) wrap.append(h("p", { class: "muted" }, "No indexed project's .env overrides a WayContext setting."));
+  for (const p of overrides) {
+    wrap.append(h("div", { class: "card" },
+      h("b", {}, p.project), " ", h("code", {}, p.envFile),
+      h("div", { class: "muted" }, "overrides: ", p.keys.join(", "))));
+  }
+  const n = dirty();
+  wrap.append(h("div", { class: "savebar" },
+    h("button", { class: "primary", id: "save", type: "button", disabled: n === 0, onclick: save }, "Save"),
+    h("span", { class: "muted" }, n ? `${n} change${n === 1 ? "" : "s"} pending` : "No changes")));
+  return wrap;
+}
+
+// --- projects tab ----------------------------------------------------------
+const isStale = () => {
+  const r = state.report;
+  return !!(r?.configMtime && r?.serviceStartedAt && r.configMtime > r.serviceStartedAt);
+};
+
+async function waitForHealth() {
+  await new Promise((r) => setTimeout(r, 1500));
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch("/health");
+      if (res.ok) return true;
+    } catch { /* still down */ }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+async function restart() {
+  state.restartError = null;
+  state.restarting = true;
+  render();
+  try {
+    await call("POST", "/v1/service/restart", {});
+    if (!(await waitForHealth())) throw new Error("the service did not come back within 60 seconds");
+    await loadConfig();
+  } catch (e) {
+    state.restartError = e.message;
+  }
+  state.restarting = false;
+  render();
+}
+
+async function reindex(name) {
+  state.reindex.set(name, { busy: true });
+  render();
+  try {
+    const out = await op("index_project", { project: name });
+    const text = typeof out === "string" ? out : JSON.stringify(out);
+    state.reindex.set(name, { msg: text.length > 400 ? `${text.slice(0, 400)}…` : text });
+  } catch (e) {
+    state.reindex.set(name, { msg: e.message, isErr: true });
+  }
+  render();
+}
+
+async function loadProjects() {
+  try {
+    state.projects = await op("list_projects", {});
+    state.projectsError = null;
+  } catch (e) {
+    state.projectsError = e.message;
+  }
+  render();
+}
+
+function projectsTab() {
+  const wrap = h("div");
+  const stale = isStale();
+  if (stale || state.restarting || state.restartError) {
+    const box = h("div", { class: `banner${state.restartError ? " err" : ""}` });
+    if (stale || state.restarting) {
+      box.append("The service is using settings from before your last save. ");
+    }
+    if (state.restarting) box.append(h("span", { class: "spin" }), " Restarting… waiting for the service to answer.");
+    else box.append(h("button", { id: "restart", type: "button", onclick: restart }, "Restart service"));
+    if (state.restartError) box.append(h("div", { class: "err" }, state.restartError));
+    wrap.append(box);
+  }
+  if (state.projectsError) wrap.append(h("p", { class: "err" }, state.projectsError));
+  if (!state.projects) {
+    if (!state.projectsError) wrap.append(h("p", { class: "muted" }, "Loading…"));
+    return wrap;
+  }
+  if (!state.projects.length) {
+    wrap.append(h("p", { class: "muted" }, "No indexed projects. Run ", h("code", {}, "waycontext index <name> <path>"), "."));
+  }
+  for (const p of state.projects) {
+    const st = state.reindex.get(p.name) ?? {};
+    const when = p.indexed_at ? new Date(p.indexed_at).toLocaleString() : "never";
+    wrap.append(h("div", { class: "card" },
+      h("div", { class: "head" },
+        h("div", { class: "grow" }, h("b", {}, p.name), h("div", { class: "muted" }, h("code", {}, p.root_path ?? ""), ` · last indexed ${when}`)),
+        st.busy && h("span", { class: "spin" }),
+        h("button", { type: "button", disabled: stale || state.restarting || st.busy, onclick: () => reindex(p.name) }, "Re-index")),
+      st.msg && h("div", { class: st.isErr ? "err" : "muted", style: "margin-top:6px;overflow-wrap:anywhere" }, st.msg)));
+  }
+  return wrap;
+}
+
+// --- integrations tab ------------------------------------------------------
+async function loadIntegrations() {
+  try {
+    state.integrations = (await call("GET", "/v1/integrations")).items;
+    state.integrationsError = null;
+  } catch (e) {
+    state.integrationsError = e.message;
+  }
+  render();
+}
+
+function copyButton(text) {
+  const b = h("button", { type: "button" }, "Copy");
+  b.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      b.textContent = "Copied";
+    } catch {
+      const t = h("textarea", { value: text, style: "position:fixed;opacity:0" });
+      document.body.append(t); t.select();
+      try { document.execCommand("copy"); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }
+      t.remove();
+    }
+    setTimeout(() => { b.textContent = "Copy"; }, 1500);
+  });
+  return b;
+}
+
+function integrationsTab() {
+  const wrap = h("div");
+  if (state.integrationsError) wrap.append(h("p", { class: "err" }, state.integrationsError));
+  if (!state.integrations) {
+    if (!state.integrationsError) wrap.append(h("p", { class: "muted" }, "Loading…"));
+    return wrap;
+  }
+  for (const it of state.integrations) {
+    wrap.append(h("div", { class: "card" },
+      h("div", { class: "head" }, h("b", { class: "grow" }, it.label),
+        h("span", { class: `pill ${it.status === "ok" ? "ok" : "bad"}` }, it.status)),
+      it.detail && h("div", { class: "muted", style: "overflow-wrap:anywhere" }, it.detail),
+      it.fix && h("div", { class: "head", style: "margin-top:6px" },
+        h("code", { class: "grow" }, it.fix), copyButton(it.fix))));
+  }
+  return wrap;
+}
+
+// --- shell -----------------------------------------------------------------
+function render(opts = {}) {
+  const tabs = document.getElementById("tabs");
+  tabs.replaceChildren(...TABS.map((t) => h("button", {
+    type: "button", role: "tab", "aria-selected": String(t === state.tab),
+    onclick: () => {
+      state.tab = t;
+      if (t === "Projects") { loadProjects(); loadConfig().then(render).catch(() => {}); }
+      if (t === "Integrations") loadIntegrations();
+      render();
+    },
+  }, t)));
+  const main = document.getElementById("main");
+  if (state.loadError) {
+    main.replaceChildren(h("p", { class: "err" }, state.loadError));
+    return;
+  }
+  if (!state.report) return;
+  const body = state.tab === "Settings" ? settingsTab()
+    : state.tab === "Projects" ? projectsTab() : integrationsTab();
+  const active = document.activeElement;
+  const caret = active && active.selectionStart !== undefined ? active.selectionStart : null;
+  main.replaceChildren(body);
+  if (opts.keep) {
+    const el = document.getElementById(`f-${opts.keep}`);
+    if (el && active && active.id === `f-${opts.keep}`) {
+      el.focus();
+      if (caret !== null && el.setSelectionRange && el.type === "text") el.setSelectionRange(caret, caret);
+    }
+  }
+}
+
+loadAll();
+</script>
+</body>
+</html>
