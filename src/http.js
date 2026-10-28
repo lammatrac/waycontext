@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { initDb, getProject, listProjects } from "./db.js";
 import { randomUUID } from "node:crypto";
-import { operationsFor, findOperation } from "./operations.js";
+import { operationsFor, findOperation, inFlightIndexCount } from "./operations.js";
 import { buildMcpServer } from "./mcpServer.js";
 import { composeContext } from "./context/compose.js";
 import { queryCacheStats } from "./embeddings.js";
@@ -52,10 +52,6 @@ const WEB_DIR = path.join(__dirname, "..", "web");
 const MAX_BODY_BYTES = 256 * 1024;
 
 const serviceStartedAt = new Date().toISOString();
-
-// Restarting mid-index would kill the worker and leave a half-written index, so
-// the restart route refuses while any index_project call is running.
-let inFlightIndexes = 0;
 
 // Give the 202 time to flush before the worker exits; the daemon respawns it.
 const RESTART_EXIT_DELAY_MS = 100;
@@ -286,7 +282,8 @@ async function handle(req, res, { publicBind = false, onRestart = exitForRestart
     if (!process.env.WAYCONTEXT_SERVICE_INJECTED) {
       return send(res, 409, { error: "not running under the managed service" });
     }
-    if (inFlightIndexes > 0) {
+    // Restarting mid-index would kill the worker and leave a half-written index.
+    if (inFlightIndexCount() > 0) {
       return send(res, 409, { error: "an index is in progress; restart when it finishes" });
     }
     res.once("finish", onRestart);
@@ -337,16 +334,9 @@ async function handle(req, res, { publicBind = false, onRestart = exitForRestart
       });
     }
     const logs = [];
-    const counted = op.name === "index_project";
-    if (counted) inFlightIndexes++;
-    let result;
-    try {
-      result = await op.handler(args, {
-        log: (m) => logs.push(m), surface: "http", correlationId: randomUUID(),
-      });
-    } finally {
-      if (counted) inFlightIndexes--;
-    }
+    const result = await op.handler(args, {
+      log: (m) => logs.push(m), surface: "http", correlationId: randomUUID(),
+    });
     return send(res, 200, logs.length ? { result, logs } : { result });
   }
 

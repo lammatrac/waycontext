@@ -539,3 +539,20 @@ test("POST /v1/service/restart is 409 with a distinct error while an index is in
       assert.equal(calls.length, exitsAtRefusal + 1);
     }));
 });
+
+test("POST /v1/service/restart is refused while an index started outside /v1/ops runs", async () => {
+  // The count lives on the operation handler, which /mcp calls too.
+  const { findOperation } = await import("../src/operations.js");
+  await withInjected("WAYCONTEXT_SERVICE_HOST,WAYCONTEXT_SERVICE_PORT", () =>
+    withRestartServer(async ({ restart, calls }) => {
+      const indexing = findOperation("index_project").handler(
+        { project: PROJECT, path: repo }, { log: () => {}, surface: "mcp" },
+      );
+      const res = await restart();
+      await indexing;
+      assert.equal(res.status, 409);
+      assert.match((await res.json()).error, /index/i);
+      assert.equal(calls.length, 0);
+      assert.equal((await restart()).status, 202, "counter decremented");
+    }));
+});

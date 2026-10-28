@@ -81,6 +81,14 @@ function resolveNameArg(opName, a) {
 // Every op below spreading nameArg() must also hide "symbol" from the CLI
 // (it's a JSON-keyword-only alias) via `cli: { hidden: ["symbol"], ... }`.
 
+// Indexes running in this process, counted at the handler so the HTTP and MCP
+// surfaces share one count. Out-of-process CLI indexes are deliberately not
+// counted: the service cannot see them.
+let inFlightIndexes = 0;
+export function inFlightIndexCount() {
+  return inFlightIndexes;
+}
+
 export const operations = [
   {
     name: "index_project",
@@ -112,7 +120,14 @@ export const operations = [
       streams: true,
       ensureSchema: true,
     },
-    handler: (a, ctx) => indexProject(a.project, a.path, ctx.log),
+    handler: async (a, ctx) => {
+      inFlightIndexes++;
+      try {
+        return await indexProject(a.project, a.path, ctx.log);
+      } finally {
+        inFlightIndexes--;
+      }
+    },
   },
   {
     name: "list_projects",
