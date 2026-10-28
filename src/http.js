@@ -8,6 +8,9 @@
  *   POST /v1/context      the composer -- the billing unit, later
  *   POST /v1/ops/:name    any operation from the registry, by name
  *   GET  /                the web knowledge graph (Phase 6)
+ *   GET|PUT /v1/config    settings report / validated config.json edits
+ *   GET  /v1/integrations MCP, gate, config and service health
+ *   POST /v1/service/restart  worker exits; the managed daemon respawns it
  *
  * `/v1/ops/:name` is what makes "every surface reads the same registry" literal
  * rather than aspirational: the VSCode extension and the web UI call it, so a new
@@ -30,7 +33,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { initDb, getProject } from "./db.js";
+import { initDb, getProject, listProjects } from "./db.js";
 import { randomUUID } from "node:crypto";
 import { operationsFor, findOperation } from "./operations.js";
 import { buildMcpServer } from "./mcpServer.js";
@@ -39,11 +42,26 @@ import { queryCacheStats } from "./embeddings.js";
 import { NAME, VERSION } from "./version.js";
 import { config } from "./config.js";
 import { slugify } from "./reasoning/slug.js";
+import { inspectSettings, scanProjectOverrides } from "./settingsInspect.js";
+import { applyConfigChanges, ConfigWriteError } from "./configWriter.js";
+import { integrationStatus } from "./integrations.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(__dirname, "..", "web");
 
 const MAX_BODY_BYTES = 256 * 1024;
+
+const serviceStartedAt = new Date().toISOString();
+
+// Restarting mid-index would kill the worker and leave a half-written index, so
+// the restart route refuses while any index_project call is running.
+let inFlightIndexes = 0;
+
+// Give the 202 time to flush before the worker exits; the daemon respawns it.
+const RESTART_EXIT_DELAY_MS = 100;
+function exitForRestart() {
+  setTimeout(() => process.exit(0), RESTART_EXIT_DELAY_MS).unref();
+}
 
 function send(res, status, body, headers = {}) {
   const payload = typeof body === "string" ? body : JSON.stringify(body, null, 2);
@@ -161,6 +179,24 @@ function catalogue() {
   }));
 }
 
+/** The settings report plus what the dashboard needs to show staleness. */
+async function configReport() {
+  const injected = (process.env.WAYCONTEXT_SERVICE_INJECTED ?? "").split(",").filter(Boolean);
+  const report = inspectSettings({ injected });
+  let configMtime = null;
+  try {
+    configMtime = fs.statSync(report.configFile).mtime.toISOString();
+  } catch {
+    // No config file yet.
+  }
+  return {
+    ...report,
+    projectOverrides: scanProjectOverrides(await listProjects()),
+    serviceStartedAt,
+    configMtime,
+  };
+}
+
 /**
  * Write protection for every non-GET/HEAD request.
  *
@@ -204,7 +240,7 @@ export function checkWriteRequest(req, { port, publicBind = false }) {
   return null;
 }
 
-async function handle(req, res, { publicBind = false } = {}) {
+async function handle(req, res, { publicBind = false, onRestart = exitForRestart } = {}) {
   const url = new URL(req.url, "http://localhost");
   const route = url.pathname;
 
@@ -223,6 +259,38 @@ async function handle(req, res, { publicBind = false } = {}) {
 
   if (req.method === "GET" && route === "/v1/ops") {
     return send(res, 200, { operations: catalogue() });
+  }
+
+  if (req.method === "GET" && route === "/v1/config") {
+    return send(res, 200, await configReport());
+  }
+
+  if (req.method === "PUT" && route === "/v1/config") {
+    const body = await readJsonBody(req);
+    try {
+      applyConfigChanges({ set: body.set, unset: body.unset });
+    } catch (e) {
+      if (e instanceof ConfigWriteError) return send(res, e.status, { error: e.message, key: e.key });
+      return send(res, 500, { error: e.message });
+    }
+    return send(res, 200, await configReport());
+  }
+
+  if (req.method === "GET" && route === "/v1/integrations") {
+    return send(res, 200, { items: await integrationStatus() });
+  }
+
+  if (req.method === "POST" && route === "/v1/service/restart") {
+    // Only the managed daemon respawns a worker that exits; a foreground
+    // `waycontext serve` would simply die, so refuse there.
+    if (!process.env.WAYCONTEXT_SERVICE_INJECTED) {
+      return send(res, 409, { error: "not running under the managed service" });
+    }
+    if (inFlightIndexes > 0) {
+      return send(res, 409, { error: "an index is in progress; restart when it finishes" });
+    }
+    res.once("finish", onRestart);
+    return send(res, 202, { restarting: true });
   }
 
   if (req.method === "POST" && route === "/v1/context") {
@@ -269,9 +337,16 @@ async function handle(req, res, { publicBind = false } = {}) {
       });
     }
     const logs = [];
-    const result = await op.handler(args, {
-      log: (m) => logs.push(m), surface: "http", correlationId: randomUUID(),
-    });
+    const counted = op.name === "index_project";
+    if (counted) inFlightIndexes++;
+    let result;
+    try {
+      result = await op.handler(args, {
+        log: (m) => logs.push(m), surface: "http", correlationId: randomUUID(),
+      });
+    } finally {
+      if (counted) inFlightIndexes--;
+    }
     return send(res, 200, logs.length ? { result, logs } : { result });
   }
 
@@ -295,13 +370,20 @@ async function handle(req, res, { publicBind = false } = {}) {
 
   send(res, 404, {
     error: "Not found",
-    routes: ["/health", "/v1/ops", "/v1/ops/:name", "/v1/context", "/mcp", "/reviews/:project/:slug", "/"],
+    routes: [
+      "/health", "/v1/ops", "/v1/ops/:name", "/v1/context",
+      "/v1/config", "/v1/integrations", "/v1/service/restart", "/mcp", "/reviews/:project/:slug", "/",
+    ],
   });
 }
 
-export function createServer({ publicBind = !!process.env.WAYCONTEXT_ALLOW_PUBLIC_BIND } = {}) {
+export function createServer({
+  publicBind = !!process.env.WAYCONTEXT_ALLOW_PUBLIC_BIND,
+  // Injectable so tests never exit the test runner.
+  onRestart = exitForRestart,
+} = {}) {
   return http.createServer((req, res) => {
-    handle(req, res, { publicBind }).catch((e) => {
+    handle(req, res, { publicBind, onRestart }).catch((e) => {
       // Operations throw for ordinary reasons -- unknown project, unresolvable
       // target -- so a thrown message is a 400 with the message, not a 500 with
       // a stack. Genuine bugs surface the same way; the alternative is hiding

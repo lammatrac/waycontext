@@ -1,6 +1,13 @@
 // Embeddings off, src imports dynamic: static ESM imports are hoisted above
 // this assignment. See test/docs.ingest.test.js for the same precaution.
 process.env.EMBEDDING_PROVIDER = "none";
+// The config routes write to this file, never to the developer's real config.json.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+const CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "wc-http-config-"));
+const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
+process.env.WAYCONTEXT_CONFIG = CONFIG_FILE;
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -380,4 +387,155 @@ test("write protection: public bind skips only the Host check", async () => {
   } finally {
     await new Promise((resolve) => pub.close(resolve));
   }
+});
+
+const put = (p, body, headers = { "Content-Type": "application/json" }) =>
+  fetch(`${base}${p}`, {
+    method: "PUT",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+
+test("GET /v1/config returns the settings report with service and file metadata", async () => {
+  const res = await get("/v1/config");
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.settings.length >= 40, `only ${body.settings.length} settings`);
+  assert.ok(!Number.isNaN(Date.parse(body.serviceStartedAt)));
+  assert.equal(body.configFile, CONFIG_FILE);
+  assert.ok(Array.isArray(body.projectOverrides));
+  assert.ok("configMtime" in body);
+});
+
+test("PUT /v1/config writes the file and returns the fresh report", async () => {
+  const res = await put("/v1/config", { set: { ORG_SLUG: "zz" } });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(fs.readFileSync(CONFIG_FILE, "utf8").includes('"zz"'));
+  assert.equal(body.settings.find((s) => s.key === "ORG_SLUG").fileValue, "zz");
+  assert.ok(body.configMtime, "mtime is set once the file exists");
+
+  const cleared = await put("/v1/config", { unset: ["ORG_SLUG"] });
+  assert.equal(cleared.status, 200);
+  assert.ok(!fs.readFileSync(CONFIG_FILE, "utf8").includes('"zz"'));
+});
+
+test("PUT /v1/config refuses secrets with 403 and the offending key", async () => {
+  const res = await put("/v1/config", { set: { DATABASE_URL: "postgres://x" } });
+  assert.equal(res.status, 403);
+  const body = await res.json();
+  assert.equal(body.key, "DATABASE_URL");
+  assert.ok(body.error);
+});
+
+test("PUT /v1/config without a JSON content type is 415", async () => {
+  const res = await put("/v1/config", "{}", { "Content-Type": "text/plain" });
+  assert.equal(res.status, 415);
+});
+
+test("PUT /v1/config maps a non-ConfigWriteError failure to 500", async () => {
+  // A directory where the file should be makes the read fail with EISDIR.
+  const dir = path.join(CONFIG_DIR, "as-dir");
+  fs.mkdirSync(dir);
+  const prev = process.env.WAYCONTEXT_CONFIG;
+  process.env.WAYCONTEXT_CONFIG = dir;
+  try {
+    const res = await put("/v1/config", { set: { ORG_SLUG: "zz" } });
+    assert.equal(res.status, 500);
+    assert.ok((await res.json()).error);
+  } finally {
+    process.env.WAYCONTEXT_CONFIG = prev;
+  }
+});
+
+test("GET /v1/integrations returns the five items", async () => {
+  const res = await get("/v1/integrations");
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(
+    body.items.map((i) => i.id),
+    ["mcp_registration", "gate_script", "gate_hooks", "config_file", "service"],
+  );
+});
+
+async function withRestartServer(fn) {
+  const calls = [];
+  const srv = createServer({ onRestart: () => calls.push(1) });
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  const restart = () =>
+    fetch(`${url}/v1/service/restart`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  try {
+    await fn({ url, restart, calls });
+  } finally {
+    await new Promise((resolve) => srv.close(resolve));
+  }
+}
+
+async function withInjected(value, fn) {
+  const prev = process.env.WAYCONTEXT_SERVICE_INJECTED;
+  if (value === undefined) delete process.env.WAYCONTEXT_SERVICE_INJECTED;
+  else process.env.WAYCONTEXT_SERVICE_INJECTED = value;
+  try {
+    await fn();
+  } finally {
+    if (prev === undefined) delete process.env.WAYCONTEXT_SERVICE_INJECTED;
+    else process.env.WAYCONTEXT_SERVICE_INJECTED = prev;
+  }
+}
+
+test("POST /v1/service/restart is 409 when not under the managed service", async () => {
+  await withInjected(undefined, () => withRestartServer(async ({ restart, calls }) => {
+    const res = await restart();
+    assert.equal(res.status, 409);
+    assert.equal((await res.json()).error, "not running under the managed service");
+    assert.equal(calls.length, 0);
+  }));
+});
+
+test("POST /v1/service/restart is 202 under the managed service and schedules the exit", async () => {
+  await withInjected("WAYCONTEXT_SERVICE_HOST,WAYCONTEXT_SERVICE_PORT", () =>
+    withRestartServer(async ({ restart, calls }) => {
+      const res = await restart();
+      assert.equal(res.status, 202);
+      assert.deepEqual(await res.json(), { restarting: true });
+      assert.equal(calls.length, 1);
+    }));
+});
+
+test("POST /v1/service/restart is 409 with a distinct error while an index is in flight", async () => {
+  await withInjected("WAYCONTEXT_SERVICE_HOST,WAYCONTEXT_SERVICE_PORT", () =>
+    withRestartServer(async ({ url, restart, calls }) => {
+      const indexing = fetch(`${url}/v1/ops/index_project`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: PROJECT, path: repo }),
+      });
+      // Early polls can land before the index request is counted and get a 202
+      // (the stub absorbs the exit); keep polling until the refusal appears.
+      let seen = null;
+      let exitsAtRefusal = null;
+      for (let i = 0; i < 200 && !seen; i++) {
+        const before = calls.length;
+        const res = await restart();
+        if (res.status === 409) {
+          const { error } = await res.json();
+          if (/index/i.test(error)) {
+            seen = error;
+            exitsAtRefusal = before;
+          }
+        }
+      }
+      await (await indexing).text();
+      assert.ok(seen, "restart was refused because an index was running");
+      assert.notEqual(seen, "not running under the managed service");
+      assert.equal(calls.length, exitsAtRefusal, "the refused restart scheduled no exit");
+
+      // The counter came back down, so restart is allowed again.
+      const after = await restart();
+      assert.equal(after.status, 202);
+      assert.equal(calls.length, exitsAtRefusal + 1);
+    }));
 });
