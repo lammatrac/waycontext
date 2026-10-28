@@ -7,8 +7,13 @@ import path from "node:path";
 // config.js reads its sources at import time, so each case loads a fresh copy
 // with a cache-busting query string under a controlled environment.
 let counter = 0;
-async function loadConfig(env) {
+async function loadConfig(env, { whole = false, clean = false } = {}) {
   const saved = { ...process.env };
+  // `clean` drops every inherited variable but PATH/HOME, so a snapshot of the
+  // defaults cannot be skewed by whatever the machine or CI has exported.
+  if (clean) {
+    for (const k of Object.keys(process.env)) if (k !== "PATH" && k !== "HOME") delete process.env[k];
+  }
   // Ignore the repo's own .env so these assertions describe the precedence
   // rules rather than whatever this machine happens to have configured.
   process.env.WAYCONTEXT_IGNORE_DOTENV = "1";
@@ -18,12 +23,16 @@ async function loadConfig(env) {
   }
   try {
     const mod = await import(`../src/config.js?case=${counter++}`);
-    return mod.config;
+    return whole ? mod : mod.config;
   } finally {
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
     Object.assign(process.env, saved);
   }
 }
+
+// Captured from the pre-registry build with a clean env (see the shape test).
+const SHAPE_SNAPSHOT =
+  "{\"databaseUrl\":\"postgres://codectx:codectx@localhost:5432/codectx\",\"embeddingProvider\":\"none\",\"voyage\":{\"apiKey\":\"\",\"model\":\"voyage-code-3\",\"pricePerMTokens\":null},\"openai\":{\"apiKey\":\"\",\"model\":\"text-embedding-3-small\",\"pricePerMTokens\":null},\"orgSlug\":\"default\",\"embeddingDim\":1024,\"embedConcurrency\":4,\"maxFileSize\":1048576,\"historyEnabled\":true,\"historyWindowMonths\":24,\"historyMaxCommits\":20000,\"ownershipHalfLifeDays\":180,\"docsEnabled\":true,\"docsGlobs\":[\"**/*.md\",\"**/*.mdx\"],\"docsChunkChars\":4800,\"rulesEnabled\":true,\"ruleCandidateMinConfidence\":0.4,\"knowledgeDir\":\".waycontext/knowledge\",\"reasoningDir\":\"docs/waycontext\",\"reasoningAutoOpen\":true,\"serviceAutoStart\":true,\"serviceHost\":\"127.0.0.1\",\"servicePort\":4747,\"uiEnabled\":true,\"uiI18nLocale\":null,\"browserEnabled\":true,\"browserStateDir\":\"/fixed/browser-state\",\"browserIdleTimeoutSeconds\":900,\"deriveEnabled\":true,\"moduleDepth\":2,\"metricsWindowDays\":90,\"cochangeMaxFiles\":50,\"cochangeMinPairCommits\":2,\"bugClusterThreshold\":0.82,\"bugClusterMinSize\":2}";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codectx-config-"));
 function writeConfigFile(obj) {
@@ -152,6 +161,71 @@ test("a DATABASE_URL already in the environment is still used as before", async 
     WAYCONTEXT_CONFIG: undefined,
   });
   assert.equal(cfg.databaseUrl, "postgres://env@localhost/envdb");
+});
+
+test("every setting() key has a registry entry", async () => {
+  const { readKeys, settingDef } = await loadConfig({ WAYCONTEXT_CONFIG: undefined }, { whole: true });
+  assert.ok(readKeys.size > 0);
+  const missing = [...readKeys].filter((k) => !settingDef(k));
+  assert.deepEqual(missing, []);
+});
+
+test("registry marks secrets", async () => {
+  const { settingDef } = await loadConfig({ WAYCONTEXT_CONFIG: undefined }, { whole: true });
+  for (const k of ["VOYAGE_API_KEY", "OPENAI_API_KEY", "DATABASE_URL", "WAYCONTEXT_DATABASE_URL"]) {
+    assert.equal(settingDef(k).secret, true, k);
+  }
+});
+
+test("meta keys are envOnly", async () => {
+  const { settingDef } = await loadConfig({ WAYCONTEXT_CONFIG: undefined }, { whole: true });
+  for (const k of ["WAYCONTEXT_CONFIG", "WAYCONTEXT_IGNORE_DOTENV", "WAYCONTEXT_ALLOW_PUBLIC_BIND"]) {
+    assert.equal(settingDef(k).envOnly, true, k);
+  }
+});
+
+test("EMBEDDING_PROVIDER is an enum", async () => {
+  const { settingDef } = await loadConfig({ WAYCONTEXT_CONFIG: undefined }, { whole: true });
+  assert.deepEqual(settingDef("EMBEDDING_PROVIDER").options, ["none", "voyage", "openai"]);
+});
+
+test("config shape unchanged", async () => {
+  const cfg = await loadConfig(
+    { WAYCONTEXT_CONFIG: path.join(dir, "missing.json"), BROWSER_STATE_DIR: "/fixed/browser-state" },
+    { clean: true },
+  );
+  assert.equal(JSON.stringify(cfg), SHAPE_SNAPSHOT);
+});
+
+test("JSON false disables a feature", async () => {
+  const file = writeConfigFile({ HISTORY_ENABLED: false });
+  const cfg = await loadConfig({ WAYCONTEXT_CONFIG: file, HISTORY_ENABLED: undefined });
+  assert.equal(cfg.historyEnabled, false);
+});
+
+test("JSON true enables auto-open", async () => {
+  const file = writeConfigFile({ REASONING_AUTO_OPEN: true });
+  const cfg = await loadConfig({ WAYCONTEXT_CONFIG: file, REASONING_AUTO_OPEN: undefined });
+  assert.equal(cfg.reasoningAutoOpen, true);
+});
+
+test("JSON false turns auto-open off", async () => {
+  const file = writeConfigFile({ REASONING_AUTO_OPEN: false });
+  const cfg = await loadConfig({ WAYCONTEXT_CONFIG: file, REASONING_AUTO_OPEN: undefined });
+  assert.equal(cfg.reasoningAutoOpen, false);
+});
+
+test('string "false" disables a boolean', async () => {
+  const cfg = await loadConfig({ DOCS_ENABLED: "false", WAYCONTEXT_CONFIG: undefined });
+  assert.equal(cfg.docsEnabled, false);
+});
+
+test("normalizeFileValue maps booleans to 1/0 and stringifies the rest", async () => {
+  const { normalizeFileValue } = await loadConfig({ WAYCONTEXT_CONFIG: undefined }, { whole: true });
+  assert.equal(normalizeFileValue(true), "1");
+  assert.equal(normalizeFileValue(false), "0");
+  assert.equal(normalizeFileValue(42), "42");
+  assert.equal(normalizeFileValue("x"), "x");
 });
 
 process.on("exit", () => fs.rmSync(dir, { recursive: true, force: true }));

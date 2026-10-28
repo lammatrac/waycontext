@@ -2,6 +2,11 @@
 
 Newest first. Dates are the day the change landed.
 
+## Unreleased
+
+- **Honoured JSON booleans in `config.json`.** `true`/`false` are now read as on/off; previously `false` left features on and `true` turned `REASONING_AUTO_OPEN` off. Also accepted from the environment: `true`/`false` alongside `1`/`0`.
+- **Added a settings registry** (`SETTINGS`, `settingDef`) in `src/config.js` declaring every setting once.
+
 ## 2026-10-17 — v0.8.0: WordPress UI intelligence, faster and leaner indexing, search that actually returns results
 
 Since v0.7.0: a new family of WordPress UI tools, PHP call resolution that follows receivers,
