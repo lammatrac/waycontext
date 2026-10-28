@@ -6,7 +6,10 @@ Newest first. Dates are the day the change landed.
 
 - **Added settings dashboard** (`waycontext dashboard`).
 - **Added config, integrations and restart HTTP routes** (`GET`/`PUT /v1/config`, `GET /v1/integrations`, `POST /v1/service/restart`); restart is refused outside the managed service and while an index is running.
-- **Honoured JSON booleans in `config.json`.** `true`/`false` are now read as on/off; previously `false` left features on and `true` turned `REASONING_AUTO_OPEN` off. Also accepted from the environment: `true`/`false` alongside `1`/`0`.
+- **Breaking: the managed service no longer reads a project `.env`.** It is spawned from your home directory, without the keys a `.env` folded into the launching process, so its `./.env` is `~/.env`. Put database and embedding settings in the shell environment, the MCP registration's `env`, the install `.env`, or `~/.config/waycontext/config.json`.
+- **Breaking: write protection on the HTTP service.** Every non-`GET`/`HEAD` route (`/v1/ops/*`, `/v1/context`, `/mcp` and the new routes) now requires `Content-Type: application/json` (415 otherwise; a bodiless `DELETE` is exempt) and refuses a foreign `Host` or `Origin` (403).
+- **Honoured JSON booleans in `config.json`.** `true`/`false` are now read as on/off; previously `false` left features on and `true` turned `REASONING_AUTO_OPEN` off. From the environment, `true`/`false`, `yes`/`no` and `on`/`off` (any case) are accepted alongside `1`/`0`; any other value now falls back to the setting's default (previously anything but `0` turned most flags on, and anything but `1` turned `REASONING_AUTO_OPEN` off).
+- **`waycontext service restart` is honest about what it did.** It prints "restarted" only after a fresh start, and exits non-zero when an unmanaged `waycontext serve` is answering (restart that one by hand).
 - **Added a settings registry** (`SETTINGS`, `settingDef`) in `src/config.js` declaring every setting once.
 
 ## 2026-10-17 — v0.8.0: WordPress UI intelligence, faster and leaner indexing, search that actually returns results

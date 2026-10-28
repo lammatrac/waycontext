@@ -84,6 +84,8 @@ It runs every 5 minutes rather than at a fixed time of day — a personal laptop
 
 > **Configuration sources.** Settings are read, highest precedence first, from: the environment, `./.env` in the directory you run from (except a plain `DATABASE_URL`, which there belongs to the project's own app -- use `WAYCONTEXT_DATABASE_URL` instead), `.env` next to the install, `~/.config/waycontext/config.json` (override the path with `$WAYCONTEXT_CONFIG`), then built-in defaults. Set `WAYCONTEXT_IGNORE_DOTENV=1` to skip the `.env` files and configure purely from the environment.
 >
+> **The background service does not read your project's `.env`.** The managed service (started by `waycontext service ensure`, the dashboard, or auto-start) runs from your home directory with a clean environment: keys a `.env` contributed to the process that launched it are dropped, and its `./.env` is `~/.env` if you have one. Put database and embedding settings (`WAYCONTEXT_DATABASE_URL`/`DATABASE_URL`, `EMBEDDING_PROVIDER`, API keys) somewhere it does read: your shell environment, the `env` of the MCP registration, the `.env` next to the install, or `~/.config/waycontext/config.json`.
+>
 > **No compiler needed.** The tree-sitter packages ship prebuilt binaries — every grammar covers linux-x64, darwin-x64, darwin-arm64 and win32-x64, and the Python/Go grammars add linux-arm64 and win32-arm64. Only platforms with no prebuild (musl/Alpine, BSD, and linux-arm64 for the older grammars) compile from source and need `build-essential` + `python3`; `install.sh` offers those there and nowhere else.
 
 `install.sh` handles this for you, preferring — in order — a database that's already reachable, Docker, then apt. The two paths are below if you'd rather do it by hand.

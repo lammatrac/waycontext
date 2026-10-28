@@ -196,8 +196,10 @@ replaces the vectors the old model made ([details](docs/troubleshooting.md#vecto
 ## Dashboard
 
 Run `waycontext dashboard` to open the settings page in your browser. It starts the
-local service if needed, lists every setting with its current value, and lets you edit
-them and restart the service so changes take effect. It binds to localhost only.
+local service if needed, lists every setting with its current value and where it comes
+from, and lets you edit them. After a save, a banner says when each change applies: in new
+Claude sessions, on the next index, or after a service restart (which the page can do for
+the managed service). It binds to localhost only.
 
 ## What it looks like
 

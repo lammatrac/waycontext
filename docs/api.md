@@ -135,7 +135,22 @@ waycontext serve            # http://127.0.0.1:4747
 | `POST /v1/context` | The composer. `format: "markdown"` returns text, not JSON. |
 | `/mcp` | MCP over StreamableHTTP — `claude mcp add --transport http` is a one-liner. |
 | `GET /reviews/:project/:slug` | One reasoning review page (`waycontext-review.html`) by indexed project + slug. |
+| `GET /v1/config` | The settings report: every setting with its effective value and source (secrets show only whether they are set), plus `configFile`, `configError`, `configMtime`, `serviceStartedAt` and `projectOverrides`. Works with the database down (`projectsError` then says why the override scan was skipped). |
+| `PUT /v1/config` | Validated edits to `config.json`: `{ "set": { KEY: value }, "unset": [KEY] }`. 400 for an unknown key or bad value, 403 for a secret or environment-only key, 409 for a config file that is not a JSON object; returns the fresh report. |
+| `GET /v1/integrations` | Health of the MCP registration, gate script and hooks, config file and background service, each with a fix command. |
+| `POST /v1/service/restart` | 202, then the managed service's worker exits and is respawned. 409 under a plain `waycontext serve` (`code: "not_managed"`) or while an index is running. |
 | `GET /` | The web knowledge graph. |
+| `GET /settings.html` | The settings dashboard (`waycontext dashboard` opens it). |
+
+**Write protection.** Every request that is not `GET`/`HEAD` (`/v1/ops/*`, `/v1/context`,
+`/mcp`, `PUT /v1/config`, `POST /v1/service/restart`) must send
+`Content-Type: application/json` (parameters such as `charset` are fine) or gets **415**; a
+bodiless `DELETE` is exempt. It also gets **403** when the `Host` header is not
+`127.0.0.1`, `localhost` or `[::1]` on the listening port (skipped under
+`WAYCONTEXT_ALLOW_PUBLIC_BIND`), or when an `Origin` header is sent and is not this server.
+Clients that send no `Origin` (MCP, the VS Code extension, curl) are unaffected. This stops
+a web page in your browser from driving the unauthenticated service, via DNS rebinding or
+a cross-site form post.
 
 `POST /v1/ops/:name` is what makes "every surface reads the same registry" literal rather
 than aspirational: the web UI and the VS Code extension both go through it, so a new
