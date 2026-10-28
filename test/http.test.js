@@ -4,6 +4,7 @@ process.env.EMBEDDING_PROVIDER = "none";
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 import { operations, operationsFor } from "../src/operations.js";
 
 const { pool, initDb } = await import("../src/db.js");
@@ -284,4 +285,99 @@ test("binding to a public interface is refused without an explicit opt-in", asyn
     () => serve({ host: "0.0.0.0", port: 0 }),
     /Refusing to bind.*no authentication/s
   );
+});
+
+// --- write protection on non-GET routes ------------------------------------
+
+/** Raw request, because fetch refuses to let a caller set Host. */
+function rawRequest({ method = "POST", path: p, headers = {}, body = "{}", port }) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: "127.0.0.1", port, method, path: p, headers },
+      (res) => { res.resume(); res.on("end", () => resolve(res.statusCode)); }
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+const opsPost = (headers) => fetch(`${base}/v1/ops/list_projects`, {
+  method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: "{}",
+});
+
+test("write protection: foreign Origin refused", async () => {
+  const res = await opsPost({ Origin: "http://evil.example" });
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).code, "forbidden_origin");
+});
+
+test("write protection: wrong Host refused", async () => {
+  const port = server.address().port;
+  const status = await rawRequest({
+    path: "/v1/ops/list_projects", port,
+    headers: { Host: `evil.example:${port}`, "Content-Type": "application/json" },
+  });
+  assert.equal(status, 403);
+});
+
+test("write protection: non-JSON content type refused", async () => {
+  const res = await fetch(`${base}/v1/ops/list_projects`, {
+    method: "POST", headers: { "Content-Type": "text/plain" }, body: "{}",
+  });
+  assert.equal(res.status, 415);
+  assert.equal((await res.json()).code, "unsupported_media_type");
+});
+
+test("write protection: same-origin allowed", async () => {
+  assert.equal((await opsPost({ Origin: base })).status, 200);
+});
+
+test("write protection: no Origin allowed (MCP and extension clients)", async () => {
+  assert.equal((await post("/v1/ops/list_projects", {})).status, 200);
+});
+
+test("write protection: /mcp also guarded", async () => {
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "http://evil.example" },
+    body: "{}",
+  });
+  assert.equal(res.status, 403);
+});
+
+test("write protection: media type is case-insensitive and tolerates parameters", async () => {
+  const res = await opsPost({ "Content-Type": "Application/JSON; charset=utf-8" });
+  assert.equal(res.status, 200);
+});
+
+test("write protection: bodiless DELETE /mcp is not refused as unsupported media type", async () => {
+  const port = server.address().port;
+  const status = await rawRequest({ method: "DELETE", path: "/mcp", port, body: undefined });
+  assert.notEqual(status, 415);
+  assert.notEqual(status, 403);
+});
+
+test("write protection: public bind skips only the Host check", async () => {
+  const pub = createServer({ publicBind: true });
+  await new Promise((resolve) => pub.listen(0, "127.0.0.1", resolve));
+  const port = pub.address().port;
+  try {
+    const wrongHost = await rawRequest({
+      path: "/v1/ops/list_projects", port,
+      headers: { Host: "wlx.example.com", "Content-Type": "application/json" },
+    });
+    assert.notEqual(wrongHost, 403);
+    const foreignOrigin = await rawRequest({
+      path: "/v1/ops/list_projects", port,
+      headers: { Host: "wlx.example.com", Origin: "http://evil.example", "Content-Type": "application/json" },
+    });
+    assert.equal(foreignOrigin, 403, "Origin still enforced");
+    const text = await rawRequest({
+      path: "/v1/ops/list_projects", port,
+      headers: { Host: "wlx.example.com", "Content-Type": "text/plain" },
+    });
+    assert.equal(text, 415, "Content-Type still enforced");
+  } finally {
+    await new Promise((resolve) => pub.close(resolve));
+  }
 });

@@ -19,6 +19,11 @@
  * not be one config typo away from being on the network. Auth, rate limiting and
  * multi-tenancy are Team/Enterprise concerns and are deliberately absent rather
  * than half-present.
+ *
+ * Because loopback is not a trust boundary against the user's own browser,
+ * every non-GET/HEAD request is also checked for a loopback Host (anti DNS
+ * rebinding), a same-origin Origin when one is sent, and a JSON Content-Type
+ * (see checkWriteRequest).
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -156,9 +161,57 @@ function catalogue() {
   }));
 }
 
-async function handle(req, res) {
+/**
+ * Write protection for every non-GET/HEAD request.
+ *
+ * Why: the server has no auth, so a hostile web page in the user's browser can
+ * aim requests at 127.0.0.1. Three checks close that:
+ *  - Host must be a loopback name on the port we really listen on, which defeats
+ *    DNS rebinding (the attacker's hostname arrives as the Host header).
+ *    Skipped under publicBind, where the Host is legitimately whatever the
+ *    operator's front end uses.
+ *  - Origin, when a browser sends one, must be this server itself.
+ *    Non-browser clients (MCP, the extension, curl) send none and pass.
+ *  - Content-Type must be JSON, so a cross-origin "simple" form POST (which
+ *    needs no CORS preflight) cannot reach a handler. DELETE is exempt: it
+ *    carries no body, and the MCP client's session-termination DELETE sends
+ *    no Content-Type.
+ *
+ * @returns {null | {status:number, error:string, code:string}} null when allowed
+ */
+export function checkWriteRequest(req, { port, publicBind = false }) {
+  const host = req.headers.host;
+  if (!publicBind) {
+    const allowed = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+    if (!host || !allowed.includes(host.toLowerCase())) {
+      return { status: 403, error: "Host not allowed", code: "forbidden_host" };
+    }
+  }
+  const origin = req.headers.origin;
+  if (origin !== undefined && (!host || origin.toLowerCase() !== `http://${host.toLowerCase()}`)) {
+    return { status: 403, error: "Origin not allowed", code: "forbidden_origin" };
+  }
+  if (req.method !== "DELETE") {
+    const mediaType = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+    if (mediaType !== "application/json") {
+      return {
+        status: 415,
+        error: "Content-Type must be application/json",
+        code: "unsupported_media_type",
+      };
+    }
+  }
+  return null;
+}
+
+async function handle(req, res, { publicBind = false } = {}) {
   const url = new URL(req.url, "http://localhost");
   const route = url.pathname;
+
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    const refusal = checkWriteRequest(req, { port: req.socket.server.address().port, publicBind });
+    if (refusal) return send(res, refusal.status, { error: refusal.error, code: refusal.code });
+  }
 
   if (req.method === "GET" && route === "/health") {
     return send(res, 200, {
@@ -246,9 +299,9 @@ async function handle(req, res) {
   });
 }
 
-export function createServer() {
+export function createServer({ publicBind = !!process.env.WAYCONTEXT_ALLOW_PUBLIC_BIND } = {}) {
   return http.createServer((req, res) => {
-    handle(req, res).catch((e) => {
+    handle(req, res, { publicBind }).catch((e) => {
       // Operations throw for ordinary reasons -- unknown project, unresolvable
       // target -- so a thrown message is a 400 with the message, not a 500 with
       // a stack. Genuine bugs surface the same way; the alternative is hiding
