@@ -19,6 +19,20 @@ export function currentConfigPath(env = process.env) {
   return env.WAYCONTEXT_CONFIG || path.join(os.homedir(), ".config", "waycontext", "config.json");
 }
 
+/**
+ * A JSON.parse failure as "not valid JSON", plus where if the engine said so.
+ * Node 22's own message quotes the source around the error, and the files read
+ * here can hold API keys, so the raw message is never passed on.
+ */
+export function describeJsonError(err) {
+  const msg = String(err?.message ?? "");
+  const lineCol = msg.match(/line \d+ column \d+/);
+  if (lineCol) return `not valid JSON (${lineCol[0]})`;
+  const pos = msg.match(/position \d+/);
+  if (pos) return `not valid JSON (at ${pos[0]})`;
+  return "not valid JSON";
+}
+
 function readDotenv(file) {
   try {
     return dotenv.parse(fs.readFileSync(file));
@@ -51,7 +65,10 @@ export function inspectSettings({
     const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) file = parsed;
   } catch (e) {
-    if (e.code !== "ENOENT") configError = e.message;
+    // A read error (EACCES, EISDIR) names only the path; a parse error can quote
+    // the file's contents, so it is reduced to a location.
+    if (e instanceof SyntaxError) configError = describeJsonError(e);
+    else if (e.code !== "ENOENT") configError = e.message;
   }
 
   // config.js skips every .env file under WAYCONTEXT_IGNORE_DOTENV=1; so must we.

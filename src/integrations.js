@@ -2,12 +2,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { serviceStatus } from "./serviceManager.js";
+import { describeJsonError } from "./settingsInspect.js";
 
 const MCP_FIX = "claude mcp add --scope user waycontext -- waycontext-mcp";
 const GATE_FIX = "waycontext gate install";
 const GATE_NAME = "waycontext_gate.py";
 
-/** Read and parse a JSON file: { exists, value } or { exists, error }. */
+/**
+ * Read and parse a JSON file: { exists, value } or { exists, error }. A parse
+ * error is reduced to "not valid JSON" plus a location, because the raw message
+ * quotes the file's contents and ~/.claude.json can hold tokens.
+ */
 function readJson(file) {
   let text;
   try {
@@ -18,7 +23,7 @@ function readJson(file) {
   try {
     return { exists: true, value: JSON.parse(text) };
   } catch (e) {
-    return { exists: true, error: e.message };
+    return { exists: true, error: describeJsonError(e) };
   }
 }
 
@@ -78,7 +83,7 @@ export async function integrationStatus({
   const configPath = env.WAYCONTEXT_CONFIG || path.join(home, ".config", "waycontext", "config.json");
   const cfg = readJson(configPath);
   if (cfg.error) {
-    items.push(item("config_file", "Config file", "error", `${configPath} is not valid JSON: ${cfg.error}`, `Fix or remove ${configPath}`));
+    items.push(item("config_file", "Config file", "error", `${configPath} is unreadable: ${cfg.error}`, `Fix or remove ${configPath}`));
   } else if (!cfg.exists) {
     items.push(item("config_file", "Config file", "missing", `${configPath} does not exist yet; defaults apply`, "Save a setting in the dashboard to create it"));
   } else {

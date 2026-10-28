@@ -473,14 +473,75 @@ test("PUT /v1/config maps a non-ConfigWriteError failure to 500", async () => {
   }
 });
 
+// A server whose integrations read a temp home and a stubbed service, so these
+// tests never touch the real ~/.claude.json or probe the real service port.
+async function withHermeticServer(home, fn) {
+  const srv = createServer({
+    listProjects: async () => [],
+    integrations: { home, service: async () => ({ running: false, url: "http://127.0.0.1:1" }) },
+  });
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  try {
+    await fn(`http://127.0.0.1:${srv.address().port}`);
+  } finally {
+    await new Promise((resolve) => srv.close(resolve));
+  }
+}
+
 test("GET /v1/integrations returns the five items", async () => {
-  const res = await get("/v1/integrations");
-  assert.equal(res.status, 200);
-  const body = await res.json();
-  assert.deepEqual(
-    body.items.map((i) => i.id),
-    ["mcp_registration", "gate_script", "gate_hooks", "config_file", "service"],
-  );
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wc-http-home-"));
+  try {
+    await withHermeticServer(home, async (url) => {
+      const res = await fetch(`${url}/v1/integrations`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.deepEqual(
+        body.items.map((i) => i.id),
+        ["mcp_registration", "gate_script", "gate_hooks", "config_file", "service"],
+      );
+      assert.equal(body.items.find((i) => i.id === "mcp_registration").status, "missing");
+      assert.equal(body.items.find((i) => i.id === "service").status, "missing");
+    });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("no secret fragment reaches /v1/config or /v1/integrations, even from malformed JSON", async () => {
+  // Fake token. Unquoted, it makes JSON.parse quote the surrounding source.
+  const TOKEN = "sk-TESTSECRET123";
+  const FRAGMENT = "sk-TEST";
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wc-http-home-"));
+  fs.mkdirSync(path.join(home, ".claude"));
+  fs.writeFileSync(path.join(home, ".claude.json"), `{"k": ${TOKEN}}`);
+  fs.writeFileSync(path.join(home, ".claude", "settings.json"), `{"k": ${TOKEN}}`);
+  try {
+    await withHermeticServer(home, async (url) => {
+      const bodies = async () => [
+        await (await fetch(`${url}/v1/config`)).text(),
+        await (await fetch(`${url}/v1/integrations`)).text(),
+      ];
+
+      fs.writeFileSync(CONFIG_FILE, `{"OPENAI_API_KEY": ${TOKEN}}`);
+      const [cfg, integ] = await bodies();
+      assert.match(JSON.parse(cfg).configError, /not valid JSON/);
+      const items = JSON.parse(integ).items;
+      for (const id of ["mcp_registration", "gate_hooks", "config_file"]) {
+        assert.equal(items.find((i) => i.id === id).status, "error", id);
+      }
+      assert.ok(!cfg.includes(FRAGMENT), "malformed config.json leaked into /v1/config");
+      assert.ok(!integ.includes(FRAGMENT), "malformed JSON leaked into /v1/integrations");
+
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify({ OPENAI_API_KEY: TOKEN }));
+      const [cfg2, integ2] = await bodies();
+      assert.equal(JSON.parse(cfg2).configError, null);
+      assert.ok(!cfg2.includes(FRAGMENT), "a valid secret leaked into /v1/config");
+      assert.ok(!integ2.includes(FRAGMENT), "a valid secret leaked into /v1/integrations");
+    });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(CONFIG_FILE, { force: true });
+  }
 });
 
 async function withRestartServer(fn) {
