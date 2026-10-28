@@ -29,7 +29,36 @@ async function main() {
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  process.stdin.once("end", stop);
+
+  // stdin closing only means no more requests are coming -- a client that
+  // pipes its requests and closes (CI's smoke test does) still expects answers
+  // to the ones it sent. Exiting on "end" killed those mid-handler, so track
+  // requests until their response is written and stop once none remain.
+  const inFlight = new Set();
+  let stdinEnded = false;
+  const stopIfIdle = () => {
+    if (stdinEnded && inFlight.size === 0) stop();
+  };
+  const onmessage = transport.onmessage;
+  transport.onmessage = (message, extra) => {
+    if ("method" in message && "id" in message) inFlight.add(message.id);
+    onmessage?.(message, extra);
+  };
+  const send = transport.send.bind(transport);
+  transport.send = async (message, options) => {
+    try {
+      return await send(message, options);
+    } finally {
+      if (!("method" in message) && "id" in message) {
+        inFlight.delete(message.id);
+        stopIfIdle();
+      }
+    }
+  };
+  process.stdin.once("end", () => {
+    stdinEnded = true;
+    stopIfIdle();
+  });
   console.error(`${NAME} MCP server ${VERSION} running on stdio`);
 }
 
