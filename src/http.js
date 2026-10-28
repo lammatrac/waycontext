@@ -306,7 +306,7 @@ async function handle(req, res, { publicBind = false, onRestart = exitForRestart
     // Only the managed daemon respawns a worker that exits; a foreground
     // `waycontext serve` would simply die, so refuse there.
     if (!process.env.WAYCONTEXT_SERVICE_INJECTED) {
-      return send(res, 409, { error: "not running under the managed service" });
+      return send(res, 409, { error: "not running under the managed service", code: "not_managed" });
     }
     // Restarting mid-index would kill the worker and leave a half-written index.
     if (inFlightIndexCount() > 0) {

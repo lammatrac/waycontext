@@ -120,6 +120,7 @@ async function call(method, url, body) {
   if (!res.ok) {
     const err = new Error(data?.error || `${method} ${url} failed (${res.status})`);
     err.key = data?.key;
+    err.code = data?.code;
     err.status = res.status;
     throw err;
   }
@@ -158,7 +159,8 @@ const state = {
   loadError: null,
   restarting: false,
   restartError: null,
-  reindex: new Map(),      // project -> { busy, msg, isErr }
+  unmanaged: false,        // restart refused: a plain `waycontext serve`, not the daemon
+  reindex: new Map(),     // project -> { busy, msg, isErr }
   open: new Set(),         // expanded group names
 };
 
@@ -389,7 +391,9 @@ async function restart() {
     if (!fresh) throw new Error("the service did not come back within 60 seconds");
     state.report = fresh;
   } catch (e) {
-    state.restartError = e.message;
+    // A foreground `waycontext serve` cannot respawn itself: say so, as a warning.
+    if (e.status === 409 && e.code === "not_managed") state.unmanaged = true;
+    else state.restartError = e.message;
   }
   state.restarting = false;
   render();
@@ -421,12 +425,15 @@ async function loadProjects() {
 function projectsTab() {
   const wrap = h("div");
   const stale = isStale();
+  // Under a plain `serve` a restart is the user's job, so staleness only warns.
+  const blocked = (stale && !state.unmanaged) || state.restarting;
   if (stale || state.restarting || state.restartError) {
     const box = h("div", { class: `banner${state.restartError ? " err" : ""}` });
     if (stale || state.restarting) {
       box.append("The service is using settings from before your last save. ");
     }
     if (state.restarting) box.append(h("span", { class: "spin" }), " Restarting… waiting for the service to answer.");
+    else if (state.unmanaged) box.append("Restart ", h("code", {}, "waycontext serve"), " yourself.");
     else box.append(h("button", { id: "restart", type: "button", onclick: restart }, "Restart service"));
     if (state.restartError) box.append(h("div", { class: "err" }, state.restartError));
     wrap.append(box);
@@ -446,7 +453,7 @@ function projectsTab() {
       h("div", { class: "head" },
         h("div", { class: "grow" }, h("b", {}, p.name), h("div", { class: "muted" }, h("code", {}, p.root_path ?? ""), ` · last indexed ${when}`)),
         st.busy && h("span", { class: "spin" }),
-        h("button", { type: "button", disabled: stale || state.restarting || st.busy, onclick: () => reindex(p.name) }, "Re-index")),
+        h("button", { type: "button", disabled: blocked || st.busy, onclick: () => reindex(p.name) }, "Re-index")),
       st.msg && h("div", { class: st.isErr ? "err" : "muted", style: "margin-top:6px;overflow-wrap:anywhere" }, st.msg)));
   }
   return wrap;

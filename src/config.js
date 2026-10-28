@@ -305,7 +305,7 @@ export const SETTINGS = [
   { key: "WAYCONTEXT_SERVICE_PORT", type: "number", default: "4747", group: "Service", appliesOn: "service-restart",
     description: "Port the HTTP service listens on." },
   { key: "WAYCONTEXT_ALLOW_PUBLIC_BIND", type: "boolean", default: null, group: "Service", envOnly: true, appliesOn: "service-restart",
-    description: "Permit binding the service to a non-loopback host. Set it only if you have put your own auth in front." },
+    description: "Permit binding the service to a non-loopback host. Any non-empty value (even 0) enables it. Set it only if you have put your own auth in front." },
 
   // UI intelligence
   { key: "UI_ENABLED", type: "boolean", default: "1", group: "UI intelligence", appliesOn: "next-index",
@@ -345,15 +345,19 @@ export function settingDef(key) {
   return settingsByKey.get(key);
 }
 
+const FLAG_OFF = new Set(["0", "false", "no", "off"]);
+const FLAG_ON = new Set(["1", "true", "yes", "on"]);
+
 /**
- * A boolean setting. "0"/"false" is off and "1"/"true" is on; anything else
- * (unset, or a typo) takes the registry default, so each flag keeps its own
- * on-by-default or off-by-default behaviour.
+ * A boolean setting. "0"/"false"/"no"/"off" is off and "1"/"true"/"yes"/"on" is
+ * on, in any case; anything else (unset, or a typo) takes the registry default,
+ * so each flag keeps its own on-by-default or off-by-default behaviour.
  */
 function flag(envKey) {
   const raw = setting(envKey, null);
-  if (raw === "0" || raw === "false") return false;
-  if (raw === "1" || raw === "true") return true;
+  const norm = raw === null ? null : raw.trim().toLowerCase();
+  if (FLAG_OFF.has(norm)) return false;
+  if (FLAG_ON.has(norm)) return true;
   const on = settingDef(envKey).default === "1";
   resolvedDefaults[envKey] = on;
   return on;

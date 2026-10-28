@@ -86,6 +86,32 @@ test("bad number -> 400", () => {
   status(() => applyConfigChanges({ set: { EMBEDDING_DIM: Infinity } }, { configPath: f }), 400);
 });
 
+test("service port must be an integer 1-65535", () => {
+  const f = tmpFile();
+  for (const bad of ["0", "65536", "80.5", "-1", 0, 70000, 1.5]) {
+    status(() => applyConfigChanges({ set: { WAYCONTEXT_SERVICE_PORT: bad } }, { configPath: f }), 400);
+  }
+  assert.equal(fs.existsSync(f), false);
+  applyConfigChanges({ set: { WAYCONTEXT_SERVICE_PORT: "8080" } }, { configPath: f });
+  applyConfigChanges({ set: { WAYCONTEXT_SERVICE_PORT: 65535 } }, { configPath: f });
+  assert.equal(read(f).WAYCONTEXT_SERVICE_PORT, "65535");
+  applyConfigChanges({ set: { WAYCONTEXT_SERVICE_PORT: 1 } }, { configPath: f });
+  assert.equal(read(f).WAYCONTEXT_SERVICE_PORT, "1");
+});
+
+test("an empty change set does not rewrite the file", () => {
+  const f = tmpFile(JSON.stringify({ ORG_SLUG: "a" }));
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(f, old, old);
+  const before = fs.statSync(f).mtimeMs;
+  applyConfigChanges({}, { configPath: f });
+  applyConfigChanges({ set: {}, unset: [] }, { configPath: f });
+  assert.equal(fs.statSync(f).mtimeMs, before);
+  const missing = tmpFile();
+  applyConfigChanges({}, { configPath: missing });
+  assert.equal(fs.existsSync(missing), false, "no file is created either");
+});
+
 test("bad enum -> 400", () => {
   const f = tmpFile();
   status(() => applyConfigChanges({ set: { EMBEDDING_PROVIDER: "cohere" } }, { configPath: f }), 400);

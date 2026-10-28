@@ -220,6 +220,18 @@ test('string "false" disables a boolean', async () => {
   assert.equal(cfg.docsEnabled, false);
 });
 
+test("booleans accept yes/no/on/off in any case", async () => {
+  for (const [raw, expected] of [["no", false], ["OFF", false], ["Off", false], ["yes", true], ["On", true], ["TRUE", true], ["False", false]]) {
+    const cfg = await loadConfig({ REASONING_AUTO_OPEN: raw, WAYCONTEXT_CONFIG: undefined });
+    assert.equal(cfg.reasoningAutoOpen, expected, raw);
+  }
+});
+
+test("an unrecognised boolean value falls back to the registry default", async () => {
+  const on = await loadConfig({ REASONING_AUTO_OPEN: "maybe", WAYCONTEXT_CONFIG: undefined });
+  assert.equal(on.reasoningAutoOpen, true);
+});
+
 test("normalizeFileValue maps booleans to 1/0 and stringifies the rest", async () => {
   const { normalizeFileValue } = await loadConfig({ WAYCONTEXT_CONFIG: undefined }, { whole: true });
   assert.equal(normalizeFileValue(true), "1");

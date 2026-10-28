@@ -576,7 +576,7 @@ test("POST /v1/service/restart is 409 when not under the managed service", async
   await withInjected(undefined, () => withRestartServer(async ({ restart, calls }) => {
     const res = await restart();
     assert.equal(res.status, 409);
-    assert.equal((await res.json()).error, "not running under the managed service");
+    assert.deepEqual(await res.json(), { error: "not running under the managed service", code: "not_managed" });
     assert.equal(calls.length, 0);
   }));
 });

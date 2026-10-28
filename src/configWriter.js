@@ -43,6 +43,9 @@ function coerce(def, value) {
       }
       const n = Number(value);
       if (!Number.isFinite(n)) throw bad("expected a finite number");
+      if (key === "WAYCONTEXT_SERVICE_PORT" && !(Number.isInteger(n) && n >= 1 && n <= 65535)) {
+        throw bad("expected an integer port from 1 to 65535");
+      }
       return String(n);
     }
     case "boolean": {
@@ -99,6 +102,9 @@ export function applyConfigChanges({ set = {}, unset = [] } = {}, { configPath =
   const toWrite = {};
   for (const [key, value] of Object.entries(set)) toWrite[key] = coerce(writableDef(key), value);
   for (const key of unset) writableDef(key);
+  // Nothing to change: leave the file (and its mtime, which drives the page's
+  // "service is stale" banner) alone.
+  if (!Object.keys(toWrite).length && !unset.length) return { written: [], removed: [] };
 
   const current = readExisting(configPath);
   for (const key of unset) delete current[key];
