@@ -125,6 +125,13 @@ export const sources = {};
 export const readKeys = new Set();
 
 /**
+ * The built-in default each key actually fell back to when nothing set it. The
+ * defaults live twice -- in the registry and in the `config` literals -- and a
+ * test compares the two sides through this map so they cannot drift apart.
+ */
+export const resolvedDefaults = {};
+
+/**
  * A config.json value as the string `setting()` returns. JSON booleans become
  * "1"/"0" so they agree with the env-var convention; String(false) would give
  * "false", which the old `!== "0"` checks read as enabled. Exported so the
@@ -149,6 +156,7 @@ function setting(envKey, fallback) {
     return normalizeFileValue(fromFile);
   }
   sources[envKey] = "built-in default";
+  resolvedDefaults[envKey] = fallback;
   return fallback;
 }
 
@@ -178,7 +186,10 @@ export function describeSource(envKey) {
 
 function numeric(envKey, fallback) {
   const raw = setting(envKey, null);
-  if (raw === null) return fallback;
+  if (raw === null) {
+    resolvedDefaults[envKey] = fallback;
+    return fallback;
+  }
   const n = Number(raw);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -219,8 +230,8 @@ function databaseUrl() {
  */
 export const SETTINGS = [
   // Database
-  { key: "DATABASE_URL", type: "string", default: "postgres://codectx:codectx@localhost:5432/codectx", group: "Database", secret: true, appliesOn: "next-session",
-    description: "Postgres connection string. A project's plain DATABASE_URL in ./.env is ignored; use WAYCONTEXT_DATABASE_URL there." },
+  { key: "DATABASE_URL", type: "string", default: null, group: "Database", secret: true, appliesOn: "next-session",
+    description: "Postgres connection string. A built-in local default exists but is not listed here, since it carries credentials. A project's plain DATABASE_URL in ./.env is ignored; use WAYCONTEXT_DATABASE_URL there." },
   { key: "WAYCONTEXT_DATABASE_URL", type: "string", default: null, group: "Database", secret: true, appliesOn: "next-session",
     description: "Namespaced database URL; wins over DATABASE_URL so a project .env can configure WayContext without colliding with the app's own." },
   { key: "ORG_SLUG", type: "string", default: "default", group: "Database", appliesOn: "next-session",
@@ -343,7 +354,9 @@ function flag(envKey) {
   const raw = setting(envKey, null);
   if (raw === "0" || raw === "false") return false;
   if (raw === "1" || raw === "true") return true;
-  return settingDef(envKey).default === "1";
+  const on = settingDef(envKey).default === "1";
+  resolvedDefaults[envKey] = on;
+  return on;
 }
 
 export const config = {

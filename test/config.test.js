@@ -228,4 +228,21 @@ test("normalizeFileValue maps booleans to 1/0 and stringifies the rest", async (
   assert.equal(normalizeFileValue("x"), "x");
 });
 
+test("registry defaults agree with the defaults config actually falls back to", async () => {
+  const mod = await loadConfig(
+    { WAYCONTEXT_CONFIG: path.join(dir, "missing.json"), BROWSER_STATE_DIR: undefined },
+    { whole: true, clean: true },
+  );
+  let compared = 0;
+  for (const def of mod.SETTINGS) {
+    if (def.secret || def.envOnly || def.default === null) continue;
+    assert.ok(Object.hasOwn(mod.resolvedDefaults, def.key), `${def.key} never resolved a default`);
+    const expected =
+      def.type === "number" ? Number(def.default) : def.type === "boolean" ? def.default === "1" : def.default;
+    assert.deepEqual(mod.resolvedDefaults[def.key], expected, def.key);
+    compared++;
+  }
+  assert.ok(compared > 20);
+});
+
 process.on("exit", () => fs.rmSync(dir, { recursive: true, force: true }));
