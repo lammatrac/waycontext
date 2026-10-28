@@ -136,3 +136,26 @@ test("project scan skips missing roots", () => {
   const root = path.join(tmp(), "gone");
   assert.deepEqual(scanProjectOverrides([{ name: "p", root_path: root }]), []);
 });
+
+test("cwd .env sits between env and install .env, labelled by its path", () => {
+  const d = tmp();
+  const configPath = path.join(d, "none.json");
+  const installDotenv = write(d, "install.env", "ORG_SLUG=install\nMODULE_DEPTH=5\n");
+  const cwdDotenv = write(d, "cwd.env", "ORG_SLUG=cwd\n");
+  const report = inspectSettings({ env: {}, configPath, installDotenv, cwdDotenv });
+  assert.equal(row(report, "ORG_SLUG").value, "cwd");
+  assert.equal(row(report, "ORG_SLUG").source, cwdDotenv);
+  assert.equal(row(report, "MODULE_DEPTH").source, installDotenv);
+  const envWins = inspectSettings({ env: { ORG_SLUG: "x" }, configPath, installDotenv, cwdDotenv });
+  assert.equal(row(envWins, "ORG_SLUG").source, "environment");
+});
+
+test("cwd .env skips the project-ignored keys and honours WAYCONTEXT_IGNORE_DOTENV", () => {
+  const d = tmp();
+  const configPath = path.join(d, "none.json");
+  const cwdDotenv = write(d, "cwd.env", "DATABASE_URL=postgres://app\nORG_SLUG=cwd\n");
+  const report = inspectSettings({ env: {}, configPath, installDotenv: noInstall(), cwdDotenv });
+  assert.equal(row(report, "DATABASE_URL").isSet, false);
+  const ignored = inspectSettings({ env: { WAYCONTEXT_IGNORE_DOTENV: "1" }, configPath, installDotenv: noInstall(), cwdDotenv });
+  assert.equal(row(ignored, "ORG_SLUG").source, "built-in default");
+});

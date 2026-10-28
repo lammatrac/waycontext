@@ -33,16 +33,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { initDb, getProject, listProjects } from "./db.js";
+import { initDb, getProject, listProjects as dbListProjects } from "./db.js";
 import { randomUUID } from "node:crypto";
 import { operationsFor, findOperation, inFlightIndexCount } from "./operations.js";
 import { buildMcpServer } from "./mcpServer.js";
 import { composeContext } from "./context/compose.js";
 import { queryCacheStats } from "./embeddings.js";
 import { NAME, VERSION } from "./version.js";
-import { config } from "./config.js";
+import { config, dotenvKeys } from "./config.js";
 import { slugify } from "./reasoning/slug.js";
-import { inspectSettings, scanProjectOverrides } from "./settingsInspect.js";
+import { inspectSettings, scanProjectOverrides, currentConfigPath } from "./settingsInspect.js";
 import { applyConfigChanges, ConfigWriteError } from "./configWriter.js";
 import { integrationStatus } from "./integrations.js";
 
@@ -175,19 +175,45 @@ function catalogue() {
   }));
 }
 
-/** The settings report plus what the dashboard needs to show staleness. */
-async function configReport() {
+/**
+ * The settings report plus what the dashboard needs to show staleness.
+ *
+ * config.js has already folded the cwd and install .env files into process.env,
+ * where they look like real environment variables. Those keys are removed here so
+ * inspectSettings re-reads them from their files and labels them by path. The
+ * config path is still resolved from the full process.env, as config.js does.
+ *
+ * The project list only feeds the override scan, so a database that is down
+ * costs that scan (reported as projectsError), never the whole route: the page
+ * must stay usable to fix a broken DATABASE_URL.
+ */
+async function configReport({ listProjects = dbListProjects } = {}) {
   const injected = (process.env.WAYCONTEXT_SERVICE_INJECTED ?? "").split(",").filter(Boolean);
-  const report = inspectSettings({ injected });
+  const env = { ...process.env };
+  for (const key of dotenvKeys) delete env[key];
+  const report = inspectSettings({
+    env,
+    injected,
+    configPath: currentConfigPath(process.env),
+    cwdDotenv: path.join(process.cwd(), ".env"),
+  });
   let configMtime = null;
   try {
     configMtime = fs.statSync(report.configFile).mtime.toISOString();
   } catch {
     // No config file yet.
   }
+  let projectOverrides = [];
+  let projectsError;
+  try {
+    projectOverrides = scanProjectOverrides(await listProjects());
+  } catch (e) {
+    projectsError = e.message;
+  }
   return {
     ...report,
-    projectOverrides: scanProjectOverrides(await listProjects()),
+    projectOverrides,
+    ...(projectsError !== undefined ? { projectsError } : {}),
     serviceStartedAt,
     configMtime,
   };
@@ -236,7 +262,7 @@ export function checkWriteRequest(req, { port, publicBind = false }) {
   return null;
 }
 
-async function handle(req, res, { publicBind = false, onRestart = exitForRestart } = {}) {
+async function handle(req, res, { publicBind = false, onRestart = exitForRestart, listProjects, integrations } = {}) {
   const url = new URL(req.url, "http://localhost");
   const route = url.pathname;
 
@@ -258,7 +284,7 @@ async function handle(req, res, { publicBind = false, onRestart = exitForRestart
   }
 
   if (req.method === "GET" && route === "/v1/config") {
-    return send(res, 200, await configReport());
+    return send(res, 200, await configReport({ listProjects }));
   }
 
   if (req.method === "PUT" && route === "/v1/config") {
@@ -269,11 +295,11 @@ async function handle(req, res, { publicBind = false, onRestart = exitForRestart
       if (e instanceof ConfigWriteError) return send(res, e.status, { error: e.message, key: e.key });
       return send(res, 500, { error: e.message });
     }
-    return send(res, 200, await configReport());
+    return send(res, 200, await configReport({ listProjects }));
   }
 
   if (req.method === "GET" && route === "/v1/integrations") {
-    return send(res, 200, { items: await integrationStatus() });
+    return send(res, 200, { items: await integrationStatus(integrations) });
   }
 
   if (req.method === "POST" && route === "/v1/service/restart") {
@@ -371,9 +397,14 @@ export function createServer({
   publicBind = !!process.env.WAYCONTEXT_ALLOW_PUBLIC_BIND,
   // Injectable so tests never exit the test runner.
   onRestart = exitForRestart,
+  // Injectable so tests can simulate a database that is down.
+  listProjects = dbListProjects,
+  // Options for integrationStatus ({ home, env, service }), so tests never read
+  // the real ~/.claude.json or probe the real service port.
+  integrations = {},
 } = {}) {
   return http.createServer((req, res) => {
-    handle(req, res, { publicBind, onRestart }).catch((e) => {
+    handle(req, res, { publicBind, onRestart, listProjects, integrations }).catch((e) => {
       // Operations throw for ordinary reasons -- unknown project, unresolvable
       // target -- so a thrown message is a 400 with the message, not a 500 with
       // a stack. Genuine bugs surface the same way; the alternative is hiding

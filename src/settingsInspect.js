@@ -30,8 +30,10 @@ function readDotenv(file) {
 /**
  * Resolve every setting from the layers on disk, fresh on each call, so the
  * dashboard shows what a new process would see rather than what this one booted
- * with. Layers, highest first: `env`, the install .env, config.json, the default
- * (the service's cwd .env is deliberately not a layer; see scanProjectOverrides).
+ * with. Layers, highest first: `env`, the cwd .env (`cwdDotenv`, when given;
+ * PROJECT_DOTENV_IGNORED keys are skipped there as config.js does), the install
+ * .env, config.json, the default. `env` must not contain keys config.js folded in
+ * from a .env file, or they would be labelled "environment" (see configReport).
  * Secret rows carry only `isSet` and `source` -- value, fileValue and default are
  * null -- because the report is served over HTTP. Keys listed in `injected` were
  * put in env by the service itself, so they are not treated as user-set.
@@ -41,6 +43,7 @@ export function inspectSettings({
   configPath = currentConfigPath(env),
   injected = (env.WAYCONTEXT_SERVICE_INJECTED ?? "").split(",").filter(Boolean),
   installDotenv = installDotenvPath,
+  cwdDotenv = null,
 } = {}) {
   let file = {};
   let configError = null;
@@ -52,14 +55,23 @@ export function inspectSettings({
   }
 
   // config.js skips every .env file under WAYCONTEXT_IGNORE_DOTENV=1; so must we.
-  const dotenvVals = env.WAYCONTEXT_IGNORE_DOTENV === "1" ? {} : readDotenv(installDotenv);
+  const ignoreDotenv = env.WAYCONTEXT_IGNORE_DOTENV === "1";
+  const cwdVals = ignoreDotenv || !cwdDotenv ? {} : readDotenv(cwdDotenv);
+  for (const key of PROJECT_DOTENV_IGNORED) delete cwdVals[key];
+  const installVals = ignoreDotenv ? {} : readDotenv(installDotenv);
+  // Earlier files win, as in config.js's loadDotenvFiles.
+  const dotenvLayers = [[cwdVals, cwdDotenv], [installVals, installDotenv]];
   const skip = new Set(injected);
   const set = (v) => v !== undefined && v !== null && v !== "";
 
-  // Winning non-file layer for a key, honouring dotenv's never-overwrite rule.
+  // Winning non-file layer for a key, honouring dotenv's never-overwrite rule:
+  // the first .env file that has the key decides, even if its value is empty.
   const upper = (key, envOnly = false) => {
     if (!skip.has(key) && set(env[key])) return { value: env[key], source: "environment" };
-    if (!envOnly && !(key in env) && set(dotenvVals[key])) return { value: dotenvVals[key], source: installDotenv };
+    if (envOnly || key in env) return null;
+    for (const [vals, file] of dotenvLayers) {
+      if (Object.hasOwn(vals, key)) return set(vals[key]) ? { value: vals[key], source: file } : null;
+    }
     return null;
   };
 
@@ -102,7 +114,7 @@ export function inspectSettings({
   });
 
   const browserKeys = new Set(
-    [...Object.keys(env), ...Object.keys(dotenvVals)].filter((k) => k.startsWith(BROWSER_SECRET_PREFIX)),
+    [...Object.keys(env), ...Object.keys(cwdVals), ...Object.keys(installVals)].filter((k) => k.startsWith(BROWSER_SECRET_PREFIX)),
   );
   for (const key of [...browserKeys].sort()) {
     const top = upper(key);

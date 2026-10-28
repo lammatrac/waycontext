@@ -420,6 +420,31 @@ test("PUT /v1/config writes the file and returns the fresh report", async () => 
   assert.ok(!fs.readFileSync(CONFIG_FILE, "utf8").includes('"zz"'));
 });
 
+test("/v1/config does not depend on Postgres: GET and PUT are 200 with projectsError", async () => {
+  const srv = createServer({ listProjects: async () => { throw new Error("db is down"); } });
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const got = await fetch(`${url}/v1/config`);
+    assert.equal(got.status, 200);
+    const body = await got.json();
+    assert.deepEqual(body.projectOverrides, []);
+    assert.equal(body.projectsError, "db is down");
+
+    const put = await fetch(`${url}/v1/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ set: { ORG_SLUG: "dbdown" } }),
+    });
+    assert.equal(put.status, 200);
+    assert.equal((await put.json()).projectsError, "db is down");
+    assert.ok(fs.readFileSync(CONFIG_FILE, "utf8").includes('"dbdown"'), "the file was written");
+  } finally {
+    await new Promise((resolve) => srv.close(resolve));
+    fs.rmSync(CONFIG_FILE, { force: true });
+  }
+});
+
 test("PUT /v1/config refuses secrets with 403 and the offending key", async () => {
   const res = await put("/v1/config", { set: { DATABASE_URL: "postgres://x" } });
   assert.equal(res.status, 403);

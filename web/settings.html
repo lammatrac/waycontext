@@ -343,7 +343,9 @@ function settingsTab() {
   }
   const overrides = r.projectOverrides ?? [];
   wrap.append(h("h2", {}, "Project overrides"));
-  if (!overrides.length) wrap.append(h("p", { class: "muted" }, "No indexed project's .env overrides a WayContext setting."));
+  // The scan needs the project list from the database; the rest of the page does not.
+  if (r.projectsError) wrap.append(h("p", { class: "muted" }, "Project .env files could not be checked (database unavailable: ", r.projectsError, ")."));
+  else if (!overrides.length) wrap.append(h("p", { class: "muted" }, "No indexed project's .env overrides a WayContext setting."));
   for (const p of overrides) {
     wrap.append(h("div", { class: "card" },
       h("b", {}, p.project), " ", h("code", {}, p.envFile),
