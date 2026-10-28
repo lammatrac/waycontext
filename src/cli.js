@@ -14,7 +14,7 @@ import { listCandidates, setRuleState } from "./knowledge/rules.js";
 import { exportKnowledge, importKnowledge } from "./knowledge/knowledgeFiles.js";
 import { importProfile, removeProfile } from "./browser/profileStore.js";
 import { shutdownBrowserSessions, getSessionManager } from "./browser/ops.js";
-import { captureLogin, promptForEnter, DEFAULT_LOGIN_TIMEOUT_SECONDS } from "./browser/loginCapture.js";
+import { captureLogin, promptForEnter, DEFAULT_LOGIN_TIMEOUT_SECONDS, MAX_LOGIN_TIMEOUT_SECONDS } from "./browser/loginCapture.js";
 import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
 import {
@@ -631,6 +631,9 @@ async function main() {
       const timeoutSec = tFlag ? Number(tFlag.slice("--timeout=".length)) : DEFAULT_LOGIN_TIMEOUT_SECONDS;
       if (!projectName || !profileId || positional.length > 2 || !(timeoutSec > 0)) {
         usageAndExit("Usage: waycontext browser-login <project> <profile_id> [--timeout=<seconds>]");
+      }
+      if (timeoutSec > MAX_LOGIN_TIMEOUT_SECONDS) {
+        usageAndExit(`--timeout must be between 1 and ${MAX_LOGIN_TIMEOUT_SECONDS} seconds`);
       }
       await initDb();
       const adapter = await getSessionManager().getAdapter();

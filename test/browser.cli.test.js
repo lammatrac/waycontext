@@ -87,3 +87,9 @@ test("completion/help knows browser-profile and the browser op", () => {
   assert.ok(MANUAL_COMMANDS.some((c) => c.name === "browser-profile"));
   assert.ok(OP_HELP.browser_profile_list);
 });
+
+test("browser-login --timeout beyond the timer limit is a usage error, not a 1 ms timeout", () => {
+  const r = cli("browser-login", PROJECT, "whatever", "--timeout=2147484");
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr + r.stdout, /--timeout must be between 1 and 2147483 seconds/);
+});

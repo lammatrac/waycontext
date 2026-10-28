@@ -212,3 +212,13 @@ test("AC-005: no secret value appears in navigate/screenshot results, errors, DB
     await call(client, "browser_session_close", { project: PROJECT, session_id: sid });
   } finally { await client.close(); }
 });
+
+test("navigate to a page that only shares a prefix with the login path (/login-success) stays READY", async () => {
+  const client = await connect();
+  try {
+    const sid = await startSession(client);
+    const r = JSON.parse((await call(client, "browser_navigate", { project: PROJECT, session_id: sid, url: `${ORIGIN}/login-success` })).text);
+    assert.deepEqual(r, { final_url: `${ORIGIN}/login-success`, http_status: 200, status: "READY" });
+    await call(client, "browser_session_close", { project: PROJECT, session_id: sid });
+  } finally { await client.close(); }
+});

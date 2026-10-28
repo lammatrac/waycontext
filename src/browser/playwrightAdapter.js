@@ -141,6 +141,7 @@ class PlaywrightSession {
     this._sessions = sessions;
     this._entry = entry;
     this._alive = true;
+    this._released = false;
     this._closing = null;
     this._page = null;
     this._popups = new Set();
@@ -163,6 +164,18 @@ class PlaywrightSession {
       this._page.goto("about:blank").catch(() => {});
     });
     this._page.on("crash", () => this._died("crashed"));
+    // A main page closed by anyone but close() (the human closing the window or
+    // tab) leaves nothing to drive: it is a death like a crash. close() sets
+    // _alive first, so its own context teardown never reports here. Pages also
+    // close when the whole browser goes away: one round trip to the context tells
+    // the two apart, and a dead browser is reported as "disconnected".
+    this._page.on("close", () => {
+      if (!this._alive) return;
+      this._context.cookies().then(
+        () => this._died("page_closed"),
+        () => this._died("disconnected"),
+      );
+    });
   }
 
   _record(url, kind) {
@@ -358,14 +371,17 @@ class PlaywrightSession {
   async screenshot({ fullPage = false } = {}) { this._live(); return this._page.screenshot({ type: "png", fullPage: fullPage === true }); }
   isAlive() { return this._alive; }
 
+  /** Idempotent. Releases the shared browser exactly once, whether or not the session died first. */
   close() {
     this._closing ??= (async () => {
-      const wasAlive = this._alive;
       this._alive = false;
       this._sessions.delete(this);
       this._entry.sessions.delete(this);
       try { await this._context.close(); } catch { /* browser may already be gone */ }
-      if (wasAlive) await this._release();
+      if (!this._released) {
+        this._released = true;
+        await this._release();
+      }
     })();
     return this._closing;
   }

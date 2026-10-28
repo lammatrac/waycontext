@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { pool } from "../db.js";
 import { BrowserError } from "./errors.js";
-import { registerSensitive } from "./secrets.js";
+import { registerSensitive, isSensitiveCookieValue } from "./secrets.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const STATE_FILE = "storage-state.json";
@@ -159,10 +159,12 @@ export function hasSavedState(scope, { baseDir = defaultStateDir() } = {}) {
 }
 
 /**
- * The saved storageState object. Cookie values are registered for redaction.
- * Throws `state_missing` (REQ-006, spec § 9) when none exists.
+ * The saved storageState object. Sensitive-looking cookie values
+ * (isSensitiveCookieValue) are registered for redaction: into `sensitive`, a
+ * session's createSensitiveScope() that forgets them on dispose, when given;
+ * process-wide otherwise. Throws `state_missing` (REQ-006, spec § 9) when none exists.
  */
-export function loadStorageState(scope, { baseDir = defaultStateDir() } = {}) {
+export function loadStorageState(scope, { baseDir = defaultStateDir(), sensitive } = {}) {
   let raw;
   try {
     raw = fs.readFileSync(stateFile(scope, baseDir), "utf8");
@@ -171,7 +173,8 @@ export function loadStorageState(scope, { baseDir = defaultStateDir() } = {}) {
     throw new BrowserError("state_missing", "no saved state for this profile; run `waycontext browser-login` or a fresh_login that saves state");
   }
   const state = JSON.parse(raw);
-  for (const c of state.cookies ?? []) registerSensitive(c?.value);
+  if (sensitive) sensitive.addCookies(state.cookies);
+  else for (const c of state.cookies ?? []) if (isSensitiveCookieValue(c?.value)) registerSensitive(c.value);
   return state;
 }
 

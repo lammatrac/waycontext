@@ -159,3 +159,16 @@ it("the guard blocks the human navigating to a foreign origin in the real browse
     foreign.close();
   }
 });
+
+it("the human closing the browser window ends the wait promptly with login_cancelled (review fix)", async () => {
+  const ctx = { surface: "cli", correlationId: "c-closed", log() {} };
+  const t0 = Date.now();
+  await assert.rejects(
+    captureLogin({
+      project: PROJECT, profileId: "saved", adapter: runAdapter(), stateDir, ctx, timeoutMs: 20_000,
+      waitForDone: async ({ session }) => { await session._page.close(); return new Promise(() => {}); },
+    }),
+    (e) => e.code === "login_cancelled"
+  );
+  assert.ok(Date.now() - t0 < 10_000, "took until the timeout instead of noticing the closed window");
+});

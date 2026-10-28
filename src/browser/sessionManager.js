@@ -19,14 +19,14 @@
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import os from "node:os";
-import { config } from "../config.js";
-import { pool, currentOrgId, getProject } from "../db.js";
+import { config, browserSecretEnvName } from "../config.js";
+import { pool } from "../db.js";
 import { BrowserError } from "./errors.js";
 import { writeAuditEvent, newCorrelationId } from "./audit.js";
 import { isOriginAllowed } from "./origin.js";
-import { assertAuthMode, assertEnvironmentAllowed } from "./profileSchema.js";
-import { getProfile } from "./profileStore.js";
-import { hasSecret, resolveSecret, registerSensitive, redactDeep, redact } from "./secrets.js";
+import { assertAuthMode, assertEnvironmentAllowed, isLoginPage } from "./profileSchema.js";
+import { getProfile, requireProject } from "./profileStore.js";
+import { hasSecret, resolveSecret, createSensitiveScope, redactDeep, redact } from "./secrets.js";
 import { loadStorageState, saveStorageState, recordArtifact } from "./stateStore.js";
 
 export const SESSION_STATUSES = Object.freeze([
@@ -36,6 +36,16 @@ export const SESSION_STATUSES = Object.freeze([
 const LIVE = ["CREATED", "STARTING", "AUTHENTICATING", "VERIFYING", "READY"];
 const TERMINAL_SQL = `('CLOSED', 'FAILED')`;
 const VERIFY_WAIT_MS = 5000;
+/** setTimeout's limit: a larger delay overflows and fires after ~1 ms. */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+/**
+ * The owner's lease when no idle lease applies: from row creation until READY,
+ * and for the whole session when the idle timeout is disabled. The owner
+ * refreshes it every third of its length, so it lapses only when the owner is gone.
+ */
+export const OWNER_LEASE_MS = 5 * 60_000;
+/** Thrown inside start() when a teardown ran during one of its awaits. */
+const TORN_DOWN = Symbol("torn_down");
 
 function pidAlive(pid) {
   try {
@@ -45,10 +55,6 @@ function pidAlive(pid) {
     return e.code === "EPERM";
   }
 }
-
-const pathMatches = (url, prefix) => {
-  try { return new URL(url).pathname.startsWith(prefix); } catch { return false; }
-};
 
 /**
  * REQ-011 verification, shared by the session manager and the human-only
@@ -60,8 +66,7 @@ export async function verifyAuthenticated(runtime, def, { waitMs = VERIFY_WAIT_M
   const nav = await runtime.goto(v.url);
   const finalUrl = await runtime.url();
   if (!isOriginAllowed(finalUrl, def.allowed_origins)) return { ok: false };
-  const pattern = def.login?.url_pattern;
-  if (pattern && pathMatches(finalUrl, pattern)) return { ok: false };
+  if (isLoginPage(def, finalUrl)) return { ok: false };
   if (!(nav.status < 400)) return { ok: false };
   if (v.selector && !(await runtime.exists(v.selector, { timeoutMs: waitMs }))) return { ok: false };
   if (v.text && !(await runtime.containsText(v.text))) return { ok: false };
@@ -79,11 +84,15 @@ export async function verifyAuthenticated(runtime, def, { waitMs = VERIFY_WAIT_M
  * @param {Function} [o.adapterFactory]   () => adapter
  * @param {string} [o.stateDir]           saved-state root; default config.browserStateDir
  * @param {number} [o.idleTimeoutMs]      default config.browserIdleTimeoutSeconds * 1000
+ * @param {number} [o.ownerLeaseMs]       default OWNER_LEASE_MS (start / heartbeat lease)
  * @param {string} [o.hostname] @param {number} [o.pid] @param {string} [o.bootId] @param {Function} [o.isPidAlive]
  */
 export function createSessionManager(o = {}) {
   const stateDir = o.stateDir;
   const idleTimeoutMs = o.idleTimeoutMs ?? config.browserIdleTimeoutSeconds * 1000;
+  const ownerLeaseMs = o.ownerLeaseMs ?? OWNER_LEASE_MS;
+  // The lease written on READY and after each call: the idle lease, or the heartbeat lease.
+  const leaseMs = idleTimeoutMs > 0 ? idleTimeoutMs : ownerLeaseMs;
   const hostname = o.hostname ?? os.hostname();
   const pid = o.pid ?? process.pid;
   const bootId = o.bootId ?? randomUUID();
@@ -111,11 +120,11 @@ export function createSessionManager(o = {}) {
          status = $2, reason = $3,
          closed_at = CASE WHEN $2 = 'CLOSED' THEN now() ELSE s.closed_at END,
          last_verified_at = CASE WHEN $4 THEN now() ELSE s.last_verified_at END,
-         expires_at = CASE WHEN $5 AND $6::bigint > 0 THEN now() + ($6::bigint * interval '1 millisecond') ELSE s.expires_at END,
+         expires_at = CASE WHEN $5 THEN now() + ($6::bigint * interval '1 millisecond') ELSE s.expires_at END,
          identity = COALESCE($7::jsonb, s.identity)
        FROM old WHERE s.id = $1 AND s.status NOT IN ${TERMINAL_SQL}
        RETURNING old.status AS prev`,
-      [entry.id, to, reason, lastVerified, lease, idleTimeoutMs, identity ? JSON.stringify(identity) : null]
+      [entry.id, to, reason, lastVerified, lease, leaseMs, identity ? JSON.stringify(identity) : null]
     );
     if (!res.rows.length) return null; // already terminal: never move out of FAILED/CLOSED
     const prev = res.rows[0].prev;
@@ -139,7 +148,7 @@ export function createSessionManager(o = {}) {
       // Never tear down under an in-flight call; release() re-arms the timer.
       if (entry.busy || entry.closing) return;
       teardown(entry, "CLOSED", { reason: "idle_timeout", cause: "idle_timeout", ctx: bgCtx(entry) }).catch(() => {});
-    }, idleTimeoutMs);
+    }, Math.min(idleTimeoutMs, MAX_TIMER_MS)); // clamped (~24.8 days); the lease keeps the full value
     entry.timer.unref?.();
   };
 
@@ -148,11 +157,33 @@ export function createSessionManager(o = {}) {
     if (entry.closing) return entry.done;
     entry.closing = true;
     clearTimeout(entry.timer);
+    clearInterval(entry.heartbeat);
     entry.done = (async () => {
       try { await entry.runtime?.close(); } catch { /* releasing a dead runtime */ }
-      try { await transition(entry, to, opts); } finally { live.delete(entry.id); }
+      try {
+        await transition(entry, to, opts);
+      } finally {
+        live.delete(entry.id);
+        entry.sensitive.dispose(); // this session's cookie values stop being redacted
+      }
     })();
     return entry.done;
+  }
+
+  /**
+   * Keep the owner lease current (spec 6.2.2 cross-host liveness) while no idle
+   * lease applies: during start, and always when the idle timeout is disabled.
+   */
+  function startHeartbeat(entry) {
+    entry.heartbeat = setInterval(() => {
+      if (entry.closing || (idleTimeoutMs > 0 && entry.status === "READY")) return;
+      pool.query(
+        `UPDATE browser_sessions SET expires_at = now() + ($2::bigint * interval '1 millisecond')
+          WHERE id = $1 AND status NOT IN ${TERMINAL_SQL} AND status <> 'EXPIRED'`,
+        [entry.id, ownerLeaseMs]
+      ).catch(() => {});
+    }, Math.min(Math.max(Math.floor(ownerLeaseMs / 3), 1), MAX_TIMER_MS));
+    entry.heartbeat.unref?.();
   }
 
   const flush = (entry) => Promise.allSettled([...entry.pending]);
@@ -165,7 +196,8 @@ export function createSessionManager(o = {}) {
   function newEntry(proj, row, surface) {
     return {
       id: row.id, projectId: proj.id, profileId: row.profile_id, status: "CREATED", surface,
-      runtime: null, busy: false, closing: false, timer: null, done: null, pending: new Set(),
+      runtime: null, busy: false, closing: false, timer: null, heartbeat: null, done: null, pending: new Set(),
+      sensitive: createSensitiveScope(),
     };
   }
 
@@ -200,23 +232,17 @@ export function createSessionManager(o = {}) {
     });
   }
 
-  async function requireProject(name, orgId) {
-    orgId ??= await currentOrgId();
-    const proj = await getProject(name, orgId);
-    if (!proj) throw new BrowserError("project_not_found", `Project "${name}" not found. Run index_project first.`);
-    return { proj, orgId };
-  }
-
   /** Load a session of this project (other projects look identical to "does not exist"). */
   async function locate(project, sessionId, tool, ctx, orgId) {
-    const { proj } = await requireProject(project, orgId);
+    const found = await requireProject(project, orgId);
+    const proj = found.project;
     const row = await loadRow(proj, sessionId);
     if (!row) {
       const err = new BrowserError("session_not_found", `no session ${sessionId} in project "${project}"`);
       await rejectAudit(proj, null, tool, err, ctx);
       throw err;
     }
-    return { proj, row };
+    return { proj, row, orgId: found.orgId };
   }
 
   /**
@@ -279,7 +305,7 @@ export function createSessionManager(o = {}) {
   async function start({ project, profileId, purpose, authMode, ctx, orgId }) {
     const tool = "browser_session_start";
     const found = await requireProject(project, orgId);
-    const { proj } = found;
+    const proj = found.project;
     orgId = found.orgId;
     const prof = await getProfile(proj.id, profileId);
     try {
@@ -294,12 +320,13 @@ export function createSessionManager(o = {}) {
     const mode = prof.auth_mode;
     const id = `bs_${randomBytes(16).toString("hex")}`;
     await pool.query(
-      `INSERT INTO browser_sessions (id, project_id, profile_id, status, auth_mode, owner_runtime, purpose, identity)
-       VALUES ($1, $2, $3, 'CREATED', $4, $5, $6, $7)`,
-      [id, proj.id, profileId, mode, JSON.stringify({ host: hostname, pid, boot_id: bootId }), String(purpose ?? "").slice(0, 200), JSON.stringify({ verified: false })]
+      `INSERT INTO browser_sessions (id, project_id, profile_id, status, auth_mode, owner_runtime, purpose, identity, expires_at)
+       VALUES ($1, $2, $3, 'CREATED', $4, $5, $6, $7, now() + ($8::bigint * interval '1 millisecond'))`,
+      [id, proj.id, profileId, mode, JSON.stringify({ host: hostname, pid, boot_id: bootId }), String(purpose ?? "").slice(0, 200), JSON.stringify({ verified: false }), ownerLeaseMs]
     );
     const entry = newEntry(proj, { id, profile_id: profileId }, ctx.surface);
     live.set(id, entry);
+    startHeartbeat(entry);
     entry.busy = true; // the whole start is one in-flight operation
     await audit({ projectId: proj.id, sessionId: id, eventType: "session_transition", result: "ok", ctx, data: { to: "CREATED" } });
     await audit({ projectId: proj.id, sessionId: id, eventType: "tool_call", result: "ok", ctx, data: { tool, profile_id: profileId, auth_mode: mode } });
@@ -319,15 +346,16 @@ export function createSessionManager(o = {}) {
       if (mode === "fresh_login") {
         const login = def.login;
         for (const name of [login.username_secret, login.password_secret]) {
-          if (!hasSecret(name)) throw new BrowserError("secret_missing", `WAYCONTEXT_BROWSER_SECRET_${name} is not set`);
+          if (!hasSecret(name)) throw new BrowserError("secret_missing", `${browserSecretEnvName(name)} is not set`);
         }
       } else {
-        storageState = loadStorageState(scope, { baseDir: stateDir });
+        storageState = loadStorageState(scope, { baseDir: stateDir, sensitive: entry.sensitive });
       }
 
       phase = "launch";
       const ad = await getAdapter();
-      entry.runtime = await ad.createSession({
+      if (entry.closing) throw TORN_DOWN;
+      const runtime = await ad.createSession({
         sessionId: id,
         allowedOrigins: prof.allowed_origins,
         storageState,
@@ -341,6 +369,13 @@ export function createSessionManager(o = {}) {
           teardown(entry, "FAILED", { reason: "runtime_lost", cause: "runtime_died", ctx: bgCtx(entry) }).catch(quiet(ctx));
         },
       });
+      if (entry.closing) {
+        // Torn down (profile removed, shutdown) while the launch was in flight: the
+        // teardown found no runtime to release, so release this one here.
+        try { await runtime.close(); } catch { /* already gone */ }
+        throw TORN_DOWN;
+      }
+      entry.runtime = runtime;
       await transition(entry, "AUTHENTICATING", { ctx });
 
       phase = "login";
@@ -365,7 +400,7 @@ export function createSessionManager(o = {}) {
       phase = "save";
       if (mode === "fresh_login" && def.auth?.save_state) {
         const state = await rt.storageState();
-        for (const c of state?.cookies ?? []) registerSensitive(c.value);
+        entry.sensitive.addCookies(state?.cookies);
         const ref = await saveStorageState(scope, state, { baseDir: stateDir, forbiddenRoots: [proj.root_path].filter(Boolean) });
         await recordArtifact({ sessionId: id, artifactType: "storage_state", storageRef: ref });
         await audit({ projectId: proj.id, sessionId: id, eventType: "state_save", result: "ok", ctx, data: { storage_ref: ref } });
@@ -378,6 +413,11 @@ export function createSessionManager(o = {}) {
       await flush(entry);
       return view(await loadRow(proj, id));
     } catch (err) {
+      if (err === TORN_DOWN) {
+        await entry.done.catch(() => {});
+        await flush(entry);
+        return view(await loadRow(proj, id));
+      }
       if (phase === "save" || phase === "prepare") {
         // Policy/storage rejections (e.g. invalid_state_dir) and unexpected faults surface as errors.
         const reason = err instanceof BrowserError && FAIL_PASSTHROUGH.has(err.code) ? err.code : null;
@@ -409,6 +449,13 @@ export function createSessionManager(o = {}) {
     const cur = own.row;
     const ok = (status) => audit({ projectId: proj.id, sessionId: cur.id, eventType: "tool_call", result: "ok", ctx, data: { tool } })
       .then(() => ({ session_id: cur.id, status }));
+    // Another process (e.g. `browser-profile remove`) can make the row terminal while
+    // this process still holds the runtime: release it whatever the row says.
+    const stray = live.get(cur.id);
+    if (stray && !LIVE.includes(cur.status)) {
+      await teardown(stray, "CLOSED", { cause: "close", ctx });
+      await flush(stray);
+    }
     if (cur.status === "CLOSED") return ok("CLOSED");
     if (cur.status === "FAILED") return ok("FAILED"); // terminal: nothing left to release
     if (cur.status === "EXPIRED") {
@@ -433,7 +480,7 @@ export function createSessionManager(o = {}) {
    * session_not_in_this_process, session_not_ready, session_busy.
    */
   async function withSession({ project, sessionId, tool, ctx, orgId }, fn) {
-    const { proj, row } = await locate(project, sessionId, tool, ctx, orgId);
+    const { proj, row, orgId: resolvedOrgId } = await locate(project, sessionId, tool, ctx, orgId);
     const own = await ownership(proj, row, tool, ctx);
     const cur = own.row;
     const entry = own.entry;
@@ -451,12 +498,11 @@ export function createSessionManager(o = {}) {
     clearTimeout(entry.timer);
     let failure = null;
     try {
-      const orgIdResolved = orgId ?? (await currentOrgId());
       return await fn({
         runtime: entry.runtime,
         session: view(cur),
         profile: await getProfile(proj.id, cur.profile_id),
-        scope: { orgId: orgIdResolved, project: proj.name, profileId: cur.profile_id },
+        scope: { orgId: resolvedOrgId, project: proj.name, profileId: cur.profile_id },
         stateDir,
         rootPath: proj.root_path,
         expire: () => teardown(entry, "EXPIRED", { reason: "state_expired", cause: "login_redirect", ctx }),
@@ -469,8 +515,8 @@ export function createSessionManager(o = {}) {
       if (!entry.closing) {
         arm(entry);
         await pool.query(
-          `UPDATE browser_sessions SET expires_at = now() + ($2::bigint * interval '1 millisecond') WHERE id = $1 AND status = 'READY' AND $2::bigint > 0`,
-          [entry.id, idleTimeoutMs]
+          `UPDATE browser_sessions SET expires_at = now() + ($2::bigint * interval '1 millisecond') WHERE id = $1 AND status = 'READY'`,
+          [entry.id, leaseMs]
         ).catch(() => {});
       }
       await flush(entry);

@@ -261,3 +261,59 @@ it("a browser that dies reports onClosed and marks the session dead", async () =
   assert.equal(s.isAlive(), false);
   await adapter.close();
 });
+
+// ---- review fixes (2026-10-28) ------------------------------------------------------
+
+async function waitFor(fn, ms = 5000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
+  return false;
+}
+
+it("a page crash followed by close() still releases the shared browser (no process left)", async () => {
+  const before = new Set(chromiumPids());
+  const closed = [];
+  const adapter = createPlaywrightAdapter();
+  try {
+    const s = await adapter.createSession({ sessionId: "crash", allowedOrigins: [allowed], onClosed: (r) => closed.push(r) });
+    await s.goto(`${allowed}/ok`);
+    s._page.goto("chrome://crash").catch(() => {}); // a real renderer crash
+    assert.ok(await waitFor(() => closed.length > 0), "onClosed never fired after the crash");
+    assert.deepEqual(closed, ["crashed"]);
+    assert.equal(s.isAlive(), false);
+    await s.close();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(chromiumPids().filter((p) => !before.has(p)), [], "the browser outlived its last session");
+  } finally {
+    await adapter.close();
+  }
+});
+
+it("the main page closed from outside the adapter is a death: onClosed('page_closed'), not alive, released on close", async () => {
+  const before = new Set(chromiumPids());
+  const closed = [];
+  const adapter = createPlaywrightAdapter();
+  try {
+    const s = await adapter.createSession({ sessionId: "pclose", allowedOrigins: [allowed], onClosed: (r) => closed.push(r) });
+    await s.goto(`${allowed}/ok`);
+    await s._page.close(); // e.g. the human closing the window/tab
+    assert.ok(await waitFor(() => closed.length > 0), "onClosed never fired after the page closed");
+    assert.deepEqual(closed, ["page_closed"]);
+    assert.equal(s.isAlive(), false);
+    await s.close();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(chromiumPids().filter((p) => !before.has(p)), []);
+  } finally {
+    await adapter.close();
+  }
+});
+
+it("the adapter's own close() does not report onClosed", async () => {
+  const closed = [];
+  await withSession({ onClosed: (r) => closed.push(r) }, async (s) => {
+    await s.goto(`${allowed}/ok`);
+    await s.close();
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepEqual(closed, []);
+  });
+});

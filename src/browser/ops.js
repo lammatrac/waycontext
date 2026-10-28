@@ -11,6 +11,7 @@ import { listProfiles, setSavedStateProbe, registerProfileRemovalHook } from "./
 import { randomBytes } from "node:crypto";
 import { hasSavedState, writeEvidenceFile, recordArtifact, resolveStorageRef } from "./stateStore.js";
 import { createSessionManager } from "./sessionManager.js";
+import { isLoginPage } from "./profileSchema.js";
 import { redactDeep, redactError } from "./secrets.js";
 
 /** Make `has_saved_state` in browser_profile_list real (REQ-003/REQ-006). */
@@ -83,25 +84,11 @@ function guardedSession(tool, a, ctx, fn) {
   return guarded((m) => m.withSession({ project: a.project, sessionId: a.session_id, tool, ctx }, fn));
 }
 
-/** True when `url` is the profile's login page (pathname prefix on the login origin, or any allowed origin if the login url is unknown). */
-function isLoginUrl(profile, url) {
-  const login = profile?.definition?.login;
-  const prefix = login?.url_pattern;
-  if (!prefix) return false;
-  try {
-    const u = new URL(url);
-    const loginOrigin = login.url ? new URL(login.url).origin : null;
-    return (!loginOrigin || u.origin === loginOrigin) && u.pathname.startsWith(prefix);
-  } catch {
-    return false;
-  }
-}
-
 export const browserNavigateOp = (a, ctx) =>
   guardedSession("browser_navigate", a, ctx, async ({ runtime, profile, expire }) => {
     const r = await runtime.goto(a.url);
     const finalUrl = (await runtime.url()) ?? r.url;
-    if (r.status === 401 || isLoginUrl(profile, finalUrl)) {
+    if (r.status === 401 || isLoginPage(profile, finalUrl)) {
       await expire();
       return { final_url: finalUrl, http_status: r.status, status: "EXPIRED", reason: "state_expired" };
     }

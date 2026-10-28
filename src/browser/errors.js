@@ -33,6 +33,7 @@ export const ERROR_CODES = Object.freeze([
   "verification_failed",
   "login_timeout",
   "login_cancelled",
+  "invalid_argument",
 ]);
 
 /** `reason` values on a non-READY session result (spec § 6.2.3). Returned, not thrown. */

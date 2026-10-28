@@ -487,3 +487,132 @@ test("removing a profile closes its live sessions first (spec section 9)", async
   assert.equal((await rows(`SELECT status FROM browser_sessions WHERE id = $1`, [r.session_id]))[0].status, "CLOSED");
   assert.equal(await getProfile(projectA.id, "temp"), null);
 });
+
+// ---- review fixes (2026-10-28) ------------------------------------------------------
+
+test("verification passes on a page that only shares a prefix with the login path (/login-success)", async () => {
+  await importProfile(PROJECT, profile({ profile_id: "prefix", verify: { url: `${ORIGIN}/login-success`, selector: "#bar" } }));
+  adapter.pages[`${ORIGIN}/login-success`] = { selectors: { "#bar": "x" } };
+  const r = await start({ profileId: "prefix" });
+  assert.equal(r.status, "READY");
+});
+
+test("saved-state cookie values are redacted only while their session lives, and short words never are", async () => {
+  const { saveStorageState } = await import("../src/browser/stateStore.js");
+  const { redact } = await import("../src/browser/secrets.js");
+  const { currentOrgId } = await import("../src/db.js");
+  const LONG = "fake-scoped-cookie-31f9e2";
+  await saveStorageState({ orgId: await currentOrgId(), project: PROJECT, profileId: "saved" }, {
+    cookies: [{ name: "sid", value: LONG, domain: "x", path: "/" }, { name: "env", value: "staging", domain: "x", path: "/" }],
+    origins: [],
+  }, { baseDir: stateDir });
+  const r = await start({ profileId: "saved" });
+  assert.equal(r.status, "READY");
+  assert.equal(redact(`env=staging sid=${LONG}`), "env=staging sid=[REDACTED]");
+  await mgr.close({ project: PROJECT, sessionId: r.session_id, ctx: ctx() });
+  assert.equal(redact(`sid=${LONG}`), `sid=${LONG}`, "the closed session's cookie is no longer registered");
+});
+
+test("close tears down this process's runtime even when another process already marked the row CLOSED", async () => {
+  await importProfile(PROJECT, profile({ profile_id: "gone-elsewhere" }));
+  const r = await start({ profileId: "gone-elsewhere" });
+  assert.equal(adapter.openSessionCount(), 1);
+  await removeProfile(PROJECT, "gone-elsewhere", { ctx: ctx() }); // no hook: as if run by another process
+  assert.equal((await rows(`SELECT status FROM browser_sessions WHERE id = $1`, [r.session_id]))[0].status, "CLOSED");
+  assert.deepEqual(await mgr.close({ project: PROJECT, sessionId: r.session_id, ctx: ctx() }), { session_id: r.session_id, status: "CLOSED" });
+  assert.equal(adapter.openSessionCount(), 0, "the runtime outlived its CLOSED row");
+  assert.equal(mgr.liveCount(), 0);
+});
+
+/** Hold the next createSession until release(); `entered` resolves once it is called. */
+function gateLaunch() {
+  let release, entered;
+  const gate = new Promise((r) => { release = r; });
+  const enteredP = new Promise((r) => { entered = r; });
+  const orig = adapter.createSession;
+  adapter.createSession = async (o) => {
+    adapter.createSession = orig;
+    entered();
+    await gate;
+    return orig(o);
+  };
+  return { release, entered: enteredP };
+}
+
+test("a teardown that runs while start() is still launching closes the runtime once it arrives", async () => {
+  const g = gateLaunch();
+  const p = start();
+  await g.entered;
+  await mgr.closeProfileSessions({ projectId: projectA.id, profileId: "staging-admin", ctx: ctx() });
+  g.release();
+  const r = await p;
+  assert.notEqual(r.status, "READY");
+  assert.equal(r.status, "CLOSED");
+  assert.equal(adapter.openSessionCount(), 0, "the runtime created after teardown was never closed");
+  assert.equal(mgr.liveCount(), 0);
+});
+
+test("a teardown while waiting for the adapter factory leaves no runtime behind", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let entered;
+  const enteredP = new Promise((r) => { entered = r; });
+  const fa = createFakeAdapter({ pages: structuredClone(GOOD_PAGES) });
+  mgr = createSessionManager({
+    adapterFactory: async () => { entered(); await gate; return fa; },
+    stateDir, idleTimeoutMs: 60_000, hostname: "h1", pid: 111, bootId: "boot-A", isPidAlive: () => true,
+  });
+  const p = start();
+  await enteredP;
+  const shut = mgr.closeProfileSessions({ projectId: projectA.id, profileId: "staging-admin", ctx: ctx() });
+  await shut;
+  release();
+  const r = await p;
+  assert.equal(r.status, "CLOSED");
+  assert.equal(fa.openSessionCount(), 0);
+});
+
+test("an idle timeout beyond the timer limit is clamped, not fired after ~1 ms", async () => {
+  make({ idleTimeoutMs: 2 ** 31 + 5000 });
+  const { session_id } = await start();
+  await wait(80);
+  assert.equal((await rows(`SELECT status FROM browser_sessions WHERE id = $1`, [session_id]))[0].status, "READY");
+});
+
+const leaseOf = async (sid) =>
+  (await rows(`SELECT expires_at, expires_at > now() AS current FROM browser_sessions WHERE id = $1`, [sid]))[0];
+const remoteHost = () => createSessionManager({ adapter: createFakeAdapter(), stateDir, hostname: "h2", pid: 5, bootId: "boot-C", isPidAlive: () => false });
+
+test("a session still starting already has a cross-host lease, so another host can reclaim it once it lapses", async () => {
+  const g = gateLaunch();
+  const p = start();
+  await g.entered;
+  const sid = (await rows(`SELECT id FROM browser_sessions WHERE project_id = $1 AND status = 'STARTING' ORDER BY created_at DESC LIMIT 1`, [projectA.id]))[0].id;
+  const lease = await leaseOf(sid);
+  assert.ok(lease.expires_at, "a STARTING row has no lease");
+  assert.equal(lease.current, true);
+  await assert.rejects(remoteHost().status({ project: PROJECT, sessionId: sid, ctx: ctx() }), (e) => e.code === "session_not_in_this_process");
+  await pool.query(`UPDATE browser_sessions SET expires_at = now() - interval '1 second' WHERE id = $1`, [sid]);
+  const s = await remoteHost().status({ project: PROJECT, sessionId: sid, ctx: ctx() });
+  assert.equal(s.status, "FAILED");
+  assert.equal(s.reason, "runtime_lost");
+  g.release();
+  await p;
+});
+
+test("with the idle timeout disabled, the owner keeps a heartbeat lease current, and stops when the session closes", async () => {
+  make({ idleTimeoutMs: 0, ownerLeaseMs: 300 });
+  const { session_id, status } = await start();
+  assert.equal(status, "READY");
+  const first = await leaseOf(session_id);
+  assert.ok(first.expires_at, "READY with idle timeout 0 has no lease");
+  await wait(600);
+  const later = await leaseOf(session_id);
+  assert.equal(later.current, true, "the owner did not refresh its lease");
+  assert.ok(later.expires_at > first.expires_at);
+  await assert.rejects(remoteHost().status({ project: PROJECT, sessionId: session_id, ctx: ctx() }), (e) => e.code === "session_not_in_this_process");
+  await mgr.close({ project: PROJECT, sessionId: session_id, ctx: ctx() });
+  const closed = await leaseOf(session_id);
+  await wait(400);
+  assert.deepEqual((await leaseOf(session_id)).expires_at, closed.expires_at, "the heartbeat outlived the session");
+});

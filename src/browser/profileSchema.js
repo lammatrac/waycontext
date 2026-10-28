@@ -42,8 +42,9 @@ const schema = z.strictObject({
   login: z
     .strictObject({
       url: z.string().trim().min(1).max(2048),
-      // Pathname prefix identifying the login page, used to notice a redirect
-      // back to login. Plain prefix: no glob, no regex. Defaults to login.url's path.
+      // Pathname identifying the login page, used to notice a redirect back to
+      // login. Matched on path-segment boundaries (see isLoginPage): no glob, no
+      // regex. Defaults to login.url's path; "/" matches only the site root.
       url_pattern: z.string().regex(/^\//).max(500).optional(),
       username_selector: selector,
       password_selector: selector,
@@ -133,4 +134,29 @@ export function parseProfileYaml(input) {
 
   if (def.login && !def.login.url_pattern) def.login.url_pattern = new URL(def.login.url).pathname;
   return def;
+}
+
+/**
+ * Whether `url` is the profile's login page: same origin as `login.url`, and a
+ * pathname equal to `login.url_pattern` or below it on a segment boundary
+ * ("/login" matches "/login" and "/login/x", never "/login-success"). A
+ * trailing slash on the pattern is ignored, and the root pattern "/" matches
+ * only the root itself, so a login page at "/" does not make every page a
+ * login page. `profile` is a stored row (`definition`) or a parsed definition.
+ */
+export function isLoginPage(profile, url) {
+  const login = (profile?.definition ?? profile)?.login;
+  const pattern = login?.url_pattern;
+  if (!pattern || !login.url) return false;
+  let u, loginOrigin;
+  try {
+    u = new URL(url);
+    loginOrigin = new URL(login.url).origin;
+  } catch {
+    return false;
+  }
+  if (u.origin !== loginOrigin) return false;
+  const base = pattern.replace(/\/+$/, "") || "/";
+  if (base === "/") return u.pathname === "/";
+  return u.pathname === base || u.pathname.startsWith(`${base}/`);
 }

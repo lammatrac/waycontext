@@ -239,3 +239,14 @@ test("promptForEnter resolves on a line, and rejects login_cancelled on EOF, eve
   await new Promise((r) => setTimeout(r, 20)); // 'end' has been emitted before the prompt attaches
   await assert.rejects(promptForEnter({ input: eofFirst, output: quiet }), (e) => e.code === "login_cancelled");
 });
+
+test("a timeout beyond the timer limit (2^31-1 ms) is rejected up front, before any browser opens", async () => {
+  const adapter = createFakeAdapter();
+  let waited = false;
+  await assert.rejects(
+    run(adapter, { timeoutMs: 2 ** 31, waitForDone: async () => { waited = true; } }),
+    (e) => e.code === "invalid_argument" && /timeout/.test(e.message)
+  );
+  assert.equal(waited, false);
+  assert.equal(adapter.openSessionCount(), 0);
+});

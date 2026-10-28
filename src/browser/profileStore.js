@@ -10,10 +10,12 @@ import { pool, currentOrgId, getProject } from "../db.js";
 import { BrowserError } from "./errors.js";
 import { parseProfileYaml } from "./profileSchema.js";
 import { writeAuditEvent } from "./audit.js";
+import { deleteSavedState } from "./stateStore.js";
 
 const CLI_CTX = { surface: "cli" };
 
-async function requireProject(name, orgId) {
+/** The project row and resolved org id, or `project_not_found`. Shared by every browser module. */
+export async function requireProject(name, orgId) {
   orgId ??= await currentOrgId();
   const project = await getProject(name, orgId);
   if (!project) throw new BrowserError("project_not_found", `Project "${name}" not found. Run index_project first.`);
@@ -74,9 +76,15 @@ export async function importProfile(projectName, source, { orgId, ctx = CLI_CTX 
   };
 }
 
-/** Remove a profile, closing its live sessions first (spec § 9). */
-export async function removeProfile(projectName, profileId, { orgId, ctx = CLI_CTX } = {}) {
-  const { project } = await requireProject(projectName, orgId);
+/**
+ * Remove a profile, closing its live sessions first (spec § 9), and delete its
+ * saved storage state so a later profile with the same id does not inherit it.
+ * Screenshot evidence under the profile directory is kept. `stateDir` defaults
+ * to config.browserStateDir.
+ */
+export async function removeProfile(projectName, profileId, { orgId, ctx = CLI_CTX, stateDir } = {}) {
+  const found = await requireProject(projectName, orgId);
+  const { project } = found;
   const existing = await getProfile(project.id, profileId);
   if (!existing) throw new BrowserError("profile_not_found", `Profile "${profileId}" not found in project "${projectName}"`);
 
@@ -94,9 +102,10 @@ export async function removeProfile(projectName, profileId, { orgId, ctx = CLI_C
     });
   }
   await pool.query(`DELETE FROM browser_profiles WHERE project_id = $1 AND profile_id = $2`, [project.id, profileId]);
+  const stateDeleted = deleteSavedState({ orgId: found.orgId, project: project.name, profileId }, stateDir ? { baseDir: stateDir } : {});
   await writeAuditEvent({
     projectId: project.id, eventType: "profile_removed", result: "ok", ctx,
-    data: { profile_id: profileId, sessions_closed: closed.rows.length },
+    data: { profile_id: profileId, sessions_closed: closed.rows.length, saved_state_deleted: stateDeleted },
   });
   return { removed: true, profile_id: profileId, sessions_closed: closed.rows.length };
 }

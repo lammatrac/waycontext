@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseProfileYaml, assertEnvironmentAllowed, assertAuthMode } from "../src/browser/profileSchema.js";
+import { parseProfileYaml, assertEnvironmentAllowed, assertAuthMode, isLoginPage } from "../src/browser/profileSchema.js";
 
 const GOOD = `
 profile_id: staging-admin
@@ -110,4 +110,52 @@ test("assertEnvironmentAllowed refuses anything but local/staging", () => {
 test("assertAuthMode throws auth_mode_mismatch when the requested mode differs", () => {
   assertAuthMode({ auth_mode: "fresh_login" }, "fresh_login");
   assert.throws(() => assertAuthMode({ auth_mode: "saved_state" }, "fresh_login"), (e) => e.code === "auth_mode_mismatch");
+});
+
+// ---- isLoginPage: one shared login-page rule (review fix 2026-10-28) -----------------
+
+const loginDef = (url, url_pattern) => parseProfileYaml(variant((o) => {
+  o.login.url = url;
+  if (url_pattern === undefined) delete o.login.url_pattern;
+  else o.login.url_pattern = url_pattern;
+}));
+
+test("isLoginPage matches on path-segment boundaries, not a raw prefix", () => {
+  const def = loginDef("https://staging.example.test/login", "/login");
+  const o = "https://staging.example.test";
+  assert.equal(isLoginPage(def, `${o}/login`), true);
+  assert.equal(isLoginPage(def, `${o}/login/`), true);
+  assert.equal(isLoginPage(def, `${o}/login/step-2?x=1`), true);
+  assert.equal(isLoginPage(def, `${o}/login-success`), false);
+  assert.equal(isLoginPage(def, `${o}/loginx`), false);
+  assert.equal(isLoginPage(def, `${o}/admin`), false);
+});
+
+test("isLoginPage treats a trailing-slash pattern as the same segment", () => {
+  const def = loginDef("https://staging.example.test/auth/", "/auth/");
+  assert.equal(isLoginPage(def, "https://staging.example.test/auth"), true);
+  assert.equal(isLoginPage(def, "https://staging.example.test/auth/sso"), true);
+  assert.equal(isLoginPage(def, "https://staging.example.test/authors"), false);
+});
+
+test("a login page at the site root yields a pattern that matches only the root itself", () => {
+  const def = loginDef("https://staging.example.test/", undefined);
+  assert.equal(def.login.url_pattern, "/");
+  assert.equal(isLoginPage(def, "https://staging.example.test/"), true);
+  assert.equal(isLoginPage(def, "https://staging.example.test/?next=/x"), true);
+  assert.equal(isLoginPage(def, "https://staging.example.test/wp-admin/"), false);
+  assert.equal(isLoginPage(def, "https://staging.example.test/anything"), false);
+});
+
+test("isLoginPage only matches on the login url's origin", () => {
+  const def = loginDef("https://staging.example.test/login", "/login");
+  assert.equal(isLoginPage(def, "https://sso.example.test:8443/login"), false);
+});
+
+test("isLoginPage accepts a stored profile row and is false without a login block or for junk urls", () => {
+  const def = loginDef("https://staging.example.test/login", "/login");
+  assert.equal(isLoginPage({ definition: def }, "https://staging.example.test/login"), true);
+  assert.equal(isLoginPage({ definition: { ...def, login: undefined } }, "https://staging.example.test/login"), false);
+  assert.equal(isLoginPage(def, "not a url"), false);
+  assert.equal(isLoginPage(null, "https://staging.example.test/login"), false);
 });

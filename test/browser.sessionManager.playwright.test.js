@@ -234,6 +234,28 @@ it("killing the browser process makes status FAILED/runtime_lost (AC-008)", asyn
   assert.equal(ok.reason, "runtime_lost");
 });
 
+it("a main page closed from outside (window closed) makes the session FAILED/runtime_lost (review fix)", async () => {
+  let last = null;
+  const wrapped = { createSession: async (o) => (last = await adapter.createSession(o)), close: async () => {} };
+  const m = createSessionManager({ adapter: wrapped, stateDir, idleTimeoutMs: 60_000 });
+  try {
+    const r = await m.start({ project: PROJECT, profileId: "fresh", purpose: "e2e page close", ctx: ctx() });
+    assert.equal(r.status, "READY");
+    await last._page.close();
+    let s = null;
+    for (let i = 0; i < 100; i++) {
+      s = await m.status({ project: PROJECT, sessionId: r.session_id, ctx: ctx() });
+      if (s.status !== "READY") break;
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    assert.equal(s.status, "FAILED");
+    assert.equal(s.reason, "runtime_lost");
+    assert.equal(m.liveCount(), 0);
+  } finally {
+    await m.shutdown({ ctx: ctx() });
+  }
+});
+
 it("AC-005: neither the password nor the cookie value appears in results, logs, stderr or any browser_* row", async () => {
   const sessions = (await pool.query(`SELECT * FROM browser_sessions WHERE project_id = $1`, [project.id])).rows;
   const dump = JSON.stringify({

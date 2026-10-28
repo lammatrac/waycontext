@@ -2,6 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   resolveSecret, hasSecret, registerSensitive, redact, redactDeep, redactError, clearSensitive,
+  isSensitiveCookieValue, createSensitiveScope,
 } from "../src/browser/secrets.js";
 import { browserSecretEnvName } from "../src/config.js";
 
@@ -75,4 +76,48 @@ test("redactError returns a clean error that keeps the code", async () => {
   assert.equal(e.code, "login_failed");
   assert.ok(!e.message.includes(VALUE));
   assert.ok(!(e.stack ?? "").includes(VALUE));
+});
+
+// ---- cookie values: filtered and session-scoped (review fix 2026-10-28) ------------
+
+test("only long or mixed letter+digit cookie values count as sensitive; ordinary words do not", () => {
+  for (const v of ["staging", "admin", "true", "false", "en-US", "1234567", "dark-mode", "", null, 42]) {
+    assert.equal(isSensitiveCookieValue(v), false, String(v));
+  }
+  for (const v of ["fake-session-cookie-0001", "abcdefghijklmnop", "a1b2c3d4", "Zx9Q7wLm"]) {
+    assert.equal(isSensitiveCookieValue(v), true, v);
+  }
+});
+
+test("a sensitive scope registers cookie values for redaction and forgets them on dispose", () => {
+  const sc = createSensitiveScope();
+  sc.addCookies([{ name: "env", value: "staging" }, { name: "sid", value: "fake-session-cookie-0001" }, null]);
+  assert.equal(redact("env=staging sid=fake-session-cookie-0001"), "env=staging sid=[REDACTED]");
+  sc.dispose();
+  assert.equal(redact("sid=fake-session-cookie-0001"), "sid=fake-session-cookie-0001");
+  sc.dispose(); // idempotent
+});
+
+test("disposing one scope keeps values another scope or a resolved secret still holds", () => {
+  process.env[VAR] = VALUE;
+  resolveSecret(NAME);
+  const a = createSensitiveScope();
+  const b = createSensitiveScope();
+  a.add(VALUE);
+  a.add("fake-shared-cookie-777");
+  b.add("fake-shared-cookie-777");
+  a.dispose();
+  assert.equal(redact(`${VALUE} fake-shared-cookie-777`), "[REDACTED] [REDACTED]");
+  b.dispose();
+  assert.equal(redact(`${VALUE} fake-shared-cookie-777`), "[REDACTED] fake-shared-cookie-777");
+});
+
+test("redact stays longest-first as values come and go (cached order is invalidated)", () => {
+  const sc = createSensitiveScope();
+  sc.add("fake-cookie-abcdefgh");
+  assert.equal(redact("x fake-cookie-abcdefgh-longer"), "x [REDACTED]-longer");
+  sc.add("fake-cookie-abcdefgh-longer");
+  assert.equal(redact("x fake-cookie-abcdefgh-longer"), "x [REDACTED]");
+  sc.dispose();
+  assert.equal(redact("x fake-cookie-abcdefgh-longer"), "x fake-cookie-abcdefgh-longer");
 });

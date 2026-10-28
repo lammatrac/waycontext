@@ -12,16 +12,23 @@
  */
 import readline from "node:readline";
 import { randomBytes } from "node:crypto";
-import { currentOrgId, getProject } from "../db.js";
 import { BrowserError } from "./errors.js";
 import { writeAuditEvent, newCorrelationId } from "./audit.js";
 import { assertAuthMode, assertEnvironmentAllowed } from "./profileSchema.js";
-import { getProfile } from "./profileStore.js";
-import { redactDeep, redactError, registerSensitive } from "./secrets.js";
+import { getProfile, requireProject } from "./profileStore.js";
+import { redactDeep, redactError, createSensitiveScope } from "./secrets.js";
 import { saveStorageState } from "./stateStore.js";
-import { verifyAuthenticated } from "./sessionManager.js";
+import { verifyAuthenticated, MAX_TIMER_MS } from "./sessionManager.js";
 
 export const DEFAULT_LOGIN_TIMEOUT_SECONDS = 600;
+/** The largest `--timeout` a timer can honour (2^31-1 ms, about 24.8 days). */
+export const MAX_LOGIN_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_MS / 1000);
+
+function assertTimeoutMs(ms) {
+  if (!(Number.isFinite(ms) && ms > 0 && ms <= MAX_TIMER_MS)) {
+    throw new BrowserError("invalid_argument", `timeout must be between 1 and ${MAX_LOGIN_TIMEOUT_SECONDS} seconds`);
+  }
+}
 
 /**
  * Default completion signal: print the instructions and resolve when the human presses
@@ -57,10 +64,9 @@ export function promptForEnter({ input = process.stdin, output = process.stderr,
 export async function captureLogin(o) {
   const ctx = { surface: "cli", correlationId: newCorrelationId(), log() {}, ...o.ctx };
   const timeoutMs = o.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_SECONDS * 1000;
+  assertTimeoutMs(timeoutMs); // before anything opens: an overflowing timer would fire at once
   const audit = (e) => writeAuditEvent({ ...e, ctx, data: redactDeep(e.data ?? {}) });
-  const orgId = o.orgId ?? (await currentOrgId());
-  const proj = await getProject(o.project, orgId);
-  if (!proj) throw new BrowserError("project_not_found", `Project "${o.project}" not found. Run index_project first.`);
+  const { project: proj, orgId } = await requireProject(o.project, o.orgId);
 
   const reject = async (err) => {
     await audit({ projectId: proj.id, eventType: "tool_call", result: "rejected", data: { tool: "browser_login", code: err.code ?? "error" } });
@@ -83,6 +89,7 @@ export async function captureLogin(o) {
   await audit({ projectId: proj.id, eventType: "manual_login_started", result: "ok", data: { profile_id: o.profileId } });
 
   const pending = [];
+  const sensitive = createSensitiveScope(); // the captured cookies, for this command only
   let session = null;
   let timer = null;
   let outcome;
@@ -113,7 +120,7 @@ export async function captureLogin(o) {
     if (!v.ok) throw new BrowserError("verification_failed", "the page after login did not pass the profile's verification; nothing was saved");
 
     const state = await session.storageState();
-    for (const c of state?.cookies ?? []) registerSensitive(c.value);
+    sensitive.addCookies(state?.cookies);
     const ref = await saveStorageState(scope, state, {
       baseDir: o.stateDir,
       forbiddenRoots: [proj.root_path].filter(Boolean),
@@ -130,7 +137,11 @@ export async function captureLogin(o) {
   } finally {
     clearTimeout(timer);
     try { await session?.close(); } catch { /* already gone */ }
-    if (outcome) await audit({ projectId: proj.id, eventType: "manual_login_finished", result: "ok", data: { profile_id: o.profileId } });
+    try {
+      if (outcome) await audit({ projectId: proj.id, eventType: "manual_login_finished", result: "ok", data: { profile_id: o.profileId } });
+    } finally {
+      sensitive.dispose();
+    }
   }
 }
 

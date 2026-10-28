@@ -11,7 +11,7 @@ import {
   resolveStorageRef, defaultStateDir, recordArtifact, listArtifacts,
 } from "../src/browser/stateStore.js";
 import { redact, clearSensitive } from "../src/browser/secrets.js";
-import { setSavedStateProbe, importProfile, listProfiles } from "../src/browser/profileStore.js";
+import { setSavedStateProbe, importProfile, listProfiles, removeProfile } from "../src/browser/profileStore.js";
 import { installSavedStateProbe } from "../src/browser/ops.js";
 import { config } from "../src/config.js";
 
@@ -170,4 +170,22 @@ test("installSavedStateProbe makes has_saved_state real in browser_profile list"
   const orgId = await currentOrgId();
   await saveStorageState({ orgId, project: PROJECT, profileId: "staging-admin" }, STATE, { baseDir: dir });
   assert.equal((await listProfiles(PROJECT))[0].has_saved_state, true);
+});
+
+test("removing a profile deletes its saved state: a re-import of the same id has has_saved_state false", async () => {
+  const def = JSON.stringify({
+    profile_id: "staging-admin", environment: "staging", base_url: "https://staging.example.test",
+    allowed_origins: ["https://staging.example.test"], auth: { mode: "saved_state" },
+    verify: { url: "https://staging.example.test/admin", selector: "#bar" },
+  });
+  await importProfile(PROJECT, def);
+  installSavedStateProbe({ baseDir: dir });
+  const { currentOrgId } = await import("../src/db.js");
+  const sc = { orgId: await currentOrgId(), project: PROJECT, profileId: "staging-admin" };
+  await saveStorageState(sc, STATE, { baseDir: dir });
+  assert.equal((await listProfiles(PROJECT))[0].has_saved_state, true);
+  await removeProfile(PROJECT, "staging-admin", { stateDir: dir });
+  assert.equal(hasSavedState(sc, { baseDir: dir }), false, "storage-state.json left on disk");
+  await importProfile(PROJECT, def);
+  assert.equal((await listProfiles(PROJECT))[0].has_saved_state, false);
 });
