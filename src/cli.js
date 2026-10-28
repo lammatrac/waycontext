@@ -34,7 +34,7 @@ import { mergeGateSettings, removeGateSettings, mergeGitignore } from "./gateIni
 import {
   writeProjectCache, readProjectCache, cachePath, cacheDir, HOOK_MODES, DEFAULT_MODE, DEFAULT_MCP_NAME,
 } from "./projectCache.js";
-import { ensureService, restartService, serviceStatus, stopService, serviceStateDir } from "./serviceManager.js";
+import { ensureService, restartService, restartOutcome, serviceStatus, stopService, serviceStateDir } from "./serviceManager.js";
 import { removeUpdateCron, removeUpdateCheckFiles, removeIfEmpty } from "./uninstall.js";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
@@ -696,8 +696,12 @@ async function main() {
         break;
       }
       if (sub === "restart") {
-        const result = await restartService();
-        console.log(`WayContext service ${result.status} at ${result.url}`);
+        const { message, exitCode } = restartOutcome(await restartService());
+        if (exitCode === 0) console.log(message);
+        else {
+          console.error(message);
+          process.exitCode = exitCode;
+        }
         break;
       }
       usageAndExit(

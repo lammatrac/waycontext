@@ -247,7 +247,51 @@ export async function ensureService({ expectedVersion = VERSION } = {}) {
   });
 }
 
-export async function restartService() {
-  await stopService();
-  return ensureService({ expectedVersion: VERSION });
+/**
+ * Stop the managed service and start a fresh one.
+ *
+ * With no managed state there is nothing this can stop, so if /health still
+ * answers it is a foreground `waycontext serve` (or another unmanaged process):
+ * report "unmanaged" rather than letting ensureService call that "running".
+ * The steps are injectable so tests never touch the real service.
+ *
+ * @returns {Promise<{status:"started"|"running"|"unmanaged", url:string}>}
+ */
+export async function restartService({
+  stop = stopService,
+  ensure = ensureService,
+  probe = () => health(serviceBaseUrl()),
+} = {}) {
+  const stopped = await stop();
+  if (!stopped?.pid) {
+    const h = await probe();
+    if (h.ok) return { status: "unmanaged", url: serviceBaseUrl(), version: h.body?.version ?? null };
+  }
+  return ensure({ expectedVersion: VERSION });
+}
+
+/**
+ * What `waycontext service restart` prints and exits with. Only a fresh start
+ * is a restart; anything else answering on the port is reported as such.
+ *
+ * @returns {{message:string, exitCode:number}}
+ */
+export function restartOutcome(result) {
+  if (result.status === "started") {
+    return { message: `WayContext service restarted at ${result.url}`, exitCode: 0 };
+  }
+  if (result.status === "unmanaged") {
+    return {
+      message:
+        `An unmanaged \`waycontext serve\` is answering at ${result.url}; it is not the managed service, ` +
+        "so it was left running. Stop it and start it again by hand.",
+      exitCode: 1,
+    };
+  }
+  return {
+    message:
+      `WayContext service at ${result.url} was not restarted: a process that is not the managed service ` +
+      `kept answering (status: ${result.status}). Stop it by hand, then run \`waycontext service restart\` again.`,
+    exitCode: 1,
+  };
 }
