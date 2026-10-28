@@ -58,6 +58,23 @@ WordPress UI (Increment 1A):
   trace_ui_action <project> <element_id>    element -> hook -> callback -> call graph (alias: ui-trace)
   find_ui_source <project> <element_id>     where a UI element/screen/field is defined (alias: ui-source)
 
+Browser sessions (human-set profiles):
+  browser_profile_list <project>            browser profiles a human set up for a project (alias: browser-profiles)
+  browser_session_start <project> <profile_id> <purpose> [auth_mode]
+                                            start a verified logged-in browser session (alias: browser-start)
+  browser_session_status <project> <session_id>
+                                            state of a browser session (READY, FAILED...) (alias: browser-status)
+  browser_session_close <project> <session_id>
+                                            close a browser session, release its browser (alias: browser-close)
+  browser_navigate <project> <session_id> <url>
+                                            navigate a session to an allowed URL (alias: browser-navigate)
+  browser_capture_screenshot <project> <session_id> [full_page]
+                                            save a PNG screenshot of a session (alias: browser-screenshot)
+  browser-profile import <project> <file>   validate and store a profile YAML (human-only, not an MCP tool)
+  browser-profile remove <project> <id>     close its live sessions and delete the profile
+  browser-login <project> <profile_id> [--timeout=<s>]
+                                            log in by hand in a headed browser and save the state (human-only, not an MCP tool)
+
 Setup & administration:
   init-db                                   create the schema (same as migrate)
   migrate [--status]                        apply pending SQL migrations, or just report their state

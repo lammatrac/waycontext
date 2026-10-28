@@ -2,6 +2,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { initDb } from "./db.js";
 import { buildMcpServer } from "./mcpServer.js";
+import { shutdownBrowserSessions } from "./browser/ops.js";
 import { NAME, VERSION } from "./version.js";
 
 // The server used to identify as "code-context" while install.sh registered it
@@ -17,6 +18,18 @@ async function main() {
   const server = buildMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // This process owns any browser it started: release it when the client goes
+  // away (stdin closes) or the process is told to stop.
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    await shutdownBrowserSessions({ surface: "mcp" }).catch(() => {});
+    process.exit(0);
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  process.stdin.once("end", stop);
   console.error(`${NAME} MCP server ${VERSION} running on stdio`);
 }
 

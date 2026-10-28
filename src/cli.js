@@ -2,6 +2,7 @@
 // CLI: node src/cli.js <command> [args...]
 // Run `node src/cli.js help` for the full command list.
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
 import { migrationStatus } from "./migrate.js";
 import { embeddingModelId, clearStaleEmbeddings } from "./embeddings.js";
@@ -11,6 +12,9 @@ import { getChangedFiles } from "./gitDiff.js";
 import { backfillProjectIdentity, identityBackfillStatus } from "./backfillIdentity.js";
 import { listCandidates, setRuleState } from "./knowledge/rules.js";
 import { exportKnowledge, importKnowledge } from "./knowledge/knowledgeFiles.js";
+import { importProfile, removeProfile } from "./browser/profileStore.js";
+import { shutdownBrowserSessions, getSessionManager } from "./browser/ops.js";
+import { captureLogin, promptForEnter, DEFAULT_LOGIN_TIMEOUT_SECONDS } from "./browser/loginCapture.js";
 import { NAME, VERSION } from "./version.js";
 import { operations, findOperation, parseCliArgs, usageLine } from "./operations.js";
 import {
@@ -471,7 +475,7 @@ async function runOperation(op) {
     };
     let result;
     try {
-      result = await op.handler(parsed, { log });
+      result = await op.handler(parsed, { log, surface: "cli", correlationId: randomUUID() });
     } catch (e) {
       stop(false);
       throw e;
@@ -484,7 +488,7 @@ async function runOperation(op) {
     return;
   }
 
-  printJson(await withSpinner(op.cli.label(parsed), () => op.handler(parsed, { log: () => {} })));
+  printJson(await withSpinner(op.cli.label(parsed), () => op.handler(parsed, { log: () => {}, surface: "cli", correlationId: randomUUID() })));
 }
 
 async function main() {
@@ -493,7 +497,13 @@ async function main() {
   // CLI-shaped -- interactive prompts, a psql shell, local config.
   const op = findOperation(cmd);
   if (op) {
-    await runOperation(op);
+    try {
+      await runOperation(op);
+    } finally {
+      // A browser session lives in this process: it ends with it (spec 6.2.1
+      // "process shutdown"), and an open browser would keep the loop alive.
+      await shutdownBrowserSessions({ surface: "cli" });
+    }
     await pool.end();
     return;
   }
@@ -583,6 +593,53 @@ async function main() {
       const target = maybeProject ?? (await defaultProjectName());
       const sync = cmd === "knowledge-export" ? exportKnowledge : importKnowledge;
       printJson(await sync(target));
+      break;
+    }
+    case "browser-profile": {
+      // Deliberately NOT an entry in src/operations.js, for the same reason as
+      // `rule confirm`: a profile's allowlist is policy, and an agent that could
+      // widen it through a tool call could point a logged-in browser anywhere.
+      // Keeping it out of the registry makes it structurally absent from MCP
+      // and HTTP. Only the read (browser_profile_list) is an operation.
+      const [sub, projectName, target] = args.filter((a) => !a.startsWith("--"));
+      const usage =
+        "Usage: waycontext browser-profile import <project> <profile.yaml>\n" +
+        "       waycontext browser-profile remove <project> <profile_id>";
+      if ((sub !== "import" && sub !== "remove") || !projectName || !target) usageAndExit(usage);
+      await initDb();
+      const ctx = { surface: "cli", correlationId: randomUUID() };
+      if (sub === "import") {
+        let yamlText;
+        try {
+          yamlText = fs.readFileSync(path.resolve(target), "utf8");
+        } catch (e) {
+          usageAndExit(`Cannot read ${target}: ${e.code ?? e.message}`);
+        }
+        printJson(await importProfile(projectName, yamlText, { ctx }));
+      } else {
+        printJson(await removeProfile(projectName, target, { ctx }));
+      }
+      break;
+    }
+    case "browser-login": {
+      // Human-only (REQ-017), like browser-profile: NOT in src/operations.js, so it is
+      // structurally absent from MCP, HTTP and the ops catalogue. A human types the
+      // credentials into a headed Chromium; this process never does.
+      const positional = args.filter((a) => !a.startsWith("--"));
+      const [projectName, profileId] = positional;
+      const tFlag = args.find((a) => a.startsWith("--timeout="));
+      const timeoutSec = tFlag ? Number(tFlag.slice("--timeout=".length)) : DEFAULT_LOGIN_TIMEOUT_SECONDS;
+      if (!projectName || !profileId || positional.length > 2 || !(timeoutSec > 0)) {
+        usageAndExit("Usage: waycontext browser-login <project> <profile_id> [--timeout=<seconds>]");
+      }
+      await initDb();
+      const adapter = await getSessionManager().getAdapter();
+      const out = await captureLogin({
+        project: projectName, profileId, adapter, timeoutMs: timeoutSec * 1000,
+        ctx: { surface: "cli", correlationId: randomUUID(), log() {} },
+        waitForDone: () => promptForEnter(),
+      });
+      printJson(out);
       break;
     }
     // Human-only, like the rule and knowledge commands: starting a server is not
@@ -1220,6 +1277,7 @@ async function main() {
 main().catch(async (e) => {
   // Close the pool so the process can exit on its own if the handler ever stops
   // calling process.exit -- an open pg pool keeps the event loop alive.
+  await shutdownBrowserSessions({ surface: "cli" }).catch(() => {});
   await pool.end().catch(() => {});
   process.exit(reportError(e, { debug: DEBUG }));
 });

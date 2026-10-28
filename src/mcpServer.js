@@ -8,7 +8,8 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildInstructions } from "./mcpInstructions.js";
-import { operations } from "./operations.js";
+import { randomUUID } from "node:crypto";
+import { operationsFor } from "./operations.js";
 import { NAME, VERSION } from "./version.js";
 
 const json = (data) => ({
@@ -29,17 +30,22 @@ const fail = (e) => ({
  * once per server, at connect time, which is also when the project list it
  * embeds is at its freshest.
  *
+ * `surface` is "mcp" for stdio and "http" for the /mcp route mounted on the
+ * unauthenticated HTTP service. It selects which operations are registered
+ * (operationsFor) and is handed to handlers as `ctx.surface`, with a fresh
+ * `ctx.correlationId` per call.
+ *
  * `readOnlyHint` is not decoration: clients auto-approve read-only tools, so
  * without it a search_code call can raise a permission prompt while the agent's
  * built-in Grep is pre-approved -- a mechanical reason to route around us that
  * has nothing to do with the tool being worse.
  */
-export function buildMcpServer() {
+export function buildMcpServer({ surface = "mcp" } = {}) {
   const server = new McpServer(
     { name: NAME, version: VERSION },
     { instructions: buildInstructions() }
   );
-  for (const op of operations) {
+  for (const op of operationsFor(surface)) {
     const config = {
       description: op.description,
       inputSchema: op.input,
@@ -50,7 +56,9 @@ export function buildMcpServer() {
         // Operations that report progress (index_project) collect their log
         // lines into the response, since stdout is the MCP transport here.
         const logs = [];
-        const result = await op.handler(args, { log: (m) => logs.push(m) });
+        const result = await op.handler(args, {
+          log: (m) => logs.push(m), surface, correlationId: randomUUID(),
+        });
         return json(logs.length ? { stats: result, logs } : result);
       } catch (e) {
         return fail(e);

@@ -18,9 +18,15 @@
  * Numeric fields use z.coerce.number() so one schema serves both callers:
  * MCP passes a real number, the CLI passes argv strings.
  *
- * Handlers take (args, ctx). ctx carries the request-scoped bits -- today just
- * a log sink; later the db handle, org id and principal that multi-tenancy and
- * the hosted API need.
+ * Handlers take (args, ctx). ctx carries the request-scoped bits -- a log sink,
+ * `surface` ("mcp" | "cli" | "http", filled in by whichever surface dispatched
+ * the call) and `correlationId` (one fresh id per call); later the db handle,
+ * org id and principal that multi-tenancy and the hosted API need.
+ *
+ * `surfaces` is optional. Absent means every surface; present, the operation is
+ * served only there. The browser operations set ["mcp", "cli"] -- HTTP has no
+ * authentication, so it must not be able to drive a logged-in browser (Q-008).
+ * Consumers go through operationsFor(surface) rather than reading `operations`.
  */
 import { z } from "zod";
 import { listProjects } from "./db.js";
@@ -38,6 +44,9 @@ import {
 } from "./knowledge/architecture.js";
 import { composeContext } from "./context/compose.js";
 import { createReasoningGraph, updateReasoningGraph } from "./reasoning/store.js";
+import {
+  browserProfileListOp, browserSessionStartOp, browserSessionStatusOp, browserSessionCloseOp, browserNavigateOp, browserCaptureScreenshotOp,
+} from "./browser/ops.js";
 import {
   resolveUiReferenceOp, findUiElementOp, getUiContextOp, traceUiActionOp, findUiSourceOp,
 } from "./ui/uiQueries.js";
@@ -523,7 +532,113 @@ export const operations = [
     cli: { args: ["project", "element_id"], aliases: ["ui-source"], label: (a) => `Finding UI source for "${a.element_id}"` },
     handler: (a) => findUiSourceOp(a.project, a.element_id),
   },
+  {
+    name: "browser_profile_list",
+    readOnly: true,
+    surfaces: ["mcp", "cli"],
+    description:
+      "List the browser profiles a human has set up for a project: profile_id, environment (local/staging), base_url, allowed_origins, auth_mode (fresh_login/saved_state) and whether a saved login state exists. Never returns credentials, selectors or state paths. Profiles are created by a human with `waycontext browser-profile import`; this tool cannot create or change one.",
+    input: { project },
+    cli: {
+      args: ["project"],
+      aliases: ["browser-profiles"],
+      label: (a) => `Listing browser profiles for "${a.project}"`,
+    },
+    handler: (a) => browserProfileListOp(a),
+  },
+  {
+    name: "browser_session_start",
+    readOnly: false,
+    surfaces: ["mcp", "cli"],
+    description:
+      "Start a logged-in browser session for a profile a human set up, and wait until it is verified. Returns session_id, status (READY, or FAILED/EXPIRED with a reason such as secret_missing, state_missing, login_failed, verification_failed, state_expired, runtime_unavailable), auth_mode, environment, identity {verified, role?} and last_verified_at. `auth_mode` defaults to the profile's mode and must match it. Credentials are read server-side from the environment and never returned. A FAILED or EXPIRED start is a result, not an error; start a new session after one. The session closes itself after an idle timeout and when the server process exits.",
+    input: {
+      project,
+      profile_id: z.string().describe("Profile id from browser_profile_list"),
+      purpose: z.string().min(1).max(200).describe("Short reason for the session, recorded for audit"),
+      auth_mode: z.enum(["fresh_login", "saved_state"]).optional().describe("Defaults to the profile's mode; a different value is rejected"),
+    },
+    cli: {
+      args: ["project", "profile_id", "purpose", "auth_mode"],
+      aliases: ["browser-start"],
+      label: (a) => `Starting browser session for "${a.profile_id}"`,
+    },
+    handler: (a, ctx) => browserSessionStartOp(a, ctx),
+  },
+  {
+    name: "browser_session_status",
+    readOnly: true,
+    surfaces: ["mcp", "cli"],
+    description:
+      "Status of a browser session: session_id, status, reason (when not READY), auth_mode, environment, identity, created_at, last_verified_at, expires_at. Checks that the owning process and browser are still alive and reports FAILED/runtime_lost if not, never a stale READY. A session id from another project is session_not_found.",
+    input: { project, session_id: z.string().describe("session_id from browser_session_start") },
+    cli: {
+      args: ["project", "session_id"],
+      aliases: ["browser-status"],
+      label: (a) => `Reading browser session ${a.session_id}`,
+    },
+    handler: (a, ctx) => browserSessionStatusOp(a, ctx),
+  },
+  {
+    name: "browser_session_close",
+    readOnly: false,
+    surfaces: ["mcp", "cli"],
+    description:
+      "Close a browser session and release its browser. Idempotent: closing a closed session succeeds. Returns { session_id, status }. A session that already FAILED stays FAILED. A session id from another project is session_not_found; one owned by another running process is session_not_in_this_process; one with a call in flight is session_busy.",
+    input: { project, session_id: z.string().describe("session_id from browser_session_start") },
+    cli: {
+      args: ["project", "session_id"],
+      aliases: ["browser-close"],
+      label: (a) => `Closing browser session ${a.session_id}`,
+    },
+    handler: (a, ctx) => browserSessionCloseOp(a, ctx),
+  },
+  {
+    name: "browser_navigate",
+    readOnly: false,
+    surfaces: ["mcp", "cli"],
+    description:
+      "Navigate a READY browser session to a URL on one of the profile's allowed origins. Returns { final_url, http_status, status }. A URL, redirect, script navigation or popup that leaves the allowed origins is aborted before it loads and throws origin_blocked; the session stays READY. If the navigation lands on the profile's login page or returns 401 the session becomes EXPIRED (status EXPIRED, reason state_expired): start a new session. A session that is not READY is session_not_ready; one with a call in flight is session_busy; another project's session id is session_not_found.",
+    input: {
+      project,
+      session_id: z.string().describe("session_id from browser_session_start"),
+      url: z.string().min(1).max(2048).describe("Absolute http(s) URL on an allowed origin"),
+    },
+    cli: {
+      args: ["project", "session_id", "url"],
+      aliases: ["browser-navigate"],
+      label: (a) => `Navigating browser session ${a.session_id}`,
+    },
+    handler: (a, ctx) => browserNavigateOp(a, ctx),
+  },
+  {
+    name: "browser_capture_screenshot",
+    readOnly: false,
+    surfaces: ["mcp", "cli"],
+    description:
+      "Capture a PNG screenshot of a READY browser session's current page (viewport, or the whole page with full_page). The file is written outside the repo, mode 0600, under the session's evidence directory; the result is { path, storage_ref, width, height, captured_at } and never contains image bytes. Screenshots can show personal or admin data: treat the file as sensitive. Errors: session_not_ready, session_busy, session_not_found.",
+    input: {
+      project,
+      session_id: z.string().describe("session_id from browser_session_start"),
+      full_page: z.union([z.boolean(), z.enum(["true", "false"]).transform((v) => v === "true")]).optional().describe("Capture the full scrollable page instead of the viewport (default false)"),
+    },
+    cli: {
+      args: ["project", "session_id", "full_page"],
+      aliases: ["browser-screenshot"],
+      label: (a) => `Capturing screenshot of browser session ${a.session_id}`,
+    },
+    handler: (a, ctx) => browserCaptureScreenshotOp(a, ctx),
+  },
 ];
+
+/**
+ * The operations a surface may serve. Every surface asks for its own list
+ * instead of iterating `operations`, so a restricted operation is absent
+ * rather than filtered out after the fact.
+ */
+export function operationsFor(surface) {
+  return operations.filter((op) => !op.surfaces || op.surfaces.includes(surface));
+}
 
 /** Look up an operation by name or CLI alias. */
 export function findOperation(nameOrAlias) {

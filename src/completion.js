@@ -48,6 +48,7 @@ export const SECTIONS = [
   { key: "knowledge", title: "Rules & engineering memory" },
   { key: "context", title: "Context for a task" },
   { key: "ui", title: "WordPress UI (Increment 1A)" },
+  { key: "browser", title: "Browser sessions (human-set profiles)" },
   { key: "admin", title: "Setup & administration" },
 ];
 
@@ -97,6 +98,13 @@ export const OP_HELP = {
   get_ui_context: { section: "ui", short: "component, screen, handler for a UI element" },
   trace_ui_action: { section: "ui", short: "element -> hook -> callback -> call graph" },
   find_ui_source: { section: "ui", short: "where a UI element/screen/field is defined" },
+
+  browser_profile_list: { section: "browser", short: "browser profiles a human set up for a project" },
+  browser_session_start: { section: "browser", short: "start a verified logged-in browser session" },
+  browser_session_status: { section: "browser", short: "state of a browser session (READY, FAILED...)" },
+  browser_session_close: { section: "browser", short: "close a browser session, release its browser" },
+  browser_navigate: { section: "browser", short: "navigate a session to an allowed URL" },
+  browser_capture_screenshot: { section: "browser", short: "save a PNG screenshot of a session" },
 };
 
 export const MANUAL_COMMANDS = [
@@ -143,6 +151,19 @@ export const MANUAL_COMMANDS = [
       { usage: "rule confirm|reject <id> [project]",
         help: "activate or permanently discard a candidate" },
     ] },
+  { name: "browser-profile", section: "browser", usage: "browser-profile import <project> <file>",
+    subVerbs: ["import", "remove"],
+    // No `args`: slots differ by sub-verb (a YAML file vs a profile id).
+    help: "import or remove a browser profile (human-only, not an MCP tool)",
+    lines: [
+      { usage: "browser-profile import <project> <file>",
+        help: "validate and store a profile YAML (human-only, not an MCP tool)" },
+      { usage: "browser-profile remove <project> <id>",
+        help: "close its live sessions and delete the profile" },
+    ] },
+  { name: "browser-login", section: "browser", usage: "browser-login <project> <profile_id> [--timeout=<s>]",
+    args: ["project"],
+    help: "log in by hand in a headed browser and save the state (human-only, not an MCP tool)" },
   { name: "knowledge-export", section: "knowledge", usage: "knowledge-export [project]",
     args: ["project"], help: "write .waycontext/knowledge/*.yaml for team sharing" },
   { name: "knowledge-import", section: "knowledge", usage: "knowledge-import [project]",

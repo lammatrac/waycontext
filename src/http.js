@@ -26,7 +26,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { initDb, getProject } from "./db.js";
-import { operations, findOperation } from "./operations.js";
+import { randomUUID } from "node:crypto";
+import { operationsFor, findOperation } from "./operations.js";
 import { buildMcpServer } from "./mcpServer.js";
 import { composeContext } from "./context/compose.js";
 import { queryCacheStats } from "./embeddings.js";
@@ -131,7 +132,7 @@ async function handleMcp(req, res) {
   const { StreamableHTTPServerTransport } = await import(
     "@modelcontextprotocol/sdk/server/streamableHttp.js"
   );
-  const server = buildMcpServer();
+  const server = buildMcpServer({ surface: "http" });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
     transport.close();
@@ -146,7 +147,7 @@ async function handleMcp(req, res) {
 
 /** The operation catalogue, as JSON a UI can render without hardcoding anything. */
 function catalogue() {
-  return operations.map((op) => ({
+  return operationsFor("http").map((op) => ({
     name: op.name,
     description: op.description,
     aliases: op.cli?.aliases ?? [],
@@ -162,7 +163,7 @@ async function handle(req, res) {
   if (req.method === "GET" && route === "/health") {
     return send(res, 200, {
       ok: true, name: NAME, version: VERSION,
-      operations: operations.length,
+      operations: operationsFor("http").length,
       query_cache: queryCacheStats(),
     });
   }
@@ -194,6 +195,15 @@ async function handle(req, res) {
     // that isn't declared as an operation, which is what keeps the human-only
     // commands (rule confirm, knowledge-import) off this surface too.
     if (!op) return send(res, 404, { error: `Unknown operation "${name}"` });
+    // Q-008: this service has no authentication, so operations that drive a
+    // logged-in browser are MCP/CLI only. Refused, not hidden, so the caller
+    // learns why; the body never says anything about the operation's data.
+    if (op.surfaces && !op.surfaces.includes("http")) {
+      return send(res, 403, {
+        error: `Operation "${op.name}" is not available over HTTP`,
+        code: "surface_not_allowed",
+      });
+    }
 
     const body = await readJsonBody(req);
     let args;
@@ -206,7 +216,9 @@ async function handle(req, res) {
       });
     }
     const logs = [];
-    const result = await op.handler(args, { log: (m) => logs.push(m) });
+    const result = await op.handler(args, {
+      log: (m) => logs.push(m), surface: "http", correlationId: randomUUID(),
+    });
     return send(res, 200, logs.length ? { result, logs } : { result });
   }
 

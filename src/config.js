@@ -123,6 +123,22 @@ function setting(envKey, fallback) {
   return fallback;
 }
 
+/** Env var holding a browser secret; `name` is the suffix a profile names. */
+export function browserSecretEnvName(name) {
+  return `WAYCONTEXT_BROWSER_SECRET_${name}`;
+}
+
+/**
+ * The value of one browser secret, or undefined. Read live from process.env
+ * (which already holds the folded-in .env files) and deliberately NOT from the
+ * JSON config file or the `sources` map, so a secret is never recorded or
+ * echoed by the config diagnostics. Only the prefixed variable is reachable.
+ */
+export function browserSecret(name) {
+  const v = process.env[browserSecretEnvName(name)];
+  return v === undefined || v === "" ? undefined : v;
+}
+
 /** Human-readable phrase for where a setting came from. */
 export function describeSource(envKey) {
   const src = sources[envKey];
@@ -237,6 +253,20 @@ export const config = {
   // setting, so it only affects which single value is surfaced as "the"
   // element text at index time.
   uiI18nLocale: setting("UI_I18N_LOCALE", "") || null,
+
+  // Browser Session Manager kill switch. Off makes the browser_* operations
+  // refuse with `browser_disabled`; it never hides them from the registry.
+  // Profile import/remove stay available to the human CLI either way.
+  browserEnabled: setting("BROWSER_ENABLED", "1") !== "0",
+
+  // Root of the saved-state / evidence store. Always outside any project tree
+  // (see src/browser/stateStore.js). Override with BROWSER_STATE_DIR.
+  browserStateDir: setting("BROWSER_STATE_DIR", "").replace(/^~(?=\/|$)/, os.homedir()) || path.join(os.homedir(), ".local", "state", "waycontext", "browser"),
+
+  // Idle timeout for a browser session: with no browser_* call for this many
+  // seconds a READY session is closed (reason idle_timeout). It is also the
+  // lease written to browser_sessions.expires_at. 0 or less disables it.
+  browserIdleTimeoutSeconds: numeric("BROWSER_IDLE_TIMEOUT_SECONDS", 900),
 
   // Derived intelligence (Phase 4). Everything here is recomputed from the
   // planes below it and skipped entirely when its inputs haven't moved, so the

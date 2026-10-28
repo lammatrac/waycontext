@@ -4,7 +4,7 @@ process.env.EMBEDDING_PROVIDER = "none";
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { operations } from "../src/operations.js";
+import { operations, operationsFor } from "../src/operations.js";
 
 const { pool, initDb } = await import("../src/db.js");
 const { indexProject } = await import("../src/indexer.js");
@@ -60,8 +60,9 @@ test("health reports the version and the operation count", async () => {
 
 test("the operation catalogue is generated, not hand-listed", async () => {
   const { operations } = await (await get("/v1/ops")).json();
-  const { operations: registry } = await import("../src/operations.js");
-  assert.equal(operations.length, registry.length);
+  // Browser operations are MCP/CLI only (Q-008), so the HTTP catalogue is the
+  // registry minus them -- see test/browser.operations.test.js.
+  assert.equal(operations.length, operationsFor("http").length);
   const search = operations.find((o) => o.name === "search_code");
   assert.deepEqual(search.args, ["project", "query", "limit"]);
   assert.deepEqual(search.required, ["project", "query"]);
@@ -208,7 +209,8 @@ test("MCP over HTTP lists exactly the registry's tools", async () => {
   const listed = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" }, sessionId);
   assert.equal(listed.status, 200, listed.raw.slice(0, 300));
   const names = listed.body.result.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, operations.map((op) => op.name).sort());
+  assert.deepEqual(names, operationsFor("http").map((op) => op.name).sort());
+  assert.ok(!names.some((n) => n.startsWith("browser_")), "browser tools must not be served on /mcp over HTTP");
 });
 
 test("every tool exposed over MCP carries a description an LLM can route on", async () => {

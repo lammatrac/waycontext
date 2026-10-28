@@ -24,9 +24,10 @@ test("every operation is fully declared", () => {
 // search tool left unannotated can raise a permission prompt while the agent's
 // built-in Grep is pre-approved -- a mechanical reason to route around us.
 // Getting this backwards on a writer is the worse failure, so pin the set.
-test("only the four operations that write are marked non-read-only", () => {
+test("only the operations that write are marked non-read-only", () => {
   const writers = operations.filter((op) => !op.readOnly).map((op) => op.name).sort();
   assert.deepEqual(writers, [
+    "browser_capture_screenshot", "browser_navigate", "browser_session_close", "browser_session_start",
     "create_reasoning_graph", "index_project", "remember", "update_reasoning_graph",
   ]);
 });

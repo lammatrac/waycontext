@@ -16,6 +16,7 @@ docs/waycontext
 # migration would be silently ignored -- a schema change that works locally and
 # is missing from the commit.
 *.sql
+!src/migrations/*.sql
 *.bk
 
 __pycache__/
