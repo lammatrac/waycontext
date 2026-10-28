@@ -171,6 +171,8 @@ export const MANUAL_COMMANDS = [
   { name: "serve", section: "admin", usage: "serve [--port=4747] [--host=…]",
     flags: ["--port", "--host"],
     help: "HTTP API + web knowledge graph on localhost (no auth)" },
+  { name: "dashboard", section: "admin", usage: "dashboard",
+    help: "open the settings dashboard in your browser (starts the service if needed)" },
   { name: "service", section: "admin", usage: "service ensure [--quiet]",
     subVerbs: ["ensure", "status", "stop", "restart"],
     flags: ["--quiet"],

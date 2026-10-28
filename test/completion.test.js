@@ -431,3 +431,9 @@ test("waycontext uninstall removes the completion file end-to-end", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.equal(fs.existsSync(target), false, "completion file should be gone after uninstall");
 });
+
+test("dashboard is a manual admin command", () => {
+  const cmd = MANUAL_COMMANDS.find((c) => c.name === "dashboard");
+  assert.ok(cmd, "dashboard missing from MANUAL_COMMANDS");
+  assert.equal(cmd.section, "admin");
+});

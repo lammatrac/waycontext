@@ -87,6 +87,7 @@ Setup & administration:
   gate uninstall                            remove the hook script and its settings.json entries
   uninstall                                 stop the service; remove hooks, cron entry, caches and completion
   serve [--port=4747] [--host=…]            HTTP API + web knowledge graph on localhost (no auth)
+  dashboard                                 open the settings dashboard in your browser (starts the service if needed)
   service ensure [--quiet]                  start or reuse the managed local service
   service status                            show service health, pid and version
   service stop                              stop the managed local background service

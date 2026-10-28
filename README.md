@@ -193,6 +193,12 @@ replaces the vectors the old model made ([details](docs/troubleshooting.md#vecto
   symbol extraction for CSS/SCSS, HTML, JSON, and XML.
 - **Every surface reads one registry.** MCP tools, CLI subcommands and HTTP routes are generated from the same operation list, so they cannot drift apart.
 
+## Dashboard
+
+Run `waycontext dashboard` to open the settings page in your browser. It starts the
+local service if needed, lists every setting with its current value, and lets you edit
+them and restart the service so changes take effect. It binds to localhost only.
+
 ## What it looks like
 
 Ask in English, with none of the words the code uses:

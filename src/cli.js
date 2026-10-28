@@ -661,6 +661,19 @@ async function main() {
       console.log("No authentication. Bound to localhost. Ctrl-C to stop.");
       return; // hold the process open; the server owns the event loop now
     }
+    case "dashboard": {
+      const { url } = await ensureService({ expectedVersion: VERSION });
+      const page = `${url}/settings.html`;
+      console.log(page);
+      try {
+        const { openLocalFile } = await import("./reasoning/open.js");
+        // A URL, not a file path: skip the WSL path translation.
+        await openLocalFile(page, { translateToWindowsPath: async (u) => u });
+      } catch {
+        console.log(`Could not open a browser; open it in your browser: ${page}`);
+      }
+      break;
+    }
     case "service": {
       const [sub] = args.filter((a) => !a.startsWith("--"));
       if (sub === "ensure") {

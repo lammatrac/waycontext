@@ -4,6 +4,7 @@ Newest first. Dates are the day the change landed.
 
 ## Unreleased
 
+- **Added settings dashboard** (`waycontext dashboard`).
 - **Added config, integrations and restart HTTP routes** (`GET`/`PUT /v1/config`, `GET /v1/integrations`, `POST /v1/service/restart`); restart is refused outside the managed service and while an index is running.
 - **Honoured JSON booleans in `config.json`.** `true`/`false` are now read as on/off; previously `false` left features on and `true` turned `REASONING_AUTO_OPEN` off. Also accepted from the environment: `true`/`false` alongside `1`/`0`.
 - **Added a settings registry** (`SETTINGS`, `settingDef`) in `src/config.js` declaring every setting once.
