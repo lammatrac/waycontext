@@ -139,17 +139,32 @@ test("CLI and MCP agree on defaults", () => {
   assert.equal(parseCliArgs(findOperation("find_related"), ["p", "n"]).limit, 10);
 });
 
+// Match on the structured issue, not zod's message text: the wording changed
+// wholesale between zod 3 and 4 while the codes, paths and bounds did not.
+function assertRejects(opName, argv, expected) {
+  assert.throws(
+    () => parseCliArgs(findOperation(opName), argv),
+    (e) => {
+      assert.equal(e.issues?.length, 1, `${opName} ${argv.join(" ")}: expected exactly one issue`);
+      for (const [key, value] of Object.entries(expected)) {
+        assert.deepEqual(e.issues[0][key], value, `${opName} ${argv.join(" ")}: issue.${key}`);
+      }
+      return true;
+    }
+  );
+}
+
 test("out-of-range numeric arguments are rejected on the CLI, not silently accepted", () => {
-  assert.throws(() => parseCliArgs(findOperation("search_code"), ["p", "q", "9999"]), /less than or equal to 30/);
-  assert.throws(() => parseCliArgs(findOperation("search_code"), ["p", "q", "0"]), /greater than or equal to 1/);
-  assert.throws(() => parseCliArgs(findOperation("get_graph"), ["p", "n", "99"]), /less than or equal to 4/);
-  assert.throws(() => parseCliArgs(findOperation("search_code"), ["p", "q", "abc"]), /Expected number/);
-  assert.throws(() => parseCliArgs(findOperation("search_code"), ["p", "q", "2.5"]), /integer/);
+  assertRejects("search_code", ["p", "q", "9999"], { code: "too_big", path: ["limit"], maximum: 30 });
+  assertRejects("search_code", ["p", "q", "0"], { code: "too_small", path: ["limit"], minimum: 1 });
+  assertRejects("get_graph", ["p", "n", "99"], { code: "too_big", path: ["depth"], maximum: 4 });
+  assertRejects("search_code", ["p", "q", "abc"], { code: "invalid_type", path: ["limit"], expected: "number" });
+  assertRejects("search_code", ["p", "q", "2.5"], { code: "invalid_type", path: ["limit"], expected: "int" });
 });
 
 test("missing required arguments are rejected", () => {
-  assert.throws(() => parseCliArgs(findOperation("search_code"), ["proj"]), /Required/);
-  assert.throws(() => parseCliArgs(findOperation("index_project"), []), /Required/);
+  assertRejects("search_code", ["proj"], { code: "invalid_type", path: ["query"] });
+  assertRejects("index_project", [], { code: "invalid_type", path: ["project"] });
 });
 
 // get_symbol's `name` is schema-optional because `symbol` is an accepted
