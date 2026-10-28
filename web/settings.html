@@ -153,7 +153,8 @@ const state = {
   projects: null,          // list_projects rows
   edits: new Map(),        // key -> string value to set
   resets: new Set(),       // keys to unset
-  banner: null,            // { kind, nodes } shown after a save
+  banner: null,            // node shown after a save; cleared on the next edit
+  rowError: null,          // { key, msg } from a rejected save, shown on that row
   loadError: null,
   restarting: false,
   restartError: null,
@@ -210,6 +211,8 @@ function overrideNotes(row) {
 function control(row) {
   const key = row.key;
   const set = (v) => {
+    state.banner = null;
+    state.rowError = null;
     state.resets.delete(key);
     if (v === initialOf(row)) state.edits.delete(key); else state.edits.set(key, v);
     render({ keep: key });
@@ -255,6 +258,8 @@ function settingRow(row) {
     }
     if (fromFile || state.resets.has(row.key)) {
       ctl.append(h("button", { type: "button", onclick: () => {
+        state.banner = null;
+        state.rowError = null;
         state.edits.delete(row.key);
         if (state.resets.has(row.key)) state.resets.delete(row.key); else state.resets.add(row.key);
         render({ keep: row.key });
@@ -263,6 +268,7 @@ function settingRow(row) {
     kids.push(ctl);
   }
   if (!readOnly) kids.push(...overrideNotes(row));
+  if (state.rowError?.key === row.key) kids.push(h("div", { class: "warn" }, state.rowError.msg));
   kids.push(h("div", { class: "muted", style: "font-size:12px;margin-top:4px" },
     `default: ${row.secret ? "—" : (row.default ?? "(none)")}`));
   return h("div", { class: `row${changed ? " changed" : ""}` }, kids);
@@ -306,8 +312,11 @@ async function save() {
     state.report = await call("PUT", "/v1/config", { set, unset });
     state.edits.clear();
     state.resets.clear();
+    state.rowError = null;
     state.banner = bannerFor(keys, state.report);
   } catch (e) {
+    state.rowError = e.key ? { key: e.key, msg: e.message } : null;
+    if (e.key) state.open.add(rowOf(e.key)?.group);
     state.banner = h("div", { class: "banner err" },
       h("b", { class: "err" }, "Not saved. "), e.key ? `${e.key}: ` : "", e.message);
   }
@@ -353,17 +362,18 @@ const isStale = () => {
   return !!(r?.configMtime && r?.serviceStartedAt && r.configMtime > r.serviceStartedAt);
 };
 
-async function waitForHealth() {
-  await new Promise((r) => setTimeout(r, 1500));
+// /health carries no start identity, so a slow exit could let the old worker
+// answer. Done means /v1/config reports a different serviceStartedAt.
+async function waitForRestart(before) {
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch("/health");
-      if (res.ok) return true;
-    } catch { /* still down */ }
+      const fresh = await call("GET", "/v1/config");
+      if (fresh.serviceStartedAt !== before) return fresh;
+    } catch { /* worker is down; not yet */ }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  return false;
+  return null;
 }
 
 async function restart() {
@@ -371,9 +381,11 @@ async function restart() {
   state.restarting = true;
   render();
   try {
+    const before = state.report.serviceStartedAt;
     await call("POST", "/v1/service/restart", {});
-    if (!(await waitForHealth())) throw new Error("the service did not come back within 60 seconds");
-    await loadConfig();
+    const fresh = await waitForRestart(before);
+    if (!fresh) throw new Error("the service did not come back within 60 seconds");
+    state.report = fresh;
   } catch (e) {
     state.restartError = e.message;
   }
