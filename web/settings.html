@@ -17,95 +17,272 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WayContext — settings</title>
 <style>
+  /* Same design language as the Decision Review page (src/reasoning/render.js). */
   :root {
-    color-scheme: light dark;
-    --bg: #fbfbfd; --fg: #17181c; --muted: #6b6f76; --line: #dfe1e6;
-    --panel: #fff; --accent: #2f6fed; --risk: #d1453b; --warm: #e0873a;
-    --ok: #2e9d5b;
+    color-scheme: light;
+    --bg: #f0f0f8;
+    --bg-2: #e8eaf6;
+    --panel: #ffffff;
+    --fg: #10143b;
+    --muted: #7d91b0;
+    --line: #e3e5f0;
+    --ink: #354965;
+    --accent: #6674ff;
+    --accent-soft: #e9ebff;
+    --accent-line: #d9ddff;
+    --ok: #168b72;
+    --warm: #b7791f;
+    --risk: #d1435b;
+    --shadow: 0 5px 18px rgba(26, 35, 72, .075);
+    --radius: 12px;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #16171b; --fg: #e9eaee; --muted: #9297a1; --line: #2c2e35;
-      --panel: #1e2025; --accent: #6c9bff; --risk: #f0685c; --warm: #edab6a;
-      --ok: #58c785;
+      color-scheme: dark;
+      --bg: #0d1119;
+      --bg-2: #141b28;
+      --panel: #151d2b;
+      --fg: #edf2fb;
+      --muted: #9aa8bd;
+      --line: #293548;
+      --ink: #dbe5f5;
+      --accent: #9291ff;
+      --accent-soft: #232a4a;
+      --accent-line: #343d6b;
+      --ok: #5ad1b2;
+      --warm: #f0bd67;
+      --risk: #ff7f91;
+      --shadow: 0 8px 24px rgba(0, 0, 0, .22);
     }
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    margin: 0;
+    background:
+      radial-gradient(ellipse 44% 28% at 100% 8%, rgba(111, 123, 255, .11), transparent 72%),
+      radial-gradient(ellipse 38% 30% at 0% 76%, rgba(131, 143, 218, .10), transparent 72%),
+      var(--bg);
+    color: var(--fg);
+    font: 14px/1.65 "Be Vietnam Pro", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  header {
-    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
-    padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
-  }
-  h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 650; letter-spacing: -0.01em; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  select, input, button {
-    font: inherit; color: inherit; background: var(--bg);
-    border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px;
+  button, input, select, textarea { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent; }
+  button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible, summary:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--accent) 38%, transparent);
+    outline-offset: 2px;
   }
-  button { cursor: pointer; }
-  button:hover:not(:disabled) { border-color: var(--accent); }
+  input[type=text], input[type=number], select {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    padding: 8px 11px; transition: border-color .16s, box-shadow .16s;
+  }
+  input[type=text]:hover, input[type=number]:hover, select:hover { border-color: var(--accent-line); }
+  input[type=text]:focus, input[type=number]:focus, select:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+  button {
+    cursor: pointer; border: 1px solid var(--line); background: var(--bg-2); color: var(--ink);
+    border-radius: 9px; padding: 8px 13px; font-size: 12px; font-weight: 700;
+    transition: transform .14s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease;
+  }
+  button:hover:not(:disabled) {
+    background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent);
+    box-shadow: 0 4px 10px rgba(80, 92, 200, .10); transform: translateY(-1px);
+  }
+  button:active:not(:disabled) { transform: translateY(1px) scale(.98); box-shadow: none; }
   button:disabled { opacity: .5; cursor: not-allowed; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .tabs { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
-  .tabs button { border-color: transparent; background: transparent; }
-  .tabs button[aria-selected=true] { border-color: var(--accent); color: var(--accent); }
-  main { max-width: 900px; margin: 0 auto; padding: 16px; }
-  h2 { font-size: 13px; margin: 18px 0 6px; text-transform: uppercase;
-       letter-spacing: .05em; color: var(--muted); font-weight: 600; }
-  code { font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
-         background: var(--bg); padding: 1px 4px; border-radius: 4px;
-         overflow-wrap: anywhere; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; padding: 9px 20px; }
+  button.primary:hover:not(:disabled) { background: var(--accent); color: #fff; filter: brightness(1.06); box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 30%, transparent); }
+  code {
+    font: 12px/1.45 var(--mono); background: var(--bg-2); color: var(--ink);
+    padding: 2px 6px; border-radius: 6px; overflow-wrap: anywhere;
+  }
   .muted { color: var(--muted); }
   .err { color: var(--risk); }
-  .pill { display: inline-block; padding: 1px 7px; border-radius: 999px;
-          font-size: 11px; border: 1px solid var(--line); color: var(--muted);
-          overflow-wrap: anywhere; }
-  .pill.ok { color: var(--ok); border-color: var(--ok); }
-  .pill.bad { color: var(--risk); border-color: var(--risk); }
-  details { border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
-            margin: 10px 0; }
-  summary { cursor: pointer; padding: 10px 14px; font-weight: 600; }
-  .row { padding: 10px 14px; border-top: 1px solid var(--line); }
-  .row.changed { box-shadow: inset 3px 0 0 var(--accent); }
+
+  /* --- shell -------------------------------------------------------------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; justify-content: space-between; gap: 16px 24px; align-items: center; flex-wrap: wrap;
+    padding: 18px clamp(16px, 3vw, 46px);
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 86%, transparent);
+    backdrop-filter: blur(18px);
+  }
+  h1 { margin: 0; font-size: 16px; line-height: 1.3; letter-spacing: -.035em; font-weight: 760; }
+  h1::before {
+    content: "W"; display: inline-grid; place-items: center;
+    width: 29px; height: 29px; margin-right: 10px; border-radius: 9px;
+    color: #fff; font-size: 14px; vertical-align: middle;
+    background: linear-gradient(135deg, #7778f6, #4b4dc6);
+    box-shadow: 0 5px 14px rgba(91, 92, 226, .24);
+  }
+  .top-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px;
+    font-size: 12px; font-weight: 650; color: var(--ink); background: var(--panel);
+  }
+  .top-link:hover { text-decoration: none; color: var(--accent); border-color: var(--accent-line); }
+  .layout {
+    display: grid; grid-template-columns: 244px minmax(0, 1fr);
+    min-height: calc(100vh - 66px); max-width: 1500px; margin: 0 auto;
+  }
+  nav.side {
+    border-right: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 48%, transparent);
+    padding: 30px 18px;
+  }
+  .side-inner { position: sticky; top: 96px; }
+  .nav-title {
+    display: flex; align-items: center; gap: 9px;
+    color: var(--accent); font-size: 10px; text-transform: uppercase;
+    letter-spacing: .16em; font-weight: 850;
+    margin: 0 7px 12px; padding: 10px 10px 9px;
+    border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 13%, transparent), color-mix(in srgb, var(--accent) 2%, transparent));
+  }
+  .tabs { display: block; }
+  .tabs button {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    width: 100%; text-align: left; border: 1px solid transparent; border-radius: 11px;
+    background: transparent; color: var(--muted); padding: 12px 13px; margin-bottom: 7px;
+    font-size: 12px; font-weight: 650;
+  }
+  .tabs button:hover:not(:disabled) { background: var(--panel); color: var(--accent); border-color: var(--accent-line); transform: translateX(2px); }
+  .tabs button[aria-selected=true] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+  .nav-count { font-size: 10px; font-weight: 550; white-space: nowrap; }
+  #main { min-width: 0; padding: clamp(24px, 4vw, 58px); }
+  .page { max-width: 920px; animation: fadein .18s ease; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+  .section-head { margin: 0 0 10px; color: var(--fg); text-transform: none; font-size: clamp(22px, 2.2vw, 30px); line-height: 1.2; letter-spacing: -.04em; font-weight: 780; }
+  .lede { max-width: 760px; margin: 0 0 26px; color: var(--muted); line-height: 1.8; }
+  h2 {
+    margin: 34px 0 12px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .11em; color: var(--muted); font-weight: 800;
+  }
+
+  /* --- components --------------------------------------------------------- */
+  .pill {
+    display: inline-flex; align-items: center; font-size: 9px; line-height: 1.5;
+    padding: 3px 7px; border-radius: 7px; border: 1px solid var(--line); color: var(--muted);
+    text-transform: uppercase; letter-spacing: .045em; font-weight: 800; overflow-wrap: anywhere;
+  }
+  .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: color-mix(in srgb, var(--ok) 7%, var(--panel)); }
+  .pill.bad { color: var(--risk); border-color: color-mix(in srgb, var(--risk) 40%, var(--line)); background: color-mix(in srgb, var(--risk) 6%, var(--panel)); }
+  .pill.warm { color: var(--warm); border-color: color-mix(in srgb, var(--warm) 45%, var(--line)); background: color-mix(in srgb, var(--warm) 7%, var(--panel)); }
+  .file-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 18px; font-size: 12px; }
+  details {
+    border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius);
+    margin: 14px 0; box-shadow: var(--shadow); overflow: hidden;
+  }
+  summary {
+    display: flex; align-items: center; gap: 10px; list-style: none; cursor: pointer;
+    padding: 16px 20px; font-weight: 700; letter-spacing: -.01em; transition: background .16s;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before {
+    content: ""; width: 7px; height: 7px; flex: 0 0 7px;
+    border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+    transform: rotate(-45deg); transition: transform .18s ease;
+  }
+  details[open] > summary::before { transform: rotate(45deg); }
+  summary:hover { background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+  summary .count { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--muted); }
+  .row { padding: 16px 20px; border-top: 1px solid var(--line); transition: background .16s; }
+  .row.changed { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--panel)); }
   .row .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .row .key { font: 600 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
-  .row .desc { margin: 2px 0 6px; color: var(--muted); font-size: 13px; }
+  .row .key { font: 650 12px/1.45 var(--mono); color: var(--fg); overflow-wrap: anywhere; }
+  .row .desc { margin: 4px 0 10px; color: var(--muted); font-size: 13px; }
   .row .ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .row .ctl input[type=text], .row .ctl input[type=number], .row .ctl select { flex: 1; min-width: 0; max-width: 100%; }
-  .warn { margin: 6px 0 0; padding: 6px 10px; border-radius: 6px; font-size: 13px;
-          border: 1px solid var(--risk); color: var(--risk); }
-  .warn.amber { border-color: var(--warm); color: var(--warm); }
-  .banner { margin: 12px 0; padding: 10px 14px; border-radius: 8px;
-            border: 1px solid var(--accent); background: var(--panel); }
-  .banner.err { border-color: var(--risk); }
-  .banner ul { margin: 4px 0; padding-left: 18px; }
-  .savebar { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center;
-             padding: 10px 0; background: var(--bg); border-top: 1px solid var(--line); margin-top: 12px; }
-  .card { border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
-          padding: 10px 14px; margin: 8px 0; }
-  .card .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row .default { margin-top: 8px; font-size: 11px; color: var(--muted); }
+  .warn {
+    margin: 10px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 12px; font-weight: 600;
+    border: 1px solid color-mix(in srgb, var(--risk) 40%, var(--line)); color: var(--risk);
+    background: color-mix(in srgb, var(--risk) 6%, var(--panel));
+  }
+  .warn.amber {
+    border-color: color-mix(in srgb, var(--warm) 45%, var(--line)); color: var(--warm);
+    background: color-mix(in srgb, var(--warm) 7%, var(--panel));
+  }
+  .banner {
+    margin: 18px 0; padding: 16px 20px; border-radius: var(--radius);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+    background: color-mix(in srgb, var(--accent) 6%, var(--panel)); box-shadow: var(--shadow);
+  }
+  .banner.err {
+    border-color: color-mix(in srgb, var(--risk) 40%, var(--line));
+    background: color-mix(in srgb, var(--risk) 5%, var(--panel));
+  }
+  .banner > button { margin-left: 4px; }
+  .banner ul { margin: 6px 0; padding-left: 18px; }
+  .banner li { margin: 4px 0; }
+  .card {
+    border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius);
+    padding: 18px 20px; margin: 14px 0; box-shadow: var(--shadow);
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+  }
+  .card:hover { border-color: color-mix(in srgb, var(--accent) 28%, var(--line)); }
+  .card .head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .card .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line);
-          border-top-color: var(--accent); border-radius: 50%; animation: sp .8s linear infinite;
-          vertical-align: -2px; }
+  .card .sub { margin-top: 4px; font-size: 12px; }
+  .card .fix { margin-top: 12px; }
+  .card .result { margin-top: 10px; font-size: 12px; overflow-wrap: anywhere; }
+  .empty-state {
+    padding: 22px; border: 1px dashed var(--line); border-radius: var(--radius);
+    color: var(--muted); background: color-mix(in srgb, var(--panel) 60%, transparent);
+  }
+  .savebar {
+    position: sticky; bottom: 16px; z-index: 10;
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    margin-top: 28px; padding: 12px 14px 12px 20px;
+    border: 1px solid var(--line); border-radius: 14px;
+    background: color-mix(in srgb, var(--panel) 90%, transparent);
+    backdrop-filter: blur(14px); box-shadow: 0 12px 30px rgba(26, 35, 72, .14);
+  }
+  .savebar .status { flex: 1; font-size: 12px; font-weight: 600; }
+  .savebar.dirty .status { color: var(--accent); }
+  .spin {
+    display: inline-block; width: 13px; height: 13px; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%; animation: sp .8s linear infinite;
+    vertical-align: -2px;
+  }
   @keyframes sp { to { transform: rotate(360deg); } }
-  @media (max-width: 480px) {
-    .tabs { margin-left: 0; width: 100%; }
-    main { padding: 12px; }
+
+  @media (max-width: 800px) {
+    .layout { display: flex; flex-direction: column; }
+    nav.side { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 16px; }
+    .side-inner { position: static; }
+    .nav-title { display: none; }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tabs button { width: auto; flex: 1 1 auto; margin: 0; padding: 9px 12px; }
+    .nav-count { display: none; }
+    #main { padding: 24px 16px; }
+    summary, .row { padding-left: 16px; padding-right: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   }
 </style>
 </head>
 <body>
-<header>
-  <h1>WayContext settings</h1>
-  <a href="/">Knowledge graph</a>
-  <nav class="tabs" role="tablist" id="tabs"></nav>
+<header class="topbar">
+  <h1>WayContext · Settings</h1>
+  <a class="top-link" href="/">← Knowledge graph</a>
 </header>
-<main id="main"><p class="muted">Loading…</p></main>
+<div class="layout">
+  <nav class="side" aria-label="Sections">
+    <div class="side-inner">
+      <div class="nav-title">Configure</div>
+      <div class="tabs" role="tablist" id="tabs"></div>
+    </div>
+  </nav>
+  <main id="main"><p class="muted">Loading…</p></main>
+</div>
 
 <script type="module">
 // --- network: same-origin only, JSON on every request ----------------------
@@ -190,6 +367,18 @@ async function loadAll() {
   render();
 }
 
+// Every tab opens with the same heading block.
+const LEDES = {
+  Settings: "Every WayContext setting, where its effective value comes from, and what overrides it. Saved changes go to config.json.",
+  Projects: "Indexed projects and the service that answers for them.",
+  Integrations: "Read-only install status for each client. Copy a fix command to repair one.",
+};
+function page(tab) {
+  return h("div", { class: "page" },
+    h("h2", { class: "section-head" }, tab),
+    h("p", { class: "lede" }, LEDES[tab]));
+}
+
 // --- settings tab ----------------------------------------------------------
 function sourceBadge(row) {
   return h("span", { class: "pill", title: "where the effective value comes from" }, row.source);
@@ -243,7 +432,7 @@ function settingRow(row) {
   const fromFile = row.fileValue !== null && row.fileValue !== undefined;
   const kids = [
     h("div", { class: "top" }, h("span", { class: "key" }, row.key), sourceBadge(row),
-      row.appliesOn === "service-restart" && h("span", { class: "pill" }, "needs service restart")),
+      row.appliesOn === "service-restart" && h("span", { class: "pill warm" }, "needs service restart")),
     h("div", { class: "desc" }, row.description),
   ];
   if (row.secret) {
@@ -271,7 +460,7 @@ function settingRow(row) {
   }
   if (!readOnly) kids.push(...overrideNotes(row));
   if (state.rowError?.key === row.key) kids.push(h("div", { class: "warn" }, state.rowError.msg));
-  kids.push(h("div", { class: "muted", style: "font-size:12px;margin-top:4px" },
+  kids.push(h("div", { class: "default" },
     `default: ${row.secret ? "—" : (row.default ?? "(none)")}`));
   return h("div", { class: `row${changed ? " changed" : ""}` }, kids);
 }
@@ -326,9 +515,9 @@ async function save() {
 }
 
 function settingsTab() {
-  const wrap = h("div");
+  const wrap = page("Settings");
   const r = state.report;
-  wrap.append(h("p", { class: "muted" }, "Config file: ", h("code", {}, r.configFile)));
+  wrap.append(h("p", { class: "file-line" }, h("span", { class: "muted" }, "Config file"), h("code", {}, r.configFile)));
   if (r.configError) wrap.append(h("div", { class: "banner err" }, `config.json problem: ${r.configError}`));
   if (state.banner) wrap.append(state.banner);
   const groups = new Map();
@@ -338,7 +527,7 @@ function settingsTab() {
   }
   for (const [name, rows] of groups) {
     const d = h("details", { open: state.open.has(name) || rows.some((x) => dirty() && (state.edits.has(x.key) || state.resets.has(x.key))) },
-      h("summary", {}, `${name} `, h("span", { class: "muted" }, `(${rows.length})`)),
+      h("summary", {}, name, h("span", { class: "count" }, `${rows.length} setting${rows.length === 1 ? "" : "s"}`)),
       rows.map(settingRow));
     d.addEventListener("toggle", () => { if (d.open) state.open.add(name); else state.open.delete(name); });
     wrap.append(d);
@@ -346,17 +535,17 @@ function settingsTab() {
   const overrides = r.projectOverrides ?? [];
   wrap.append(h("h2", {}, "Project overrides"));
   // The scan needs the project list from the database; the rest of the page does not.
-  if (r.projectsError) wrap.append(h("p", { class: "muted" }, "Project .env files could not be checked (database unavailable: ", r.projectsError, ")."));
-  else if (!overrides.length) wrap.append(h("p", { class: "muted" }, "No indexed project's .env overrides a WayContext setting."));
+  if (r.projectsError) wrap.append(h("p", { class: "empty-state" }, "Project .env files could not be checked (database unavailable: ", r.projectsError, ")."));
+  else if (!overrides.length) wrap.append(h("p", { class: "empty-state" }, "No indexed project's .env overrides a WayContext setting."));
   for (const p of overrides) {
     wrap.append(h("div", { class: "card" },
-      h("b", {}, p.project), " ", h("code", {}, p.envFile),
-      h("div", { class: "muted" }, "overrides: ", p.keys.join(", "))));
+      h("div", { class: "head" }, h("b", {}, p.project), h("code", {}, p.envFile)),
+      h("div", { class: "sub muted" }, "overrides: ", p.keys.join(", "))));
   }
   const n = dirty();
-  wrap.append(h("div", { class: "savebar" },
-    h("button", { class: "primary", id: "save", type: "button", disabled: n === 0, onclick: save }, "Save"),
-    h("span", { class: "muted" }, n ? `${n} change${n === 1 ? "" : "s"} pending` : "No changes")));
+  wrap.append(h("div", { class: `savebar${n ? " dirty" : ""}` },
+    h("span", { class: `status${n ? "" : " muted"}` }, n ? `${n} change${n === 1 ? "" : "s"} pending` : "No changes"),
+    h("button", { class: "primary", id: "save", type: "button", disabled: n === 0, onclick: save }, "Save")));
   return wrap;
 }
 
@@ -423,7 +612,7 @@ async function loadProjects() {
 }
 
 function projectsTab() {
-  const wrap = h("div");
+  const wrap = page("Projects");
   const stale = isStale();
   // Under a plain `serve` a restart is the user's job, so staleness only warns.
   const blocked = (stale && !state.unmanaged) || state.restarting;
@@ -444,17 +633,17 @@ function projectsTab() {
     return wrap;
   }
   if (!state.projects.length) {
-    wrap.append(h("p", { class: "muted" }, "No indexed projects. Run ", h("code", {}, "waycontext index <name> <path>"), "."));
+    wrap.append(h("p", { class: "empty-state" }, "No indexed projects. Run ", h("code", {}, "waycontext index <name> <path>"), "."));
   }
   for (const p of state.projects) {
     const st = state.reindex.get(p.name) ?? {};
     const when = p.indexed_at ? new Date(p.indexed_at).toLocaleString() : "never";
     wrap.append(h("div", { class: "card" },
       h("div", { class: "head" },
-        h("div", { class: "grow" }, h("b", {}, p.name), h("div", { class: "muted" }, h("code", {}, p.root_path ?? ""), ` · last indexed ${when}`)),
+        h("div", { class: "grow" }, h("b", {}, p.name), h("div", { class: "sub muted" }, h("code", {}, p.root_path ?? ""), ` · last indexed ${when}`)),
         st.busy && h("span", { class: "spin" }),
         h("button", { type: "button", disabled: blocked || st.busy, onclick: () => reindex(p.name) }, "Re-index")),
-      st.msg && h("div", { class: st.isErr ? "err" : "muted", style: "margin-top:6px;overflow-wrap:anywhere" }, st.msg)));
+      st.msg && h("div", { class: `result ${st.isErr ? "err" : "muted"}` }, st.msg)));
   }
   return wrap;
 }
@@ -488,7 +677,7 @@ function copyButton(text) {
 }
 
 function integrationsTab() {
-  const wrap = h("div");
+  const wrap = page("Integrations");
   if (state.integrationsError) wrap.append(h("p", { class: "err" }, state.integrationsError));
   if (!state.integrations) {
     if (!state.integrationsError) wrap.append(h("p", { class: "muted" }, "Loading…"));
@@ -498,8 +687,8 @@ function integrationsTab() {
     wrap.append(h("div", { class: "card" },
       h("div", { class: "head" }, h("b", { class: "grow" }, it.label),
         h("span", { class: `pill ${it.status === "ok" ? "ok" : "bad"}` }, it.status)),
-      it.detail && h("div", { class: "muted", style: "overflow-wrap:anywhere" }, it.detail),
-      it.fix && h("div", { class: "head", style: "margin-top:6px" },
+      it.detail && h("div", { class: "sub muted", style: "overflow-wrap:anywhere" }, it.detail),
+      it.fix && h("div", { class: "head fix" },
         h("code", { class: "grow" }, it.fix), copyButton(it.fix))));
   }
   return wrap;
@@ -508,6 +697,13 @@ function integrationsTab() {
 // --- shell -----------------------------------------------------------------
 function render(opts = {}) {
   const tabs = document.getElementById("tabs");
+  // Counts only once their data has loaded; an unknown count shows nothing.
+  const counts = {
+    Settings: state.report && `${state.report.settings.length}`,
+    Projects: state.projects && `${state.projects.length}`,
+    Integrations: state.integrations &&
+      `${state.integrations.filter((it) => it.status === "ok").length}/${state.integrations.length} ok`,
+  };
   tabs.replaceChildren(...TABS.map((t) => h("button", {
     type: "button", role: "tab", "aria-selected": String(t === state.tab),
     onclick: () => {
@@ -516,7 +712,7 @@ function render(opts = {}) {
       if (t === "Integrations") loadIntegrations();
       render();
     },
-  }, t)));
+  }, h("span", {}, t), counts[t] && h("span", { class: "nav-count" }, counts[t]))));
   const main = document.getElementById("main");
   if (state.loadError) {
     main.replaceChildren(h("p", { class: "err" }, state.loadError));
