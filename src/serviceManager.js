@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "./version.js";
-import { config } from "./config.js";
+import { config, dotenvKeys } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const daemonPath = path.join(__dirname, "serviceDaemon.js");
@@ -117,15 +117,27 @@ function killManagedGroup(pid) {
   }
 }
 
+// The daemon must not inherit settings that dotenv folded into this process
+// from whatever ./.env the caller happened to run in, nor that project's cwd.
+export function daemonSpawnOptions(env = process.env, dotenv = dotenvKeys) {
+  const clean = { ...env };
+  for (const key of dotenv) delete clean[key];
+  return {
+    cwd: os.homedir(),
+    env: {
+      ...clean,
+      WAYCONTEXT_SERVICE_HOST: serviceHost(),
+      WAYCONTEXT_SERVICE_PORT: String(servicePort()),
+      WAYCONTEXT_SERVICE_INJECTED: "WAYCONTEXT_SERVICE_HOST,WAYCONTEXT_SERVICE_PORT",
+    },
+  };
+}
+
 function spawnDaemon() {
   const child = spawn(process.execPath, [daemonPath], {
     detached: true,
     stdio: "ignore",
-    env: {
-      ...process.env,
-      WAYCONTEXT_SERVICE_HOST: serviceHost(),
-      WAYCONTEXT_SERVICE_PORT: String(servicePort()),
-    },
+    ...daemonSpawnOptions(),
   });
   child.unref();
   return child.pid;
@@ -233,4 +245,9 @@ export async function ensureService({ expectedVersion = VERSION } = {}) {
       version: ready.version,
     };
   });
+}
+
+export async function restartService() {
+  await stopService();
+  return ensureService({ expectedVersion: VERSION });
 }
