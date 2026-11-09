@@ -100,3 +100,4 @@ Setup & administration:
   usage [project]                           embedding token usage per provider/model, with est. cost if configured
   completion bash|install|uninstall         print or install the bash tab-completion script
   version                                   print the installed version
+  update [--check]                          check for and install a newer version (--check: only report)

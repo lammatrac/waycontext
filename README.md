@@ -87,6 +87,21 @@ git clone https://github.com/lammatrac/waycontext && cd waycontext
 ./install.sh
 ```
 
+### Upgrading
+
+```bash
+waycontext update --check   # report only: installed vs. latest, and what's new
+waycontext update           # install it
+```
+
+`update` upgrades the copy that `waycontext` itself runs from, and works out how that copy
+was installed. A clone gets `./update.sh`, which pulls and re-runs `install.sh`, and a
+clone with uncommitted changes is refused rather than stashed. A global npm install gets
+`npm install -g waycontext@<latest>` followed by `waycontext migrate`. On Linux and macOS
+the only difference is who owns npm's global folder. With Node from apt it belongs to root,
+so `update` prints the `sudo` command for you to run instead of running it. Restart your
+MCP client afterwards so it loads the new server.
+
 ### Turning on semantic search
 
 WayContext ships with `EMBEDDING_PROVIDER=none`, so everything above works with no API key

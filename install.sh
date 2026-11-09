@@ -241,14 +241,42 @@ if npm ls -g --depth=0 code-context-mcp >/dev/null 2>&1; then
     warn "Could not remove the old link; run: npm uninstall -g code-context-mcp"
 fi
 
-if command -v waycontext >/dev/null 2>&1; then
-  log "'waycontext' CLI already linked, skipping"
+# "Some `waycontext` is on PATH" is not "this clone is linked". A global
+# `npm install -g waycontext`, or a link to another clone, used to satisfy the
+# old `command -v` check, so update.sh upgraded this clone while the command on
+# PATH kept running the old copy (`waycontext version` stuck on the previous
+# release). Compare where the command really resolves instead, and relink when
+# it isn't here. `npm link` replaces an installed global copy in place. The
+# realpath goes through node because macOS < 12.3 ships no `readlink -f`.
+real_path() {
+  node -e 'try { process.stdout.write(require("fs").realpathSync(process.argv[1])) } catch {}' "$1"
+}
+CLI_REAL="$(real_path "$SCRIPT_DIR/src/cli.js")"
+cli_on_path() { command -v waycontext 2>/dev/null || true; }
+
+CLI_BIN="$(cli_on_path)"
+if [ -n "$CLI_BIN" ] && [ "$(real_path "$CLI_BIN")" = "$CLI_REAL" ]; then
+  log "'waycontext' CLI already linked to this clone, skipping"
 else
-  log "Linking 'waycontext' CLI globally..."
+  if [ -n "$CLI_BIN" ]; then
+    warn "'waycontext' on PATH runs $(real_path "$CLI_BIN"), not this clone — relinking..."
+  else
+    log "Linking 'waycontext' CLI globally..."
+  fi
   link_err="$(mktemp)"
   if ! npm link 2>"$link_err"; then
     warn "npm link failed (may need sudo). Run manually: cd $SCRIPT_DIR && npm link"
     cat "$link_err" >&2 || true
+  else
+    # npm only writes into its own global prefix. A copy under a different
+    # prefix earlier on PATH (Homebrew vs nvm, say) still wins, and relinking
+    # again cannot fix that, so name it instead of claiming success.
+    hash -r
+    CLI_BIN="$(cli_on_path)"
+    if [ -n "$CLI_BIN" ] && [ "$(real_path "$CLI_BIN")" != "$CLI_REAL" ]; then
+      warn "Linked, but 'waycontext' on PATH still resolves to $(real_path "$CLI_BIN")."
+      warn "Remove that copy (or put $(npm prefix -g)/bin earlier on PATH), then check: waycontext version"
+    fi
   fi
   rm -f "$link_err"
 fi

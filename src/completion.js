@@ -203,6 +203,9 @@ export const MANUAL_COMMANDS = [
     help: "print or install the bash tab-completion script" },
   { name: "version", section: "admin", usage: "version",
     help: "print the installed version" },
+  { name: "update", section: "admin", usage: "update [--check]",
+    flags: ["--check"],
+    help: "check for and install a newer version (--check: only report)" },
   { name: "help", section: "admin", usage: "help", help: "", hidden: true },
 ];
 

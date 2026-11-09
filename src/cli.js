@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // CLI: node src/cli.js <command> [args...]
 // Run `node src/cli.js help` for the full command list.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { initDb, listProjects, getEmbeddingUsage, getProject, deleteProject, pool } from "./db.js";
 import { migrationStatus } from "./migrate.js";
@@ -36,6 +36,7 @@ import {
 } from "./projectCache.js";
 import { ensureService, restartService, restartOutcome, serviceStatus, stopService, serviceStateDir } from "./serviceManager.js";
 import { removeUpdateCron, removeUpdateCheckFiles, removeIfEmpty } from "./uninstall.js";
+import { detectInstall, checkForUpdate, updatePlan, describeCheck, npmGlobalWritable } from "./selfUpdate.js";
 import { createInterface } from "node:readline/promises";
 import fs from "node:fs";
 import os from "node:os";
@@ -1272,6 +1273,55 @@ async function main() {
     case "--version":
     case "-v": {
       console.log(`${NAME} ${VERSION}`);
+      break;
+    }
+    case "update": {
+      // Updates the copy this process runs from -- the same one `version`
+      // reports -- whichever way it was installed (see src/selfUpdate.js).
+      const checkOnly = args.includes("--check");
+      const check = await withSpinner("Checking for updates", async () => checkForUpdate(detectInstall()));
+      const lines = describeCheck(check);
+      if (check.error) {
+        console.log(lines[0]);
+        console.error(lines.slice(1).join("\n"));
+        process.exitCode = 1;
+        break;
+      }
+      console.log(lines.join("\n"));
+      if (!check.available) break;
+      if (checkOnly) {
+        console.log(`\nRun \`${NAME} update\` to install it.`);
+        break;
+      }
+
+      const plan = updatePlan(check, {
+        npmWritable: check.kind === "npm" ? npmGlobalWritable() : true,
+      });
+      if (plan.blocked) {
+        console.error(`\nNot updating: ${plan.blocked}`);
+        process.exitCode = 1;
+        break;
+      }
+      let failed = false;
+      for (const step of plan.steps) {
+        console.log(`\n==> ${step.label}...`);
+        const r = spawnSync(step.cmd, step.args, { cwd: step.cwd, stdio: "inherit" });
+        if (r.status === 0) continue;
+        const command = [step.cmd, ...step.args].join(" ");
+        if (step.optional) {
+          console.warn(`Warning: \`${command}\` failed; run it again once the cause is fixed.`);
+          continue;
+        }
+        console.error(`\nUpdate failed at: ${command}`);
+        process.exitCode = r.status || 1;
+        failed = true;
+        break;
+      }
+      if (failed) break;
+      console.log(
+        `\nUpdated ${NAME} to ${check.latest}. Restart your MCP clients (Claude Code, Cursor, ...) ` +
+        "so they load the new server."
+      );
       break;
     }
     case "help":
