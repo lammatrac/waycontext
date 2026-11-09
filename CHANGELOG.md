@@ -2,6 +2,34 @@
 
 Newest first. Dates are the day the change landed.
 
+## 2026-11-09 — v0.9.1: `waycontext update`, an install that really upgrades the CLI, update checks you can see
+
+Since v0.9.0: a self-update command, an `install.sh` that relinks an out-of-date global CLI
+instead of skipping it, an update check that reports in a terminal and notifies on macOS, and
+an MCP server that answers requests already sent when stdin closes. To get onto this release
+itself: `npm install -g waycontext@0.9.1`, or `./update.sh` in a clone. From here on,
+`waycontext update` does it.
+
+- **Added `waycontext update`** (`--check` to only report). It upgrades the copy the
+  `waycontext` command runs from. In a git clone it runs `./update.sh`, and refuses when there
+  are uncommitted changes. In a global npm install it runs
+  `npm install -g waycontext@<latest>`, then `waycontext migrate`. It works the same on Linux
+  and macOS. When npm's global folder belongs to root (Node from apt), it prints the `sudo`
+  command to run instead of failing.
+- **Fixed `install.sh` (and so `update.sh`) leaving an old CLI on PATH.** The link step was
+  skipped whenever any `waycontext` was already on PATH. After an earlier
+  `npm install -g waycontext`, the clone upgraded while `waycontext version` kept reporting the
+  old release. The step now checks which file the command actually runs and relinks when it
+  isn't this clone. If a copy earlier on PATH still wins after relinking, it names that copy.
+- **`check-update.sh` now reports when run in a terminal** (cron runs stay silent). It also
+  shows "behind" after the day's notification has gone out, and notifies on macOS through
+  `osascript`, where it used to rely on Linux-only `notify-send`.
+- **Fixed the MCP server dropping requests already sent when stdin closes.** A client that
+  pipes its requests and then closes stdin now gets an answer to each one, instead of the
+  process exiting mid-handler.
+- **Upgraded `zod` to v4**, along with patch bumps of `body-parser`, `fast-uri` and
+  `ip-address`.
+
 ## 2026-10-28 — v0.9.0: settings dashboard, hardened HTTP service, one look across the web UI
 
 Since v0.8.0: a settings dashboard to see, trace and edit every WayContext setting, write
